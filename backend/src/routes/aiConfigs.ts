@@ -10,7 +10,7 @@ const app = new Hono()
 
 const HUOBAO_PRESET_SERVICES = [
   { serviceType: 'text', label: '文本', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 100 },
-  { serviceType: 'image', label: '图片', provider: 'gemini', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
+  { serviceType: 'image', label: '图片', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
   { serviceType: 'video', label: '视频', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
   { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
 ] as const
@@ -111,6 +111,32 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
       url: joinProviderUrl(baseUrl, '', '/ent/v2/img2video'),
       headers: viduHeaders(apiKey, true),
       body: {},
+    }
+  }
+
+  if (p === 'agnes') {
+    if (serviceType === 'image') {
+      return {
+        method: 'POST',
+        url: joinProviderUrl(baseUrl, '/v1', '/images/generations'),
+        headers: bearerHeaders(apiKey, true),
+        body: { model: m || 'agnes-image-2.0-flash', prompt: 'test', size: '1024x768' },
+      }
+    }
+    if (serviceType === 'video') {
+      return {
+        method: 'POST',
+        url: joinProviderUrl(baseUrl, '/v1', '/videos'),
+        headers: bearerHeaders(apiKey, true),
+        body: { model: m || 'agnes-video-v2.0', prompt: 'test', num_frames: 121, frame_rate: 24 },
+      }
+    }
+    // text
+    return {
+      method: 'POST',
+      url: joinProviderUrl(baseUrl, '/v1', '/chat/completions'),
+      headers: bearerHeaders(apiKey, true),
+      body: { model: m || 'agnes-2.0-flash', messages: [{ role: 'user', content: 'hi' }] },
     }
   }
 
