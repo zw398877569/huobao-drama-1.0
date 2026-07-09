@@ -25,5 +25,5 @@ storage:
 
 ai:
   default_text_provider: "openai"
-  default_image_provider: "openai"
-  default_video_provider: "doubao"
+  default_image_provider: "agnes"
+  default_video_provider: "agnes"
