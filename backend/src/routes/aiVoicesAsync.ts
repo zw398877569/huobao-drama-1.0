@@ -2,9 +2,9 @@
  * AI 音色异步合成 - 最小验证端点
  *
  * 端点:
- *   POST /api/v1/ai-voices/async/test     - 端到端测试: 创建任务 -> 轮询 -> 下载, 返回 base64 音频
- *   POST /api/v1/ai-voices/async/create   - 仅创建任务, 返回 task_id
- *   GET  /api/v1/ai-voices/async/query    - 查询任务状态 (?task_id=xxx)
+ *   POST /api/v1/ai-voices-async/test     - 端到端测试: 创建任务 -> 轮询 -> 下载, 返回 base64 音频
+ *   POST /api/v1/ai-voices-async/create   - 仅创建任务, 返回 task_id
+ *   GET  /api/v1/ai-voices-async/query    - 查询任务状态 (?task_id=xxx)
  *
  * 数据源: 直接读 aiServiceConfigs 表中 serviceType='audio' 且 provider='minimax' 的配置
  */
@@ -13,6 +13,13 @@ import { eq, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { getTTSAsyncAdapter } from '../services/adapters/registry.js'
 import { success, badRequest } from '../utils/response.js'
+// 从 cfg.model(可能是数组 | 字符串 | undefined)中取出字符串名
+function modelOf(cfg: { model?: any }): string | undefined {
+  const m = cfg?.model
+  if (Array.isArray(m)) return m[0]
+  if (typeof m === 'string') return m
+  return undefined
+}
 
 function fail(c: any, message: string, status = 500, extra: any = null) {
   return c.json({ code: status, message, ...(extra ? { data: extra } : {}) }, status)
@@ -67,7 +74,7 @@ app.post('/test', async (c) => {
     const params = {
       text: body.text || DEFAULT_TEST_TEXT,
       voiceId: body.voiceId || 'audiobook_male_1',
-      model: body.model || cfg.model || 'speech-2.8-hd',
+      model: body.model || modelOf(cfg) || 'speech-2.8-hd',
       speed: body.speed ?? 1,
       vol: body.vol ?? 10,
       pitch: body.pitch ?? 1,
@@ -80,7 +87,7 @@ app.post('/test', async (c) => {
       voiceModify: body.voiceModify,
     }
     const pollInterval = body.pollIntervalMs ?? 2000
-    const pollTimeout = body.pollTimeoutMs ?? 90000
+    const pollTimeout = body.pollTimeoutMs ?? 300000   // 默认 5 分钟
 
     // 1) 创建任务
     const createReq = adapter.buildCreateRequest(cfg, params)
@@ -119,13 +126,18 @@ app.post('/test', async (c) => {
     }
     const polledAt = Date.now() - q0
 
-    // 3) 下载
+    // 3) 下载(minimax 返回的是 tar 归档,内含 mp3 / titles / extra)
     const dReq = adapter.buildDownloadRequest(cfg, pollResult.fileId)
     const dResp = await fetch(dReq.url, { method: dReq.method, headers: dReq.headers })
     if (!dResp.ok) {
       return fail(c, `download failed: ${dResp.status}`, 502, { fileId: pollResult.fileId })
     }
-    const audioBuf = Buffer.from(await dResp.arrayBuffer())
+    let audioBuf: Buffer
+    try {
+      audioBuf = adapter.parseDownloadResponse(await dResp.arrayBuffer()).audio
+    } catch (e: any) {
+      return fail(c, `parse download failed: ${e?.message || 'unknown'}`, 502, { fileId: pollResult.fileId })
+    }
     const audioB64 = audioBuf.toString('base64')
 
     return success(c, {
@@ -162,7 +174,7 @@ app.post('/create', async (c) => {
       text: body.text,
       textFileId: body.textFileId,
       voiceId: body.voiceId || 'audiobook_male_1',
-      model: body.model || cfg.model || 'speech-2.8-hd',
+      model: body.model || modelOf(cfg) || 'speech-2.8-hd',
       speed: body.speed,
       vol: body.vol,
       pitch: body.pitch,

@@ -148,6 +148,49 @@ export class MiniMaxTTSAsyncAdapter {
       },
     }
   }
+
+  /** 3.5) 解 minimax /files/retrieve_content 返回的 tar 归档,只回 mp3 字节
+   *  minimax 实际返回的是个 POSIX tar,内含 *.mp3 / *.titles / *.extra 三份文件 */
+  parseDownloadResponse(body: Buffer | Uint8Array): { audio: Buffer; entries: Array<{ name: string; bytes: number }> } {
+    const buf = Buffer.isBuffer(body) ? body : Buffer.from(body)
+    const entries: Array<{ name: string; bytes: number }> = []
+    const BLOCK = 512
+    let off = 0
+    let mp3: Buffer | null = null
+    while (off + BLOCK <= buf.length) {
+      const header = buf.subarray(off, off + BLOCK)
+      // 两个连续的零块表示 tar 结束
+      if (header.every((b) => b === 0)) break
+      // 文件名 0..99
+      let nameEnd = 0
+      while (nameEnd < 100 && header[nameEnd] !== 0) nameEnd++
+      const name = header.subarray(0, nameEnd).toString('utf8').trim() || '(unnamed)'
+      // size 在 124..136,八进制 ASCII
+      let sizeStr = ''
+      for (let i = 0; i < 12; i++) {
+        const c = header[124 + i]
+        if (c === 0 || c === 0x20) break
+        if (i === 0 && c === 0x80) continue   // 跳过二进制标记位
+        if (c < 0x30 || c > 0x37) break
+        sizeStr += String.fromCharCode(c)
+      }
+      const size = sizeStr ? parseInt(sizeStr, 8) : 0
+      off += BLOCK
+      const data = buf.subarray(off, off + size)
+      const padded = Math.ceil(size / BLOCK) * BLOCK
+      off += padded
+      entries.push({ name, bytes: size })
+      if (name.toLowerCase().endsWith('.mp3') && !mp3) {
+        mp3 = Buffer.from(data)
+      }
+    }
+    if (!mp3) {
+      throw new Error(
+        `minimax tar contains no .mp3 (entries: ${entries.map((e) => e.name).join(', ') || 'none'})`
+      )
+    }
+    return { audio: mp3, entries }
+  }
 }
 
 export const minimaxTTSAsync = new MiniMaxTTSAsyncAdapter()
