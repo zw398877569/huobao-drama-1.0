@@ -5,6 +5,7 @@
 import { MiniMaxImageAdapter } from './minimax-image'
 import { MiniMaxVideoAdapter } from './minimax-video'
 import { MiniMaxTTSAdapter } from './minimax-tts'
+import { MiniMaxTTSAsyncAdapter } from './minimax-tts-async'
 import { OpenAIImageAdapter } from './openai-image'
 import { GeminiImageAdapter } from './gemini-image'
 import { VolcEngineImageAdapter } from './volcengine-image'
@@ -41,6 +42,15 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
 // TTS Adapter 注册表
 export const ttsAdapters: Record<string, TTSProviderAdapter> = {
   minimax: new MiniMaxTTSAdapter(),
+}
+
+// 异步 TTS adapter（最小验证用，文档: https://platform.minimaxi.com/docs/guides/speech-t2a-async）
+export const ttsAsyncAdapters: Record<string, MiniMaxTTSAsyncAdapter> = {
+  minimax: new MiniMaxTTSAsyncAdapter(),
+}
+
+export function getTTSAsyncAdapter(provider: string): MiniMaxTTSAsyncAdapter | null {
+  return ttsAsyncAdapters[provider.toLowerCase()] || null
 }
 
 export function getTTSAdapter(provider: string): TTSProviderAdapter {
