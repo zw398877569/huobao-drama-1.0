@@ -39,7 +39,18 @@ function getMiniMaxAudioConfig() {
   if (!active.apiKey) {
     throw new Error('MiniMax API key is empty in the audio config.')
   }
-  return { baseUrl: active.baseUrl, apiKey: active.apiKey, model: active.model }
+  // model 在 DB 里存为 JSON 字符串(参见 aiConfigs 的 schema: text('model')),
+  // 这里反序列化后才能交给 modelOf() 正确解析
+  let model: any = active.model
+  if (typeof model === 'string') {
+    try {
+      const parsed = JSON.parse(model)
+      if (Array.isArray(parsed) || typeof parsed === 'string') {
+        model = parsed
+      }
+    } catch { /* 留原值让 modelOf() 兜底 */ }
+  }
+  return { baseUrl: active.baseUrl, apiKey: active.apiKey, model }
 }
 
 interface TestBody {
