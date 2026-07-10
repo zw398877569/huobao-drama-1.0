@@ -7,12 +7,20 @@ import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 
+// 默认图片生成安全后缀：把"角色/场景"提示词从"剧情重现"重新框架为"电影概念艺术"，
+// 以降低 Agnes 等内容审核服务的命中率。后缀里的关键词都是正向艺术语言，
+// 避免直接说"no weapons / no blood"（这种否定式有时候反而会强化主题词）。
+// 真正的根治仍需要 LLM 改写器（按敏感词动态重写 prompt），
+// 那是后话 — 至少这个 suffix 把"血腥/医疗/武打"类 false positive 概率压下来。
+export const DEFAULT_IMAGE_SAFETY_SUFFIX = ', 电影剧照, 戏剧张力, 艺术化构图'
+
 interface GenerateImageParams {
   storyboardId?: number
   dramaId?: number
   sceneId?: number
   characterId?: number
   prompt: string
+  negativePrompt?: string
   model?: string
   size?: string
   referenceImages?: string[]
@@ -128,6 +136,12 @@ async function processImageGeneration(id: number, config: AIConfig) {
     const { isAsync, taskId, imageUrl } = adapter.parseGenerateResponse(result)
 
     if (!isAsync && imageUrl) {
+      // 先把上游 URL 写库，download 即便随后失败，Agnes 返回的 CDN 地址也保留下来，
+      // 排查和重试都能直接看到 imageUrl，而不是只看到一句"fetch failed"。
+      db.update(schema.imageGenerations)
+        .set({ imageUrl, status: 'processing', updatedAt: now() })
+        .where(eq(schema.imageGenerations.id, id))
+        .run()
       logTaskProgress('ImageTask', 'sync-complete', { id, imageUrl })
       // 同步模式：直接下载图片
       await handleImageComplete(id, config.provider, imageUrl)
@@ -244,6 +258,11 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
       const pollResp = adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.imageUrl) {
+        // 同样先落上游 URL 再下载
+        db.update(schema.imageGenerations)
+          .set({ imageUrl: pollResp.imageUrl, status: 'processing', updatedAt: now() })
+          .where(eq(schema.imageGenerations.id, id))
+          .run()
         logTaskSuccess('ImageTask', 'poll-complete', { id, taskId, imageUrl: pollResp.imageUrl })
         await handleImageComplete(id, config.provider, pollResp.imageUrl)
         return

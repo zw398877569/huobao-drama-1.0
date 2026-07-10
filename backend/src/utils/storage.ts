@@ -13,7 +13,11 @@ const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../
 /**
  * 下载远程文件到本地存储
  */
-export async function downloadFile(url: string, subDir: string): Promise<string> {
+export async function downloadFile(
+  url: string,
+  subDir: string,
+  opts?: { retries?: number; timeoutMs?: number },
+): Promise<string> {
   const dir = path.join(STORAGE_ROOT, subDir)
   fs.mkdirSync(dir, { recursive: true })
 
@@ -21,14 +25,39 @@ export async function downloadFile(url: string, subDir: string): Promise<string>
   const filename = `${uuid()}${ext}`
   const filePath = path.join(dir, filename)
 
-  const resp = await fetch(url)
-  if (!resp.ok) throw new Error(`Download failed: ${resp.status}`)
+  // 容错：CDN/DNS 抖动时 `fetch` 会抛 TypeError，5xx/408/429 是上游临时问题。
+  // 这两种都重试，4xx（除 408/429）是 URL 本身有问题，不重试。
+  const maxRetries = opts?.retries ?? 3
+  const timeoutMs = opts?.timeoutMs ?? 60_000
+  const backoffs = [1_000, 3_000, 5_000]
+  let lastErr: unknown
 
-  const buffer = Buffer.from(await resp.arrayBuffer())
-  fs.writeFileSync(filePath, buffer)
-
-  // 返回相对路径（供 API 返回给前端）
-  return `static/${subDir}/${filename}`
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+      if (resp.ok) {
+        const buffer = Buffer.from(await resp.arrayBuffer())
+        fs.writeFileSync(filePath, buffer)
+        return `static/${subDir}/${filename}`
+      }
+      // 非 2xx：4xx (除 408/429) 直接抛
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
+        throw new Error(`Download failed: ${resp.status}`)
+      }
+      // 5xx / 408 / 429：暂存错误后走 catch 重试
+      lastErr = new Error(`Download failed: ${resp.status}`)
+    } catch (err: any) {
+      const isNetworkError = err?.name === 'TypeError' || err?.name === 'AbortError' || err?.name === 'TimeoutError'
+      const is5xx = /^Download failed: 5\d\d$/.test(err?.message || '')
+      const isRetryable4xx = /^Download failed: (408|429)$/.test(err?.message || '')
+      if (!isNetworkError && !is5xx && !isRetryable4xx) throw err
+      lastErr = err
+    }
+    if (attempt < maxRetries - 1) {
+      await new Promise(r => setTimeout(r, backoffs[attempt] ?? 5_000))
+    }
+  }
+  throw lastErr
 }
 
 /**
