@@ -45,10 +45,19 @@ const FALLBACK_REPLACEMENTS = [
   [/白骨/g, '远山轮廓'],
   // LLM 改写后仍可能漏掉的视觉化高敏词
   // 顺序:先做最具体的复合短语,再做单词替换,避免规则互相破坏
-  // === 武器/武侠类(agnes 对"武侠打斗"特别敏感,直接抹掉) ===
+  // === 复合短语(必须先匹配,否则单词规则会破坏语义) ===
+  [/残阳如血/g, '暮色斜阳'],
   [/残阳如丹/g, '暮色斜阳'],
   [/血色夕阳/g, '暮色夕阳'],
   [/染成血色/g, '染成深红'],
+  [/杀机四伏/g, '氛围凝重'],
+  [/肃杀压抑/g, '氛围凝重'],
+  [/氛围肃杀/g, '氛围凝重'],
+  [/正邪对峙/g, '人物对峙'],
+  [/武林高手/g, '人物'],
+  [/刀光剑影/g, '光影交错'],
+  [/血肉模糊/g, '画面朦胧'],
+  // === 武器类(全部映射到"光柱",直接抹掉武器语义) ===
   [/剑身/g, '光柱'],
   [/剑刃/g, '光柱'],
   [/长剑/g, '光柱'],
@@ -58,19 +67,29 @@ const FALLBACK_REPLACEMENTS = [
   [/剑光/g, '光柱'],
   [/兵器/g, '道具'],
   [/武功/g, '动作'],
+  // === 高敏单词(逐个替换) ===
   [/高手/g, '人物'],
   [/对决/g, '对视'],
-  // === 燃烧/暴力类 ===
-  [/燃烧的[一-龥]/g, '柔和的'],
-  [/燃烧/g, '浮起'],
+  [/杀气/g, '气场'],
   [/搏杀|拼杀|厮杀/g, '对峙'],
-  [/杀气弥漫/g, '气场凝重'],
+  [/比武|过招/g, '对视'],
+  [/残阳/g, '暮色'],
   [/血色/g, '绯红'],
-  [/燃起/g, '浮起'],
-  [/致命一击/g, '蓄势一击'],
+  [/杀机/g, '氛围'],
+  [/邪气/g, '冷峻'],
+  [/邪派/g, '人物'],
+  [/萧杀/g, '沉郁'],
+  [/肃杀/g, '沉郁'],
   [/残忍/g, '冷峻'],
   [/凄厉/g, '苍凉'],
   [/哀嚎/g, '低吟'],
+  [/残月/g, '月色'],
+  [/死寂/g, '静谧'],
+  // === 燃烧类 ===
+  [/燃烧的[一-龥]/g, '柔和的'],
+  [/燃烧/g, '浮起'],
+  [/燃起/g, '浮起'],
+  [/致命一击/g, '蓄势一击'],
   // === 最后做宽泛的视觉词收敛 ===
   [/剑影/g, '光影'],
 ]
@@ -154,7 +173,7 @@ function extractPromptFromLLM(raw) {
 // 检测 LLM 改写后是否仍有 agnes 容易拒掉的关键词
 function containsResidualPolicyRisk(text) {
   // 武器/武侠 + 暴力/燃烧类,任一命中即认为有残留风险
-  return /(?:杀气|血色|尸体|鲜血|搏杀|拼杀|厮杀|燃烧|燃烧的|燃起|残阳如丹|血色夕阳|剑身|剑刃|刀锋|长剑|短剑|刀光|剑光|兵器|武功|高手|对决|致命一击|残忍.{0,2}对待|凄厉|哀嚎|死亡.{0,2}威胁|白骨)/.test(text)
+  return /(?:杀气|血色|尸体|鲜血|搏杀|拼杀|厮杀|燃烧|燃起|残阳如血|残阳如丹|血色夕阳|杀机|邪气|萧杀|肃杀|比武|过招|剑身|剑刃|刀锋|长剑|短剑|刀光|剑光|兵器|武功|高手|对决|致命一击|残忍.{0,2}对待|凄厉|哀嚎|死亡.{0,2}威胁|白骨|死寂|残月|武林)/.test(text)
 }
 
 function getTextProviderBaseUrlPath(provider) {
@@ -217,7 +236,10 @@ async function sanitizeImagePromptLLM(rawPrompt) {
     const content = data?.choices?.[0]?.message?.content
     const rewritten = extractPromptFromLLM(typeof content === 'string' ? content : '')
     if (!rewritten) {
-      logTaskWarn('PromptSanitizer', 'llm-rewrite-empty', { provider: config.provider })
+      logTaskWarn('PromptSanitizer', 'llm-rewrite-empty', {
+        provider: config.provider,
+        rawPreview: (typeof content === 'string' ? content : '').slice(0, 400),
+      })
       return null
     }
     logTaskProgress('PromptSanitizer', 'llm-rewrite-success', {
