@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
+import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { splitGridImage } from '../services/grid-split.js'
 import { createAgent } from '../agents/index.js'
 import { logTaskError, logTaskPayload, logTaskProgress } from '../utils/task-logger.js'
@@ -509,14 +510,23 @@ app.post('/generate', async (c) => {
   }
 
   const referenceAssets = collectGridReferenceAssets(storyboards)
-  const prompt = custom_prompt || buildGridPrompt(mode, storyboards, rows, cols, dramaStyle, referenceAssets)
+  const rawPrompt = custom_prompt || buildGridPrompt(mode, storyboards, rows, cols, dramaStyle, referenceAssets)
+  // grid prompt 也走安全改写(grid_prompt 由 LLM 拼出来,可能含残留敏感词)
+  const prompt = await sanitizeImagePrompt(rawPrompt)
   const referenceImages = referenceAssets.map((asset) => asset.path)
 
-  // Size: first_last mode uses Nx2 layout
+  // Size: 保持 16:9 单格比例,总尺寸按比例缩放到 ≤ 1920x1080(agnes 最大支持),
+  // 否则 3x3 grid = 2880x1620 容易被 queue full 或尺寸超限拒绝
   const cellW = 960, cellH = 540
   const actualCols = cols
   const actualRows = rows
-  const size = `${cellW * actualCols}x${cellH * actualRows}`
+  const rawW = cellW * actualCols
+  const rawH = cellH * actualRows
+  const MAX_W = 1920, MAX_H = 1080
+  const ratio = Math.min(MAX_W / rawW, MAX_H / rawH, 1)
+  const finalW = Math.round(rawW * ratio)
+  const finalH = Math.round(rawH * ratio)
+  const size = `${finalW}x${finalH}`
 
   try {
     const genId = await generateImage({

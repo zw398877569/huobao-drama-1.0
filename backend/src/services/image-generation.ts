@@ -118,14 +118,51 @@ async function processImageGeneration(id: number, config: AIConfig) {
       body,
     })
 
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(600_000),
-    })
-
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    // 503/502/408/429 视为临时性错误,做指数退避重试;其他错误立即失败
+    // 400 content_policy_violation 这类业务错误不重试(改 prompt 才会变)
+    const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+    const MAX_RETRIES = 3
+    let resp: Response | null = null
+    let lastErrText = ''
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        resp = await fetch(url, {
+          method,
+          headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(600_000),
+        })
+      } catch (err: any) {
+        // 网络层异常也重试
+        lastErrText = err?.message || String(err)
+        logTaskWarn('ImageTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
+        if (attempt === MAX_RETRIES - 1) {
+          throw new Error(`fetch failed after ${MAX_RETRIES} attempts: ${lastErrText}`)
+        }
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        continue
+      }
+      if (resp.ok) break
+      if (!TRANSIENT_STATUS.has(resp.status)) {
+        // 业务错误(content_policy_violation 等)直接抛,不带 retry hint
+        throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+      }
+      lastErrText = await resp.text()
+      logTaskWarn('ImageTask', 'transient-error-retry', {
+        id,
+        attempt: attempt + 1,
+        status: resp.status,
+        body: lastErrText.slice(0, 240),
+      })
+      if (attempt === MAX_RETRIES - 1) {
+        throw new Error(`API error ${resp.status} after ${MAX_RETRIES} attempts: ${lastErrText}`)
+      }
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+    }
+    if (!resp || !resp.ok) {
+      // 防御性兜底(理论上不会到这里)
+      throw new Error(`API error ${resp?.status}: ${lastErrText}`)
+    }
     const result = await resp.json() as any
     logTaskPayload('ImageTask', 'response payload', {
       id,
