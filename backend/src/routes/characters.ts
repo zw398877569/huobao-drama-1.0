@@ -3,7 +3,8 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
-import { DEFAULT_IMAGE_SAFETY_SUFFIX, generateImage } from '../services/image-generation.js'
+import { generateImage } from '../services/image-generation.js'
+import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -32,7 +33,7 @@ app.delete('/:id', async (c) => {
   return success(c)
 })
 
-// POST /characters/:id/generate-voice-sample — 生成角色音色试听
+// POST /characters/:id/generate-voice-sample
 app.post('/:id/generate-voice-sample', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json().catch(() => ({}))
@@ -52,9 +53,9 @@ app.post('/:id/generate-voice-sample', async (c) => {
       .where(eq(schema.characters.id, id)).run()
     logTaskSuccess('VoiceSample', 'generate', { characterId: id, path: audioPath })
     return success(c, { voice_sample_url: audioPath })
-  } catch (err: any) {
+  } catch (err) {
     logTaskError('VoiceSample', 'generate', { characterId: id, error: err.message })
-    return badRequest(c, `TTS 生成失败: ${err.message}`)
+    return badRequest(c, 'TTS 生成失败: ' + err.message)
   }
 })
 
@@ -69,13 +70,14 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const prompt = `${char.name}, ${char.appearance || char.description || '人物立绘'}, 高质量, 正面, 白色背景${DEFAULT_IMAGE_SAFETY_SUFFIX}`
+  const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', 高质量, 正面, 白色背景'
+  const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
     const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
     logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
-  } catch (err: any) {
+  } catch (err) {
     logTaskError('CharacterImage', 'generate', { characterId: id, error: err.message })
     return badRequest(c, err.message)
   }
@@ -92,7 +94,8 @@ app.post('/batch-generate-images', async (c) => {
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
-    const prompt = `${char.name}, ${char.appearance || char.description || '人物立绘'}, 高质量, 正面, 白色背景${DEFAULT_IMAGE_SAFETY_SUFFIX}`
+    const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', 高质量, 正面, 白色背景'
+    const prompt = await sanitizeImagePrompt(rawPrompt)
     try {
       const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
       results.push(genId)

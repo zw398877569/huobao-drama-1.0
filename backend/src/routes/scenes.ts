@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest, now } from '../utils/response.js'
-import { DEFAULT_IMAGE_SAFETY_SUFFIX, generateImage } from '../services/image-generation.js'
+import { generateImage } from '../services/image-generation.js'
+import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -47,14 +48,15 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const prompt = (scene.prompt || `${scene.location}, ${scene.time || ''}, 高质量场景, 电影感`) + DEFAULT_IMAGE_SAFETY_SUFFIX
+  const rawPrompt = scene.prompt || (scene.location + ', ' + (scene.time || '') + ', 高质量场景, 电影感')
+  const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('SceneImage', 'generate', { sceneId: id, episodeId: ep.id, dramaId: scene.dramaId, location: scene.location })
     db.update(schema.scenes).set({ status: 'processing', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
     const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
     logTaskSuccess('SceneImage', 'generate', { sceneId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
-  } catch (err: any) {
+  } catch (err) {
     logTaskError('SceneImage', 'generate', { sceneId: id, error: err.message })
     db.update(schema.scenes).set({ status: 'failed', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
     return badRequest(c, err.message)
