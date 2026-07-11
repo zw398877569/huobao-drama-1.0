@@ -234,9 +234,17 @@ async function normalizeVideoReferenceUrls(raw: string | null | undefined): Prom
 
 async function pollVideoTask(id: number, config: AIConfig, taskId: string, storyboardId?: number | null) {
   const adapter = getVideoAdapter(config.provider)
+  // 总 poll 时长上限 30 分钟(180 次 × 10s);连续 5 次失败就放弃
+  const MAX_POLLS = 180
+  const MAX_CONSECUTIVE_FAILS = 5
+  const POLL_INTERVAL_MS = 10_000
+  // 4xx / JSON 解析错误视为"端点或响应格式不对",再重试无意义,直接放弃
+  const PERMANENT_STATUS = new Set([400, 401, 403, 404, 410, 422])
 
-  for (let i = 0; i < 300; i++) {
-    await new Promise(r => setTimeout(r, 10000))
+  let consecutiveFails = 0
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
     try {
       const { url, method, headers } = adapter.buildPollRequest(config, taskId)
       logTaskProgress('VideoTask', 'poll-request', {
@@ -248,9 +256,63 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
         attempt: i + 1,
       })
       const resp = await fetch(url, { method, headers })
-      if (!resp.ok) continue
-      const result = await resp.json() as any
 
+      if (!resp.ok) {
+        consecutiveFails++
+        const body = await resp.text().catch(() => '')
+        logTaskWarn('VideoTask', 'poll-http-error', {
+          id,
+          taskId,
+          attempt: i + 1,
+          status: resp.status,
+          bodyPreview: body.slice(0, 200),
+        })
+        if (PERMANENT_STATUS.has(resp.status)) {
+          // 端点不对/鉴权错,直接放弃
+          logTaskError('VideoTask', 'poll-permanent-fail', {
+            id, taskId, status: resp.status, error: body.slice(0, 240),
+          })
+          db.update(schema.videoGenerations)
+            .set({ status: 'failed', errorMsg: `Poll permanent error ${resp.status}: ${body.slice(0, 200)}`, updatedAt: now() })
+            .where(eq(schema.videoGenerations.id, id)).run()
+          return
+        }
+        if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
+          logTaskError('VideoTask', 'poll-giveup', {
+            id, taskId, consecutiveFails, lastStatus: resp.status,
+          })
+          db.update(schema.videoGenerations)
+            .set({ status: 'failed', errorMsg: `Poll gave up after ${consecutiveFails} consecutive failures (last status ${resp.status})`, updatedAt: now() })
+            .where(eq(schema.videoGenerations.id, id)).run()
+          return
+        }
+        continue
+      }
+
+      // 状态 200 但响应不是 JSON(比如 agnes 返回 HTML 404 页面),JSON.parse 抛 SyntaxError
+      const contentType = resp.headers.get('content-type') || ''
+      const rawText = await resp.text()
+      if (!contentType.includes('application/json') && !rawText.trim().startsWith('{') && !rawText.trim().startsWith('[')) {
+        consecutiveFails++
+        logTaskWarn('VideoTask', 'poll-non-json-response', {
+          id, taskId, attempt: i + 1, contentType,
+          bodyPreview: rawText.slice(0, 200),
+        })
+        if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
+          logTaskError('VideoTask', 'poll-giveup-non-json', {
+            id, taskId, consecutiveFails,
+            lastBody: rawText.slice(0, 240),
+          })
+          db.update(schema.videoGenerations)
+            .set({ status: 'failed', errorMsg: `Poll gave up: ${consecutiveFails} consecutive non-JSON responses. Last: ${rawText.slice(0, 200)}`, updatedAt: now() })
+            .where(eq(schema.videoGenerations.id, id)).run()
+          return
+        }
+        continue
+      }
+
+      const result = JSON.parse(rawText) as any
+      consecutiveFails = 0  // 成功解析,清零
       const pollResp = adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.videoUrl) {
@@ -260,20 +322,29 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
       }
       if (pollResp.status === 'failed') {
         logTaskError('VideoTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Video generation failed' })
-        throw new Error(pollResp.error || 'Video generation failed')
-      }
-    } catch (err: any) {
-      if (i === 299) {
-        logTaskError('VideoTask', 'poll-timeout', { id, taskId, error: err.message })
         db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
-          .where(eq(schema.videoGenerations.id, id))
-          .run()
+          .set({ status: 'failed', errorMsg: pollResp.error || 'Video generation failed', updatedAt: now() })
+          .where(eq(schema.videoGenerations.id, id)).run()
         return
       }
+      // 仍 processing,继续下一轮
+    } catch (err: any) {
+      consecutiveFails++
       logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
+      if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
+        logTaskError('VideoTask', 'poll-giveup-exception', { id, taskId, consecutiveFails, error: err.message })
+        db.update(schema.videoGenerations)
+          .set({ status: 'failed', errorMsg: `Poll gave up after ${consecutiveFails} consecutive exceptions: ${err.message}`, updatedAt: now() })
+          .where(eq(schema.videoGenerations.id, id)).run()
+        return
+      }
     }
   }
+  // 用尽 MAX_POLLS
+  logTaskError('VideoTask', 'poll-timeout', { id, taskId, maxPolls: MAX_POLLS })
+  db.update(schema.videoGenerations)
+    .set({ status: 'failed', errorMsg: `Poll timeout after ${MAX_POLLS} attempts (${MAX_POLLS * POLL_INTERVAL_MS / 1000}s)`, updatedAt: now() })
+    .where(eq(schema.videoGenerations.id, id)).run()
 }
 
 async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
