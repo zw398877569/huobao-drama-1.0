@@ -43,6 +43,22 @@ const FALLBACK_REPLACEMENTS = [
   [/身亡/g, '静立'],
   [/尸体/g, '静坐的身影'],
   [/白骨/g, '远山轮廓'],
+  // LLM 改写后仍可能漏掉的视觉化高敏词
+  // 先做最具体的(包含边界),再做泛化的,避免规则互相破坏
+  [/血色夕阳/g, '暮色夕阳'],
+  [/染成血色/g, '染成深红'],
+  [/剑刃/g, '剑影'],
+  [/燃烧的光晕/g, '温暖的光晕'],
+  [/搏杀|拼杀|厮杀/g, '对峙'],
+  [/杀气弥漫/g, '气场凝重'],
+  [/血色/g, '绯红'],
+  [/燃起/g, '浮起'],
+  [/致命一击/g, '蓄势一击'],
+  [/残忍/g, '冷峻'],
+  [/凄厉/g, '苍凉'],
+  [/哀嚎/g, '低吟'],
+  // 最后再做宽泛的视觉词收敛
+  [/剑影/g, '光影'],
 ]
 
 const SUFFIX_MARKERS = ['电影剧照', '艺术化构图', '戏剧张力']
@@ -82,12 +98,43 @@ const SYSTEM_INSTRUCTION = [
 function extractPromptFromLLM(raw) {
   if (!raw) return null
   let text = raw.trim()
+
+  // 1) 剥掉推理模型的思考块(DeepSeek/MiniMax-M3/QwQ 等都会输出 <think>...</think>)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  text = text.replace(/<reflection>[\s\S]*?<\/reflection>/gi, '')
+  text = text.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+
+  // 2) 剥掉 markdown 代码块包裹
   text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')
-  text = text.replace(/^(改写后的?\s*prompt\s*[:：]\s*|prompt\s*[:：]\s*|output\s*[:：]\s*)/i, '')
+
+  // 3) 挑"最长且主要含中文"的段落(去掉英文思考/元评论行)
+  const paragraphs = text
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .filter(p => {
+      // 必须至少含 8 个中文字符,且中文占比 >= 30%
+      const cn = (p.match(/[一-龥]/g) || []).length
+      if (cn < 8) return false
+      return cn / p.length >= 0.3
+    })
+  if (paragraphs.length === 0) return null
+  // 取最长那段(模型真正给出的改写通常是最长的中文段)
+  text = paragraphs.reduce((a, b) => b.length > a.length ? b : a, '')
+
+  // 4) 剥常见前缀和引号
+  text = text.replace(/^(改写后的?\s*prompt\s*[:：]\s*|prompt\s*[:：]\s*|output\s*[:：]\s*|final\s*answer\s*[:：]\s*)/i, '')
   text = text.replace(/^["「『]+|["」』]+$/g, '')
+
+  // 5) 必须含中文,否则说明模型只输出了免责声明/英文思考
   if (!/[一-龥]/.test(text)) return null
   if (text.length > 600) text = text.slice(0, 600)
   return text.trim()
+}
+
+// 检测 LLM 改写后是否仍有 agnes 容易拒掉的关键词
+function containsResidualPolicyRisk(text) {
+  return /(?:杀气|血色|尸体|鲜血|搏杀|拼杀|厮杀|燃烧.{0,2}剑|剑刃刺|刀锋|致命一击|残忍.{0,2}对待|凄厉|哀嚎|死亡.{0,2}威胁|白骨)/.test(text)
 }
 
 function getTextProviderBaseUrlPath(provider) {
@@ -159,7 +206,25 @@ async function sanitizeImagePromptLLM(rawPrompt) {
       outLen: rewritten.length,
       rewritten,
     })
-    return rewritten
+    // 第二层防御:LLM 改写后可能仍有 agnes 黑名单关键词残留,
+    // 用本地 sanitize 再精确擦除一次(不丢弃 LLM 的整体框架)
+    const polished = sanitizeImagePromptLocal(rewritten)
+    if (polished !== rewritten) {
+      logTaskProgress('PromptSanitizer', 'llm-output-polished', {
+        provider: config.provider,
+        before: rewritten.slice(0, 60),
+        after: polished.slice(0, 60),
+      })
+    }
+    if (containsResidualPolicyRisk(polished)) {
+      // 本地 sanitize 后仍有残留,降级到纯本地兜底
+      logTaskWarn('PromptSanitizer', 'llm-output-still-risky', {
+        provider: config.provider,
+        preview: polished.slice(0, 80),
+      })
+      return null
+    }
+    return polished
   } catch (err) {
     logTaskWarn('PromptSanitizer', 'llm-rewrite-failed', { error: err?.message || String(err) })
     return null
