@@ -93,21 +93,24 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
   }
 
   buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest {
-    // 优先级: 有 videoId 用推荐端点 /agnesapi?video_id=...
-    //         没有则用兼容旧版 /v1/videos/<task_id>
+    // agnes 实际行为(从 response payload 确认):
+    //   video_id === task_id,都是 task_xxx 格式
+    //   `/agnesapi?video_id=task_xxx` 端点对当前实例 404
+    //   `/v1/videos/<task_id>` 兼容端点是真实可用的
+    // 优先用 taskId 走 /v1/videos/<task_id>,只有 taskId 缺失才 fallback 到 videoId + 推荐端点
+    if (taskId) {
+      return {
+        url: joinProviderUrl(config.baseUrl, '/v1', `/videos/${taskId}`),
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${config.apiKey}` },
+        body: undefined,
+      }
+    }
     if (videoId) {
       return {
         url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
         method: 'GET',
-        headers: { 'Authorization': `Bearer \${config.apiKey}` },
-        body: undefined,
-      }
-    }
-    if (taskId) {
-      return {
-        url: joinProviderUrl(config.baseUrl, '/v1', `/videos/\${taskId}`),
-        method: 'GET',
-        headers: { 'Authorization': `Bearer \${config.apiKey}` },
+        headers: { 'Authorization': `Bearer ${config.apiKey}` },
         body: undefined,
       }
     }
