@@ -22,7 +22,7 @@ export interface ImageProviderAdapter {
    * @param config AI 配置
    * @param taskId 任务 ID
    */
-  buildPollRequest(config: AIConfig, taskId: string): ProviderRequest
+  buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest
 
   /**
    * 解析轮询响应
@@ -52,7 +52,7 @@ export interface VideoProviderAdapter {
 
   parseGenerateResponse(result: any): VideoGenResponse
 
-  buildPollRequest(config: AIConfig, taskId: string): ProviderRequest
+  buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest
 
   parsePollResponse(result: any): VideoPollResponse
 

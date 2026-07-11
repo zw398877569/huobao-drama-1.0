@@ -165,8 +165,9 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       throw new Error(`API error ${resp?.status}: ${lastErrText}`)
     }
     const result = await resp.json() as any
+    logTaskPayload('VideoTask', 'response payload', result)
 
-    const { isAsync, taskId, videoUrl } = adapter.parseGenerateResponse(result)
+    const { isAsync, taskId, videoId: videoIdFromAdapter, videoUrl } = adapter.parseGenerateResponse(result)
 
     if (!isAsync && videoUrl) {
       logTaskProgress('VideoTask', 'sync-complete', { id, videoUrl })
@@ -181,8 +182,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       .where(eq(schema.videoGenerations.id, id))
       .run()
     // 记录 videoId 用于诊断(实际查询用的 ID)
-    const pollId = (result as any).videoId || taskId
-    logTaskProgress('VideoTask', 'poll-start', { id, taskId, videoId: (result as any).videoId, provider: config.provider })
+    logTaskProgress('VideoTask', 'poll-start', { id, taskId, videoId: videoIdFromAdapter, provider: config.provider })
 
     // Vidu 没有轮询端点，跳过轮询（依赖 Webhook 回调）
     if (adapter.provider === 'vidu') {
@@ -190,9 +190,8 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       return
     }
 
-    // agnes 推荐用 video_id 查询(/agnesapi?video_id=...),
-    // videoId 由 parseGenerateResponse 返回,fallback 到 taskId(旧版兼容)
-    pollVideoTask(id, config, (result as any).videoId || taskId!, record.storyboardId)
+    // agnes 推荐用 video_id 查询,fallback 到 taskId(兼容旧版 /v1/videos/<task_id>)
+    pollVideoTask(id, config, videoIdFromAdapter || taskId!, taskId!, record.storyboardId)
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
     db.update(schema.videoGenerations)
@@ -236,7 +235,7 @@ async function normalizeVideoReferenceUrls(raw: string | null | undefined): Prom
   return normalized.filter((item): item is string => !!item)
 }
 
-async function pollVideoTask(id: number, config: AIConfig, taskId: string, storyboardId?: number | null) {
+async function pollVideoTask(id: number, config: AIConfig, videoId: string, taskId: string, storyboardId?: number | null) {
   const adapter = getVideoAdapter(config.provider)
   // 总 poll 时长上限 30 分钟(180 次 × 10s);连续 5 次失败就放弃
   const MAX_POLLS = 180
@@ -250,7 +249,7 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
     try {
-      const { url, method, headers } = adapter.buildPollRequest(config, taskId)
+      const { url, method, headers } = adapter.buildPollRequest(config, videoId, taskId)
       logTaskProgress('VideoTask', 'poll-request', {
         id,
         taskId,

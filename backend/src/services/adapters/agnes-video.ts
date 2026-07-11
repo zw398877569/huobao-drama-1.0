@@ -92,17 +92,26 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
     throw new Error('No task_id or video_id in response')
   }
 
-  buildPollRequest(config: AIConfig, videoId: string): ProviderRequest {
-    // 推荐方式: GET /agnesapi?video_id=<video_id>
-    // 兼容旧版: GET /v1/videos/<task_id> (由调用方传 taskId 进来)
-    return {
-      url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: undefined,
+  buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest {
+    // 优先级: 有 videoId 用推荐端点 /agnesapi?video_id=...
+    //         没有则用兼容旧版 /v1/videos/<task_id>
+    if (videoId) {
+      return {
+        url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
+        method: 'GET',
+        headers: { 'Authorization': `Bearer \${config.apiKey}` },
+        body: undefined,
+      }
     }
+    if (taskId) {
+      return {
+        url: joinProviderUrl(config.baseUrl, '/v1', `/videos/\${taskId}`),
+        method: 'GET',
+        headers: { 'Authorization': `Bearer \${config.apiKey}` },
+        body: undefined,
+      }
+    }
+    throw new Error('buildPollRequest: videoId 和 taskId 都为空')
   }
 
   parsePollResponse(result: any): VideoPollResponse {
