@@ -115,6 +115,7 @@ export interface ImagePollResponse {
 export interface VideoGenResponse {
   isAsync: boolean
   taskId?: string
+  videoId?: string   // agnes 推荐用 video_id 查任务状态(/agnesapi?video_id=...)
   videoUrl?: string
 }
 

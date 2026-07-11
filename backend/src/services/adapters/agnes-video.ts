@@ -77,20 +77,24 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
 
   parseGenerateResponse(result: any): VideoGenResponse {
     // 同步返回视频 URL（极少情况）
-    const videoUrl = result.remixed_from_video_id || result.video_url || result.data?.video_url
+    const videoUrl = result.url || result.video_url || result.data?.video_url
     if (videoUrl) {
       return { isAsync: false, videoUrl }
     }
 
+    // agnes 推荐用 video_id 查任务状态(/agnesapi?video_id=video_xxx)
+    // 兼容旧版用 task_id(/v1/videos/<task_id>),两者都返回
     const taskId = result.task_id || result.id
     const videoId = result.video_id
-    if (taskId) {
-      return { isAsync: true, taskId: videoId || taskId }
+    if (taskId || videoId) {
+      return { isAsync: true, taskId, videoId }
     }
-    throw new Error('No task_id or video_url in response')
+    throw new Error('No task_id or video_id in response')
   }
 
   buildPollRequest(config: AIConfig, videoId: string): ProviderRequest {
+    // 推荐方式: GET /agnesapi?video_id=<video_id>
+    // 兼容旧版: GET /v1/videos/<task_id> (由调用方传 taskId 进来)
     return {
       url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
       method: 'GET',
@@ -102,17 +106,19 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
   }
 
   parsePollResponse(result: any): VideoPollResponse {
+    // agnes 实际响应字段是 'url' (不是 'video_url')
     const status = result.status
     if (status === 'completed') {
-      const videoUrl = result.remixed_from_video_id || result.video_url
+      const videoUrl = result.url || result.video_url || result.remixed_from_video_id
       if (videoUrl) {
         return { status: 'completed', videoUrl }
       }
     }
     if (status === 'failed') {
-      const errMsg = result.error?.message || result.error || result.error_msg || 'Video generation failed'
+      const errMsg = result.error?.message || (typeof result.error === 'string' ? result.error : null) || result.error_msg || 'Video generation failed'
       return { status: 'failed', error: errMsg }
     }
+    // queued / in_progress 都算 processing
     return { status: 'processing' }
   }
 

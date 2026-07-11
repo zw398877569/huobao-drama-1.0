@@ -180,7 +180,9 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       .set({ taskId, status: 'processing', updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
-    logTaskProgress('VideoTask', 'poll-start', { id, taskId, provider: config.provider })
+    // 记录 videoId 用于诊断(实际查询用的 ID)
+    const pollId = (result as any).videoId || taskId
+    logTaskProgress('VideoTask', 'poll-start', { id, taskId, videoId: (result as any).videoId, provider: config.provider })
 
     // Vidu 没有轮询端点，跳过轮询（依赖 Webhook 回调）
     if (adapter.provider === 'vidu') {
@@ -188,7 +190,9 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       return
     }
 
-    pollVideoTask(id, config, taskId!, record.storyboardId)
+    // agnes 推荐用 video_id 查询(/agnesapi?video_id=...),
+    // videoId 由 parseGenerateResponse 返回,fallback 到 taskId(旧版兼容)
+    pollVideoTask(id, config, (result as any).videoId || taskId!, record.storyboardId)
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
     db.update(schema.videoGenerations)
