@@ -120,13 +120,50 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       body,
     })
 
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: JSON.stringify(body),
-    })
-
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    // 503/502/408/429 视为临时性错误,做指数退避重试;其他错误立即失败
+    // 业务错误(如 num_frames 格式不对)直接抛,不浪费 retry 预算
+    const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+    const MAX_RETRIES = 3
+    let resp: Response | null = null
+    let lastErrText = ''
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        resp = await fetch(url, {
+          method,
+          headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(600_000),
+        })
+      } catch (err: any) {
+        lastErrText = err?.message || String(err)
+        logTaskWarn('VideoTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
+        if (attempt === MAX_RETRIES - 1) {
+          throw new Error(`fetch failed after ${MAX_RETRIES} attempts: ${lastErrText}`)
+        }
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        continue
+      }
+      if (resp.ok) break
+      if (!TRANSIENT_STATUS.has(resp.status)) {
+        // 业务错误(num_frames 格式 / content_policy / 鉴权 等)立即抛
+        throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+      }
+      lastErrText = await resp.text()
+      logTaskWarn('VideoTask', 'transient-error-retry', {
+        id,
+        attempt: attempt + 1,
+        status: resp.status,
+        body: lastErrText.slice(0, 240),
+      })
+      if (attempt === MAX_RETRIES - 1) {
+        throw new Error(`API error ${resp.status} after ${MAX_RETRIES} attempts: ${lastErrText}`)
+      }
+      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+    }
+    if (!resp || !resp.ok) {
+      // 防御性兜底
+      throw new Error(`API error ${resp?.status}: ${lastErrText}`)
+    }
     const result = await resp.json() as any
 
     const { isAsync, taskId, videoUrl } = adapter.parseGenerateResponse(result)

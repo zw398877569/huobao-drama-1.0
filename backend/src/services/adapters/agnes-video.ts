@@ -58,9 +58,10 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
     }
 
     // 时长控制 -> num_frames
+    // agnes-video-v2.0 硬性要求 num_frames = 8n + 1 (9, 17, 25, ... 441)
     if (record.duration) {
-      const frames = Math.min(record.duration * 24, 441)
-      body.num_frames = frames
+      const target = Math.min(record.duration * 24, 441)
+      body.num_frames = 8 * Math.round(target / 8) + 1
     }
 
     return {
