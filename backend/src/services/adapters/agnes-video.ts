@@ -123,14 +123,21 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
     // 需要从 data/output/result 嵌套结构里再找一遍
     const status = result.status
     if (status === 'completed') {
-      const videoUrl = result.url
+      // 优先级: SKILL.md 文档明确说最终 URL 在 remixed_from_video_id
+      // 其次尝试 url / video_url 等其他可能字段
+      const videoUrl = result.remixed_from_video_id
+        || result.url
         || result.video_url
-        || result.remixed_from_video_id
         || result.data?.url
         || result.data?.video_url
+        || result.data?.remixed_from_video_id
         || result.output?.url
         || result.output?.video_url
+        || result.output?.remixed_from_video_id
         || result.result?.url
+        || result.result?.remixed_from_video_id
+        || result.videos?.[0]?.url
+        || result.videos?.[0]?.remixed_from_video_id
       if (videoUrl) {
         return { status: 'completed', videoUrl }
       }
@@ -153,6 +160,11 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
   }
 
   extractVideoUrl(result: any): string | null {
-    return result.remixed_from_video_id || result.video_url || null
+    return result.remixed_from_video_id
+      || result.url
+      || result.video_url
+      || result.data?.remixed_from_video_id
+      || result.data?.url
+      || null
   }
 }
