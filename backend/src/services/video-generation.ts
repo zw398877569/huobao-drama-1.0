@@ -345,22 +345,19 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
       // 完整 body 在第 1 / 5 / 10 / status 变化时打印(帮助诊断 url 字段在哪)
       const lastStatus = (globalThis as any).__lastPollStatus
       if (i < 3 || (i + 1) % 5 === 0 || (lastStatus !== undefined && lastStatus !== result.status)) {
+        // 关键: 把 result 完整序列化(如果 size 太大截断)
+        // 之前 result_keys 只列字段名,不知道具体值
+        const resultString = JSON.stringify(result)
+        const resultPreview = resultString.length > 800
+          ? resultString.slice(0, 800) + '...<truncated ' + (resultString.length - 800) + ' chars>'
+          : resultString
         logTaskPayload('VideoTask', 'poll-response-body', {
           id, taskId, attempt: i + 1,
           status: result.status, progress: result.progress,
           seconds: result.seconds, size: result.size,
-          // 所有可能的 url 字段值(可能是 undefined)
-          'url': result.url,
-          'video_url': result.video_url,
-          'remixed_from_video_id': result.remixed_from_video_id,
-          'data.url': result.data?.url,
-          'data.video_url': result.data?.video_url,
-          'data.remixed_from_video_id': result.data?.remixed_from_video_id,
-          'output.url': result.output?.url,
-          'result.url': result.result?.url,
-          'videos[0].url': result.videos?.[0]?.url,
-          'metadata': result.metadata,  // 日志(16)新发现:可能有 url
+          metadata: result.metadata,
           result_keys: Object.keys(result),
+          result_preview: resultPreview,
         })
         ;(globalThis as any).__lastPollStatus = result.status
       }

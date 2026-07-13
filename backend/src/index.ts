@@ -12,6 +12,7 @@ import scenes from './routes/scenes.js'
 import characters from './routes/characters.js'
 import images from './routes/images.js'
 import videos from './routes/videos.js'
+import agnesDebug from './routes/agnesDebug.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders } from './routes/aiConfigs.js'
 import agentConfigs from './routes/agentConfigs.js'
@@ -62,6 +63,7 @@ api.route('/skills', skills)
 api.route('/ai-voices', aiVoices)
 api.route('/ai-voices-async', aiVoicesAsync)
 
+app.route('/api/v1/_debug', agnesDebug)
 app.route('/api/v1', api)
 
 // Webhook callbacks (Vidu, etc.) - outside /api/v1
