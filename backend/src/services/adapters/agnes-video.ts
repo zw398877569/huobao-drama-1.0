@@ -119,18 +119,36 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
 
   parsePollResponse(result: any): VideoPollResponse {
     // agnes 实际响应字段是 'url' (不是 'video_url')
+    // 日志(14) 案例: status=completed progress=100 但 result.url 为空,
+    // 需要从 data/output/result 嵌套结构里再找一遍
     const status = result.status
     if (status === 'completed') {
-      const videoUrl = result.url || result.video_url || result.remixed_from_video_id
+      const videoUrl = result.url
+        || result.video_url
+        || result.remixed_from_video_id
+        || result.data?.url
+        || result.data?.video_url
+        || result.output?.url
+        || result.output?.video_url
+        || result.result?.url
       if (videoUrl) {
         return { status: 'completed', videoUrl }
       }
+      // status=completed 但 url 缺失(agnes bug 或私有 CDN 未就绪),
+      // 标 failed 不再空转,让前端知道
+      return {
+        status: 'failed',
+        error: 'agnes reported status=completed but no url/video_url in response',
+      }
     }
     if (status === 'failed') {
-      const errMsg = result.error?.message || (typeof result.error === 'string' ? result.error : null) || result.error_msg || 'Video generation failed'
+      const errMsg = result.error?.message
+        || (typeof result.error === 'string' ? result.error : null)
+        || result.error_msg
+        || 'Video generation failed'
       return { status: 'failed', error: errMsg }
     }
-    // queued / in_progress 都算 processing
+    // queued / in_progress / processing 都算 processing
     return { status: 'processing' }
   }
 

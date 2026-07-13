@@ -240,7 +240,13 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
   // 总 poll 时长上限 30 分钟(180 次 × 10s);连续 5 次失败就放弃
   const MAX_POLLS = 180
   const MAX_CONSECUTIVE_FAILS = 5
-  const POLL_INTERVAL_MS = 10_000
+  // 指数退避轮询: 5s → 10s → 15s → 30s(封顶)
+  // 视频生成通常 1-3 分钟,起步快一点确认开始,后段慢一点减轻 agnes 压力
+  const POLL_INTERVALS_MS = [5_000, 10_000, 15_000, 30_000]
+  function getPollIntervalMs(attempt: number): number {
+    const idx = Math.min(attempt - 1, POLL_INTERVALS_MS.length - 1)
+    return POLL_INTERVALS_MS[idx]
+  }
   // 视频任务超过 30 分钟强制 timeout
   const MAX_POLL_DURATION_MS = 30 * 60 * 1000
   // 4xx / JSON 解析错误视为"端点或响应格式不对",再重试无意义,直接放弃
@@ -258,7 +264,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         .where(eq(schema.videoGenerations.id, id)).run()
       return
     }
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+    await new Promise(r => setTimeout(r, getPollIntervalMs(i + 1)))
     try {
       const { url, method, headers } = adapter.buildPollRequest(config, videoId, taskId)
       logTaskProgress('VideoTask', 'poll-request', {
@@ -327,13 +333,11 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
 
       const result = JSON.parse(rawText) as any
       consecutiveFails = 0  // 成功解析,清零
-      // 记录 poll 响应用于诊断(第 1 次 / 第 5 次 / 状态变化时多打印)
-      if (i === 0 || i % 10 === 0) {
-        logTaskProgress('VideoTask', 'poll-response', {
-          id, taskId, attempt: i + 1,
-          status: result.status, progress: result.progress, hasUrl: !!result.url,
-        })
-      }
+      // 记录 poll 响应用于诊断(每个轮询都打印,因为退避后日志量已经少了)
+      logTaskProgress('VideoTask', 'poll-response', {
+        id, taskId, attempt: i + 1,
+        status: result.status, progress: result.progress, hasUrl: !!(result.url || result.video_url),
+      })
       const pollResp = adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.videoUrl) {
