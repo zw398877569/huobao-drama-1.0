@@ -333,11 +333,26 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
 
       const result = JSON.parse(rawText) as any
       consecutiveFails = 0  // 成功解析,清零
-      // 记录 poll 响应用于诊断(每个轮询都打印,因为退避后日志量已经少了)
+      const hasAnyUrl = !!(result.url || result.video_url || result.data?.url
+        || result.data?.video_url || result.output?.url || result.result?.url)
+      // 记录 poll 响应用于诊断(每个轮询都打印精简版)
       logTaskProgress('VideoTask', 'poll-response', {
         id, taskId, attempt: i + 1,
-        status: result.status, progress: result.progress, hasUrl: !!(result.url || result.video_url),
+        status: result.status, progress: result.progress,
+        hasUrl: hasAnyUrl,
+        fields: Object.keys(result).join(','),
       })
+      // 完整 body 在第 1 / 5 / 10 / status 变化时打印(帮助诊断 url 字段在哪)
+      const lastStatus = (globalThis as any).__lastPollStatus
+      if (i < 3 || (i + 1) % 5 === 0 || (lastStatus !== undefined && lastStatus !== result.status)) {
+        logTaskPayload('VideoTask', 'poll-response-body', {
+          id, taskId, attempt: i + 1,
+          status: result.status, progress: result.progress,
+          url: result.url, video_url: result.video_url, data: result.data,
+          output: result.output, result_keys: Object.keys(result),
+        })
+        ;(globalThis as any).__lastPollStatus = result.status
+      }
       const pollResp = adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.videoUrl) {
