@@ -6,6 +6,7 @@ import { downloadFile, readImageAsCompressedDataUrl } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -76,122 +77,139 @@ async function processVideoGeneration(id: number, config: AIConfig) {
   const adapter = getVideoAdapter(config.provider)
 
   try {
-    const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
-    const record = rows[0]
-    if (!record) return
-    logTaskProgress('VideoTask', 'build-request', {
-      id,
-      provider: config.provider,
-      storyboardId: record.storyboardId,
-      referenceMode: record.referenceMode,
-    })
-
-    const resolvedImageUrl = await normalizeVideoReferenceUrl(record.imageUrl)
-    const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(record.firstFrameUrl)
-    const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(record.lastFrameUrl)
-    const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(record.referenceImageUrls)
-
-    // 使用 Adapter 构建请求
-    const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
-      id: record.id,
-      model: record.model,
-      prompt: record.prompt,
-      referenceMode: record.referenceMode,
-      imageUrl: resolvedImageUrl,
-      firstFrameUrl: resolvedFirstFrameUrl,
-      lastFrameUrl: resolvedLastFrameUrl,
-      referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
-      duration: record.duration,
-      aspectRatio: record.aspectRatio,
-    })
-    logTaskProgress('VideoTask', 'request', {
-      id,
-      provider: config.provider,
-      method,
-      url: redactUrl(url),
-      model: record.model,
-      referenceMode: record.referenceMode,
-    })
-    logTaskPayload('VideoTask', 'request payload', {
-      id,
-      method,
-      url,
-      headers,
-      body,
-    })
-
-    // 503/502/408/429 视为临时性错误,做指数退避重试;其他错误立即失败
-    // 业务错误(如 num_frames 格式不对)直接抛,不浪费 retry 预算
-    const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+    let retryCount = 0
     const MAX_RETRIES = 3
-    let resp: Response | null = null
-    let lastErrText = ''
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+
+    for (let attempt = 0; attempt < MAX_RETRIES || (attempt === MAX_RETRIES && retryCount === 0); attempt++) {
+      const isAggressiveRetry = attempt === MAX_RETRIES && retryCount === 0
+      if (isAggressiveRetry) {
+        logTaskWarn('VideoTask', 'policy-violation-retry', { id, attempt: 1 })
+      }
+
       try {
-        resp = await fetch(url, {
+        const vRows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+        const vRecord = vRows[0]
+        if (!vRecord) return
+        logTaskProgress('VideoTask', 'build-request', {
+          id,
+          provider: config.provider,
+          storyboardId: vRecord.storyboardId,
+          referenceMode: vRecord.referenceMode,
+        })
+
+        const resolvedImageUrl = await normalizeVideoReferenceUrl(vRecord.imageUrl)
+        const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(vRecord.firstFrameUrl)
+        const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(vRecord.lastFrameUrl)
+        const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
+
+        const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
+          id: vRecord.id,
+          model: vRecord.model,
+          prompt: vRecord.prompt,
+          referenceMode: vRecord.referenceMode,
+          imageUrl: resolvedImageUrl,
+          firstFrameUrl: resolvedFirstFrameUrl,
+          lastFrameUrl: resolvedLastFrameUrl,
+          referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
+          duration: vRecord.duration,
+          aspectRatio: vRecord.aspectRatio,
+        })
+        logTaskProgress('VideoTask', 'request', {
+          id,
+          provider: config.provider,
+          method,
+          url: redactUrl(url),
+          model: vRecord.model,
+          referenceMode: vRecord.referenceMode,
+        })
+        logTaskPayload('VideoTask', 'request payload', {
+          id,
+          method,
+          url,
+          headers,
+          body,
+        })
+
+        const resp = await fetch(url, {
           method,
           headers,
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(600_000),
         })
-      } catch (err: any) {
-        lastErrText = err?.message || String(err)
-        logTaskWarn('VideoTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
-        if (attempt === MAX_RETRIES - 1) {
-          throw new Error(`fetch failed after ${MAX_RETRIES} attempts: ${lastErrText}`)
+
+        if (resp.ok) {
+          const result = await resp.json() as any
+          logTaskPayload('VideoTask', 'response payload', result)
+          const { isAsync, taskId, videoId: videoIdFromAdapter, videoUrl } = adapter.parseGenerateResponse(result)
+
+          if (!isAsync && videoUrl) {
+            logTaskProgress('VideoTask', 'sync-complete', { id, videoUrl })
+            await handleVideoComplete(id, videoUrl, vRecord.duration)
+            return
+          }
+
+          db.update(schema.videoGenerations)
+            .set({ taskId, status: 'processing', updatedAt: now() })
+            .where(eq(schema.videoGenerations.id, id))
+            .run()
+          logTaskProgress('VideoTask', 'poll-start', { id, taskId, videoId: videoIdFromAdapter, provider: config.provider })
+
+          if (adapter.provider === 'vidu') {
+            logTaskProgress('VideoTask', 'webhook-wait', { id, taskId, provider: adapter.provider })
+            return
+          }
+
+          pollVideoTask(id, config, videoIdFromAdapter || taskId!, taskId!, vRecord.storyboardId)
+          return
         }
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
-        continue
+
+        // 非 2xx 响应
+        const errText = await resp.text().catch(() => '')
+        const isPolicyViolation = resp.status === 400 && errText.includes('content_policy_violation')
+
+        if (isPolicyViolation) {
+          if (retryCount === 0) {
+            retryCount++
+            const originalPrompt = vRecord.prompt
+            const aggressivePrompt = sanitizeImagePromptAggressive(originalPrompt)
+            logTaskWarn('VideoTask', 'policy-violation-retrying-with-aggressive', {
+              id,
+              originalPreview: originalPrompt.slice(0, 80),
+              aggressivePreview: aggressivePrompt.slice(0, 80),
+            })
+            db.update(schema.videoGenerations)
+              .set({ prompt: aggressivePrompt, updatedAt: now() })
+              .where(eq(schema.videoGenerations.id, id))
+              .run()
+            continue
+          }
+          throw new Error(`API error ${resp.status}: ${errText}`)
+        }
+
+        const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+        if (!TRANSIENT_STATUS.has(resp.status)) {
+          throw new Error(`API error ${resp.status}: ${errText}`)
+        }
+
+        logTaskWarn('VideoTask', 'transient-error-retry', {
+          id,
+          attempt: attempt + 1,
+          status: resp.status,
+          body: errText.slice(0, 240),
+        })
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        }
+      } catch (err: any) {
+        const lastErrText = err?.message || String(err)
+        logTaskWarn('VideoTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+          continue
+        }
+        throw err
       }
-      if (resp.ok) break
-      if (!TRANSIENT_STATUS.has(resp.status)) {
-        // 业务错误(num_frames 格式 / content_policy / 鉴权 等)立即抛
-        throw new Error(`API error ${resp.status}: ${await resp.text()}`)
-      }
-      lastErrText = await resp.text()
-      logTaskWarn('VideoTask', 'transient-error-retry', {
-        id,
-        attempt: attempt + 1,
-        status: resp.status,
-        body: lastErrText.slice(0, 240),
-      })
-      if (attempt === MAX_RETRIES - 1) {
-        throw new Error(`API error ${resp.status} after ${MAX_RETRIES} attempts: ${lastErrText}`)
-      }
-      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
     }
-    if (!resp || !resp.ok) {
-      // 防御性兜底
-      throw new Error(`API error ${resp?.status}: ${lastErrText}`)
-    }
-    const result = await resp.json() as any
-    logTaskPayload('VideoTask', 'response payload', result)
-
-    const { isAsync, taskId, videoId: videoIdFromAdapter, videoUrl } = adapter.parseGenerateResponse(result)
-
-    if (!isAsync && videoUrl) {
-      logTaskProgress('VideoTask', 'sync-complete', { id, videoUrl })
-      // 同步模式
-      await handleVideoComplete(id, videoUrl, record.duration)
-      return
-    }
-
-    // 异步模式：更新 taskId，开始轮询
-    db.update(schema.videoGenerations)
-      .set({ taskId, status: 'processing', updatedAt: now() })
-      .where(eq(schema.videoGenerations.id, id))
-      .run()
-    // 记录 videoId 用于诊断(实际查询用的 ID)
-    logTaskProgress('VideoTask', 'poll-start', { id, taskId, videoId: videoIdFromAdapter, provider: config.provider })
-
-    // Vidu 没有轮询端点，跳过轮询（依赖 Webhook 回调）
-    if (adapter.provider === 'vidu') {
-      logTaskProgress('VideoTask', 'webhook-wait', { id, taskId, provider: adapter.provider })
-      return
-    }
-
-    // agnes 推荐用 video_id 查询,fallback 到 taskId(兼容旧版 /v1/videos/<task_id>)
-    pollVideoTask(id, config, videoIdFromAdapter || taskId!, taskId!, record.storyboardId)
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
     db.update(schema.videoGenerations)

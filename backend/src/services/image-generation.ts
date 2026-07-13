@@ -6,6 +6,7 @@ import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
 
 // 默认图片生成安全后缀：把"角色/场景"提示词从"剧情重现"重新框架为"电影概念艺术"，
 // 以降低 Agnes 等内容审核服务的命中率。后缀里的关键词都是正向艺术语言，
@@ -84,125 +85,153 @@ async function processImageGeneration(id: number, config: AIConfig) {
     const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
     const record = rows[0]
     if (!record) return
-    logTaskProgress('ImageTask', 'build-request', {
-      id,
-      provider: config.provider,
-      storyboardId: record.storyboardId,
-      sceneId: record.sceneId,
-      characterId: record.characterId,
-      frameType: record.frameType,
-    })
 
-    // 使用 Adapter 构建请求
-    const resolvedReferenceImages = await normalizeReferenceImages(record.referenceImages)
-    const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
-      id: record.id,
-      model: record.model,
-      prompt: record.prompt,
-      size: record.size,
-      frameType: record.frameType,
-      referenceImages: resolvedReferenceImages ? JSON.stringify(resolvedReferenceImages) : null,
-    })
-    logTaskProgress('ImageTask', 'request', {
-      id,
-      provider: config.provider,
-      method,
-      url: redactUrl(url),
-      model: record.model,
-    })
-    logTaskPayload('ImageTask', 'request payload', {
-      id,
-      method,
-      url,
-      headers,
-      body,
-    })
-
-    // 503/502/408/429 视为临时性错误,做指数退避重试;其他错误立即失败
-    // 400 content_policy_violation 这类业务错误不重试(改 prompt 才会变)
-    const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+    // 最多重试 1 次(用于 content_policy_violation 的 aggressive 清洗重试)
+    let retryCount = 0
     const MAX_RETRIES = 3
-    let resp: Response | null = null
-    let lastErrText = ''
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+
+    for (let attempt = 0; attempt < MAX_RETRIES || (attempt === MAX_RETRIES && retryCount === 0); attempt++) {
+      // 首次循环(MAX_RETRIES 次) + 可选的 aggressive 重试(1 次)
+      const isAggressiveRetry = attempt === MAX_RETRIES && retryCount === 0
+      if (isAggressiveRetry) {
+        logTaskWarn('ImageTask', 'policy-violation-retry', { id, attempt: 1 })
+      }
+
       try {
-        resp = await fetch(url, {
+        const genRows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+        const genRecord = genRows[0]
+        if (!genRecord) return
+        logTaskProgress('ImageTask', 'build-request', {
+          id,
+          provider: config.provider,
+          storyboardId: genRecord.storyboardId,
+          sceneId: genRecord.sceneId,
+          characterId: genRecord.characterId,
+          frameType: genRecord.frameType,
+        })
+
+        const resolvedReferenceImages = await normalizeReferenceImages(genRecord.referenceImages)
+        const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
+          id: genRecord.id,
+          model: genRecord.model,
+          prompt: genRecord.prompt,
+          size: genRecord.size,
+          frameType: genRecord.frameType,
+          referenceImages: resolvedReferenceImages ? JSON.stringify(resolvedReferenceImages) : null,
+        })
+        logTaskProgress('ImageTask', 'request', {
+          id,
+          provider: config.provider,
+          method,
+          url: redactUrl(url),
+          model: genRecord.model,
+        })
+        logTaskPayload('ImageTask', 'request payload', {
+          id,
+          method,
+          url,
+          headers,
+          body,
+        })
+
+        const resp = await fetch(url, {
           method,
           headers,
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(600_000),
         })
+
+        if (resp.ok) {
+          const result = await resp.json() as any
+          logTaskPayload('ImageTask', 'response payload', { id, provider: config.provider, result })
+          const { isAsync, taskId, imageUrl } = adapter.parseGenerateResponse(result)
+
+          if (!isAsync && imageUrl) {
+            db.update(schema.imageGenerations)
+              .set({ imageUrl, status: 'processing', updatedAt: now() })
+              .where(eq(schema.imageGenerations.id, id))
+              .run()
+            logTaskProgress('ImageTask', 'sync-complete', { id, imageUrl })
+            await handleImageComplete(id, config.provider, imageUrl)
+            return
+          }
+
+          if (!isAsync && !imageUrl) {
+            const b64 = adapter.extractImageBase64(result)
+            if (b64) {
+              logTaskProgress('ImageTask', 'sync-base64-complete', { id, mimeType: b64.mimeType })
+              await handleImageCompleteBase64(id, config.provider, b64.data, b64.mimeType)
+              return
+            }
+            throw new Error('No image URL or base64 data in response')
+          }
+
+          // 异步模式
+          db.update(schema.imageGenerations)
+            .set({ taskId, status: 'processing', updatedAt: now() })
+            .where(eq(schema.imageGenerations.id, id))
+            .run()
+          logTaskProgress('ImageTask', 'poll-start', { id, taskId, provider: config.provider })
+          if (adapter.provider === 'vidu') {
+            logTaskProgress('ImageTask', 'webhook-wait', { id, taskId, provider: adapter.provider })
+            return
+          }
+          pollImageTask(id, config, taskId!)
+          return
+        }
+
+        // 非 2xx 响应
+        const errText = await resp.text().catch(() => '')
+        const isPolicyViolation = resp.status === 400 && errText.includes('content_policy_violation')
+
+        if (isPolicyViolation) {
+          // 策略违规: 用更激进的清洗重试一次
+          if (retryCount === 0) {
+            retryCount++
+            const originalPrompt = genRecord.prompt
+            const aggressivePrompt = sanitizeImagePromptAggressive(originalPrompt)
+            logTaskWarn('ImageTask', 'policy-violation-retrying-with-aggressive', {
+              id,
+              originalPreview: originalPrompt.slice(0, 80),
+              aggressivePreview: aggressivePrompt.slice(0, 80),
+            })
+            // 更新 DB 中的 prompt 为 aggressive 清洗后的版本
+            db.update(schema.imageGenerations)
+              .set({ prompt: aggressivePrompt, updatedAt: now() })
+              .where(eq(schema.imageGenerations.id, id))
+              .run()
+            continue // 重试循环
+          }
+          // 已经重试过,直接失败
+          throw new Error(`API error ${resp.status}: ${errText}`)
+        }
+
+        // 其他错误: 检查是否为临时性错误
+        const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
+        if (!TRANSIENT_STATUS.has(resp.status)) {
+          throw new Error(`API error ${resp.status}: ${errText}`)
+        }
+
+        logTaskWarn('ImageTask', 'transient-error-retry', {
+          id,
+          attempt: attempt + 1,
+          status: resp.status,
+          body: errText.slice(0, 240),
+        })
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+        }
       } catch (err: any) {
         // 网络层异常也重试
-        lastErrText = err?.message || String(err)
+        const lastErrText = err?.message || String(err)
         logTaskWarn('ImageTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
-        if (attempt === MAX_RETRIES - 1) {
-          throw new Error(`fetch failed after ${MAX_RETRIES} attempts: ${lastErrText}`)
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
+          continue
         }
-        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
-        continue
+        throw err
       }
-      if (resp.ok) break
-      if (!TRANSIENT_STATUS.has(resp.status)) {
-        // 业务错误(content_policy_violation 等)直接抛,不带 retry hint
-        throw new Error(`API error ${resp.status}: ${await resp.text()}`)
-      }
-      lastErrText = await resp.text()
-      logTaskWarn('ImageTask', 'transient-error-retry', {
-        id,
-        attempt: attempt + 1,
-        status: resp.status,
-        body: lastErrText.slice(0, 240),
-      })
-      if (attempt === MAX_RETRIES - 1) {
-        throw new Error(`API error ${resp.status} after ${MAX_RETRIES} attempts: ${lastErrText}`)
-      }
-      await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
     }
-    if (!resp || !resp.ok) {
-      // 防御性兜底(理论上不会到这里)
-      throw new Error(`API error ${resp?.status}: ${lastErrText}`)
-    }
-    const result = await resp.json() as any
-    logTaskPayload('ImageTask', 'response payload', {
-      id,
-      provider: config.provider,
-      result,
-    })
-
-    const { isAsync, taskId, imageUrl } = adapter.parseGenerateResponse(result)
-
-    if (!isAsync && imageUrl) {
-      // 先把上游 URL 写库，download 即便随后失败，Agnes 返回的 CDN 地址也保留下来，
-      // 排查和重试都能直接看到 imageUrl，而不是只看到一句"fetch failed"。
-      db.update(schema.imageGenerations)
-        .set({ imageUrl, status: 'processing', updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
-      logTaskProgress('ImageTask', 'sync-complete', { id, imageUrl })
-      // 同步模式：直接下载图片
-      await handleImageComplete(id, config.provider, imageUrl)
-      return
-    }
-
-    if (!isAsync && !imageUrl) {
-      // 同步模式但无 URL（Gemini 等返回 base64）
-      const b64 = adapter.extractImageBase64(result)
-      if (b64) {
-        logTaskProgress('ImageTask', 'sync-base64-complete', { id, mimeType: b64.mimeType })
-        await handleImageCompleteBase64(id, config.provider, b64.data, b64.mimeType)
-        return
-      }
-      throw new Error('No image URL or base64 data in response')
-    }
-
-    // 异步模式：更新 taskId，开始轮询
-    db.update(schema.imageGenerations)
-      .set({ taskId, status: 'processing', updatedAt: now() })
-      .where(eq(schema.imageGenerations.id, id))
-      .run()
-    logTaskProgress('ImageTask', 'poll-start', { id, taskId, provider: config.provider })
-    pollImageTask(id, config, taskId!)
   } catch (err: any) {
     logTaskError('ImageTask', 'process', { id, provider: config.provider, error: err.message })
     db.update(schema.imageGenerations)
