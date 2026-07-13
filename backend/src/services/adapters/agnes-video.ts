@@ -154,6 +154,8 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
       }
       // status=completed 但 url 缺失(agnes bug 或私有 CDN 未就绪),
       // 标 failed 不再空转,让前端知道
+      // 打印所有字段帮助调试
+      console.error(`[AgnesVideo] completed but no URL found. Fields: ${Object.keys(result).join(', ')}. Full response:`, JSON.stringify(result).slice(0, 2000))
       return {
         status: 'failed',
         error: 'agnes reported status=completed but no url/video_url in response',

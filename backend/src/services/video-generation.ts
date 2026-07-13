@@ -204,7 +204,10 @@ async function processVideoGeneration(id: number, config: AIConfig) {
 async function normalizeVideoReferenceUrl(value: string | null | undefined): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
-  if (raw.startsWith('data:image/')) return raw
+  if (raw.startsWith('data:')) {
+    logTaskWarn('VideoTask', 'base64-reference-rejected', { reason: 'Agnes video API does not support data: URLs, will fall back to text-to-video' })
+    return null
+  }
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
     try {
