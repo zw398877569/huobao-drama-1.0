@@ -149,6 +149,7 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
         || result.result?.remixed_from_video_id
         || result.videos?.[0]?.url
         || result.videos?.[0]?.remixed_from_video_id
+        || result.metadata?.url
       if (videoUrl) {
         return { status: 'completed', videoUrl }
       }
