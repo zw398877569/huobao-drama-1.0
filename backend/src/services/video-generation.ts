@@ -348,8 +348,19 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         logTaskPayload('VideoTask', 'poll-response-body', {
           id, taskId, attempt: i + 1,
           status: result.status, progress: result.progress,
-          url: result.url, video_url: result.video_url, data: result.data,
-          output: result.output, result_keys: Object.keys(result),
+          seconds: result.seconds, size: result.size,
+          // 所有可能的 url 字段值(可能是 undefined)
+          'url': result.url,
+          'video_url': result.video_url,
+          'remixed_from_video_id': result.remixed_from_video_id,
+          'data.url': result.data?.url,
+          'data.video_url': result.data?.video_url,
+          'data.remixed_from_video_id': result.data?.remixed_from_video_id,
+          'output.url': result.output?.url,
+          'result.url': result.result?.url,
+          'videos[0].url': result.videos?.[0]?.url,
+          'metadata': result.metadata,  // 日志(16)新发现:可能有 url
+          result_keys: Object.keys(result),
         })
         ;(globalThis as any).__lastPollStatus = result.status
       }
