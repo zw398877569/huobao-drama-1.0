@@ -241,12 +241,23 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
   const MAX_POLLS = 180
   const MAX_CONSECUTIVE_FAILS = 5
   const POLL_INTERVAL_MS = 10_000
+  // 视频任务超过 30 分钟强制 timeout
+  const MAX_POLL_DURATION_MS = 30 * 60 * 1000
   // 4xx / JSON 解析错误视为"端点或响应格式不对",再重试无意义,直接放弃
   const PERMANENT_STATUS = new Set([400, 401, 403, 404, 410, 422])
 
   let consecutiveFails = 0
+  const startedAt = Date.now()
 
   for (let i = 0; i < MAX_POLLS; i++) {
+    // 总时长硬上限
+    if (Date.now() - startedAt >= MAX_POLL_DURATION_MS) {
+      logTaskError('VideoTask', 'poll-duration-timeout', { id, taskId, maxDurationSec: MAX_POLL_DURATION_MS / 1000 })
+      db.update(schema.videoGenerations)
+        .set({ status: 'failed', errorMsg: `Poll timeout after ${Math.round((Date.now() - startedAt) / 1000)}s`, updatedAt: now() })
+        .where(eq(schema.videoGenerations.id, id)).run()
+      return
+    }
     await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
     try {
       const { url, method, headers } = adapter.buildPollRequest(config, videoId, taskId)
@@ -316,6 +327,13 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
 
       const result = JSON.parse(rawText) as any
       consecutiveFails = 0  // 成功解析,清零
+      // 记录 poll 响应用于诊断(第 1 次 / 第 5 次 / 状态变化时多打印)
+      if (i === 0 || i % 10 === 0) {
+        logTaskProgress('VideoTask', 'poll-response', {
+          id, taskId, attempt: i + 1,
+          status: result.status, progress: result.progress, hasUrl: !!result.url,
+        })
+      }
       const pollResp = adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.videoUrl) {
