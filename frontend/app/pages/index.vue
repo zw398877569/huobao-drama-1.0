@@ -139,8 +139,18 @@ const dramas = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
 const form = ref({ title: '', total_episodes: 1, style: '' })
-const styles = ['realistic', 'anime', 'ghibli', 'cinematic', 'comic', 'watercolor']
-const styleSelectOptions = computed(() => styles.map(s => ({ label: s, value: s })))
+// 视觉风格 -> 适合的漫剧类型(value 仍是英文 slug,后端 / DB 不变,只影响前端展示)
+const styleOptions = [
+  { value: 'realistic',  hint: '都市写实 / 职场情感 / 家庭伦理' },
+  { value: 'cinematic',  hint: '电影感 / 悬疑 / 犯罪 / 谍战' },
+  { value: 'anime',      hint: '日系热血 / 校园 / 奇幻 / 轻改' },
+  { value: 'ghibli',     hint: '吉卜力 / 治愈 / 童话 / 自然' },
+  { value: 'comic',      hint: '欧美图像小说 / 超级英雄 / 暗黑' },
+  { value: 'watercolor', hint: '水彩插画 / 文艺 / 民国 / 江南' },
+]
+const styleSelectOptions = computed(() =>
+  styleOptions.map(s => ({ label: `${s.value} — ${s.hint}`, value: s.value })),
+)
 
 async function load() {
   loading.value = true

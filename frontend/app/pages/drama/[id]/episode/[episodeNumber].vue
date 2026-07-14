@@ -1609,9 +1609,10 @@ const gridAssignmentPage = ref(0)
 const gridStorageKey = computed(() => `huobao:grid:${dramaId}:${epId.value || episodeNumber}`)
 
 const gridModes = [
-  { id: 'first_frame', label: '首帧', desc: '每格=一个镜头的首帧' },
-  { id: 'first_last', label: '首尾帧', desc: '每镜头占一行：左首帧，右尾帧' },
-  { id: 'multi_ref', label: '多参考', desc: '所有格子=同一镜头的参考图' },
+  // desc 第一句 = 它是什么;第二句 = 什么时候用。新手最常选错 multi_ref,所以这条提示最显眼。
+  { id: 'first_frame', label: '首帧宫格', desc: '每格 = 一个镜头的起始画面\n适合按顺序铺开一段连续叙事' },
+  { id: 'first_last',  label: '首尾帧宫格', desc: '每镜头占一行:左首帧 + 右尾帧\n适合看动作变化、做转场参考' },
+  { id: 'multi_ref',   label: '多参考图', desc: '所有格子 = 同一镜头的不同角度/版本\n适合选角色 pose、挑选满意的一张' },
 ]
 
 const gridLayoutShape = computed(() => {
