@@ -2479,13 +2479,16 @@ function sleep(ms) {
 }
 
 function watchAsyncResult(check, attempts = 24, delay = 2500) {
-  void (async () => {
-    for (let i = 0; i < attempts; i++) {
-      await sleep(delay)
-      await refresh()
-      if (check()) return
-    }
-  })()
+  return new Promise<void>(resolve => {
+    void (async () => {
+      for (let i = 0; i < attempts; i++) {
+        await sleep(delay)
+        await refresh()
+        if (check()) { resolve(); return }
+      }
+      resolve()
+    })()
+  })
 }
 
 async function genCharImg(id) {
@@ -2494,11 +2497,14 @@ async function genCharImg(id) {
     await characterAPI.generateImage(id, epId.value)
     toast.success('角色图片生成中')
     await refresh()
-    watchAsyncResult(() => {
+    await watchAsyncResult(() => {
       const char = chars.value.find(c => c.id === id)
       const done = !!(char?.image_url || char?.imageUrl)
-      if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-      return done
+      if (done) {
+        pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+        return true
+      }
+      return false
     })
   } catch (e) {
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
@@ -2512,7 +2518,7 @@ function batchCharImages() {
   characterAPI.batchImages(ids, epId.value).then(async () => {
     toast.success('角色图片批量生成中')
     await refresh()
-    watchAsyncResult(() => ids.every(id => {
+    await watchAsyncResult(() => ids.every(id => {
       const char = chars.value.find(c => c.id === id)
       const done = !!(char?.image_url || char?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
@@ -2529,7 +2535,7 @@ async function genSceneImg(id) {
     await sceneAPI.generateImage(id, epId.value)
     toast.success('场景图片生成中')
     await refresh()
-    watchAsyncResult(() => {
+    await watchAsyncResult(() => {
       const scene = scenes.value.find(s => s.id === id)
       const done = !!(scene?.image_url || scene?.imageUrl)
       if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
@@ -2546,7 +2552,7 @@ function batchSceneImages() {
   pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
   ids.forEach(id => { sceneAPI.generateImage(id, epId.value).then(() => refresh()).catch(e => toast.error(e.message)) })
   toast.success('场景图片批量生成中')
-  watchAsyncResult(() => ids.every(id => {
+  void watchAsyncResult(() => ids.every(id => {
     const scene = scenes.value.find(s => s.id === id)
     const done = !!(scene?.image_url || scene?.imageUrl)
     if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
@@ -2685,7 +2691,7 @@ async function genShotFrame(sb, frameType) {
     await imageAPI.generate(body)
     toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
     await refresh()
-    watchAsyncResult(() => {
+    await watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === sb.id)
       const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
       if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
@@ -2724,7 +2730,7 @@ async function genVid(sb) {
 }
 async function pollVideoGeneration(generationId, storyboardId) {
   if (!generationId) {
-    watchAsyncResult(() => {
+    await watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === storyboardId)
       const done = !!(target?.video_url || target?.videoUrl)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
@@ -2786,7 +2792,7 @@ function batchVideos() {
   })
   if (pendingIds.length) {
     pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
-    watchAsyncResult(() => pendingIds.every(id => {
+    void watchAsyncResult(() => pendingIds.every(id => {
       const target = sbs.value.find(s => s.id === id)
       const done = !!(target?.video_url || target?.videoUrl)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
