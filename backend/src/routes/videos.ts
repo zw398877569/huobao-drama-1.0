@@ -41,6 +41,8 @@ app.post('/', async (c) => {
       referenceImageUrls: body.reference_image_urls,
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
+      negativePrompt: body.negative_prompt,
+      seed: body.seed,
       configId,
     })
 

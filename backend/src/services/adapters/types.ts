@@ -89,6 +89,8 @@ export interface VideoGenerationRecord {
   id: number
   model?: string | null
   prompt?: string | null
+  negativePrompt?: string | null
+  seed?: number | null
   referenceMode?: string | null
   imageUrl?: string | null
   firstFrameUrl?: string | null

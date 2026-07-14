@@ -1,7 +1,7 @@
 /**
  * Agnes AI 视频生成 Adapter
  * 创建任务: POST /v1/videos
- * 轮询结果: GET /agnesapi?video_id=<VIDEO_ID>
+ * 轮询结果: GET /agnesapi?video_id=<VIDEO_ID> (推荐) 或 GET /v1/videos/<TASK_ID> (兼容)
  * 异步任务，响应包含 video_id 和 task_id
  */
 import type {
@@ -13,6 +13,20 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+
+// 合法帧数查找表 (8n+1, <= 441)
+const VALID_NUM_FRAMES = [81, 121, 161, 201, 241, 281, 321, 361, 441]
+
+function clampNumFrames(durationSec?: number | null): number {
+  if (!durationSec) return 121
+  const target = Math.min(durationSec * 24, 441)
+  // 找最接近且不超标的合法帧数
+  let best = VALID_NUM_FRAMES[0]
+  for (const f of VALID_NUM_FRAMES) {
+    if (f <= target) { best = f } else { break }
+  }
+  return best
+}
 
 export class AgnesVideoAdapter implements VideoProviderAdapter {
   provider = 'agnes'
@@ -68,11 +82,26 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
       }
     }
 
-    // 时长控制 -> num_frames
-    // agnes-video-v2.0 硬性要求 num_frames = 8n + 1 (9, 17, 25, ... 441)
-    if (record.duration) {
-      const target = Math.min(record.duration * 24, 441)
-      body.num_frames = 8 * Math.round(target / 8) + 1
+    // 时长控制 -> num_frames (使用合法查找表)
+    body.num_frames = clampNumFrames(record.duration)
+    body.frame_rate = 24
+
+    // 可选参数: negative_prompt, seed
+    if (record.negativePrompt) body.negative_prompt = record.negativePrompt
+    if (record.seed != null) body.seed = record.seed
+
+    // 分辨率/宽高比
+    if (record.aspectRatio) {
+      if (record.aspectRatio === '9:16') {
+        body.height = 768
+        body.width = 432
+      } else if (record.aspectRatio === '16:9') {
+        body.height = 432
+        body.width = 768
+      } else {
+        const [w, h] = record.aspectRatio.split(':').map(Number)
+        if (w && h) { body.width = w; body.height = h }
+      }
     }
 
     return {
@@ -93,8 +122,8 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
       return { isAsync: false, videoUrl }
     }
 
-    // agnes 推荐用 video_id 查任务状态(/agnesapi?video_id=video_xxx)
-    // 兼容旧版用 task_id(/v1/videos/<task_id>),两者都返回
+    // 优先使用 video_id（技能 v0.1.0 推荐）
+    // 兼容旧版 task_id
     const taskId = result.task_id || result.id
     const videoId = result.video_id
     if (taskId || videoId) {
@@ -104,22 +133,20 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
   }
 
   buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest {
-    // agnes 实际行为(从 response payload 确认):
-    //   video_id === task_id,都是 task_xxx 格式
-    //   `/agnesapi?video_id=task_xxx` 端点对当前实例 404
-    //   `/v1/videos/<task_id>` 兼容端点是真实可用的
-    // 优先用 taskId 走 /v1/videos/<task_id>,只有 taskId 缺失才 fallback 到 videoId + 推荐端点
-    if (taskId) {
+    // 技能文档 v0.1.0 推荐优先使用 /agnesapi?video_id=...
+    // video_id 通常以 "video_" 开头，taskId 以 "task_" 开头
+    // 优先用 video_id 走推荐端点，只有 videoId 缺失时才 fallback 到 taskId
+    if (videoId) {
       return {
-        url: joinProviderUrl(config.baseUrl, '/v1', `/videos/${taskId}`),
+        url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
         method: 'GET',
         headers: { 'Authorization': `Bearer ${config.apiKey}` },
         body: undefined,
       }
     }
-    if (videoId) {
+    if (taskId) {
       return {
-        url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
+        url: joinProviderUrl(config.baseUrl, '/v1', `/videos/${taskId}`),
         method: 'GET',
         headers: { 'Authorization': `Bearer ${config.apiKey}` },
         body: undefined,

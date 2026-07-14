@@ -1,8 +1,8 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { getActiveConfig, getConfigById, translatePromptToEnglish, hasNonEnglishChars } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, readImageAsCompressedDataUrl } from '../utils/storage.js'
+import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
@@ -21,6 +21,8 @@ interface GenerateVideoParams {
   duration?: number
   aspectRatio?: string
   configId?: number
+  negativePrompt?: string
+  seed?: number
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
@@ -43,6 +45,8 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
     duration: params.duration || 5,
     aspectRatio: params.aspectRatio || '16:9',
+    negativePrompt: params.negativePrompt || null,
+    seed: params.seed || null,
     status: 'processing',
     createdAt: ts,
     updatedAt: ts,
@@ -97,15 +101,30 @@ async function processVideoGeneration(id: number, config: AIConfig) {
           referenceMode: vRecord.referenceMode,
         })
 
-        const resolvedImageUrl = await normalizeVideoReferenceUrl(vRecord.imageUrl)
-        const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(vRecord.firstFrameUrl)
-        const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(vRecord.lastFrameUrl)
+        const resolvedImageUrl = await normalizeVideoReferenceUrl(vRecord.id, vRecord.imageUrl)
+        const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(vRecord.id, vRecord.firstFrameUrl)
+        const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(vRecord.id, vRecord.lastFrameUrl)
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
+
+        // 提示词翻译: 非英文 prompt 先翻译为英文再发给 Agnes
+        let finalPrompt = vRecord.prompt
+        if (hasNonEnglishChars(finalPrompt)) {
+          try {
+            logTaskProgress('VideoTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
+            finalPrompt = await translatePromptToEnglish(finalPrompt)
+            logTaskProgress('VideoTask', 'translated-prompt', { id, translated: finalPrompt.slice(0, 80) })
+          } catch (err: any) {
+            logTaskWarn('VideoTask', 'translation-failed', { id, error: err.message })
+            // translation failure is non-fatal, use original prompt
+          }
+        }
 
         const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
           id: vRecord.id,
           model: vRecord.model,
-          prompt: vRecord.prompt,
+          prompt: finalPrompt,
+          negativePrompt: vRecord.negativePrompt || null,
+          seed: vRecord.seed || null,
           referenceMode: vRecord.referenceMode,
           imageUrl: resolvedImageUrl,
           firstFrameUrl: resolvedFirstFrameUrl,
@@ -219,25 +238,22 @@ async function processVideoGeneration(id: number, config: AIConfig) {
   }
 }
 
-async function normalizeVideoReferenceUrl(value: string | null | undefined): Promise<string | null> {
+async function normalizeVideoReferenceUrl(vRecordId: number, value: string | null | undefined): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
   if (raw.startsWith('data:')) {
-    logTaskWarn('VideoTask', 'base64-reference-rejected', { reason: 'Agnes video API does not support data: URLs, will fall back to text-to-video' })
+    logTaskWarn('VideoTask', 'base64-reference-rejected', {
+      videoGenId: vRecordId,
+      reason: 'Agnes video API requires public URLs, not data: URIs',
+    })
     return null
   }
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
-    try {
-      return await readImageAsCompressedDataUrl(localPath, {
-        maxWidth: 768,
-        maxHeight: 768,
-        quality: 68,
-      })
-    } catch (err) {
-      logTaskWarn('VideoTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
-      return null
-    }
+    // 不要转 base64（Agnes 不支持），而是返回 /static/ 公网 URL
+    const storageBaseUrl = process.env.STORAGE_BASE_URL || `http://localhost:${process.env.PORT || 5679}/static`
+    const cleanPath = localPath.startsWith('/') ? localPath : `/${localPath}`
+    return `${storageBaseUrl}${cleanPath}`
   }
   return raw
 }
@@ -251,7 +267,7 @@ async function normalizeVideoReferenceUrls(raw: string | null | undefined): Prom
     refs = []
   }
   const normalized = await Promise.all(
-    Array.from(new Set(refs.map((item) => String(item || '').trim()).filter(Boolean))).map((item) => normalizeVideoReferenceUrl(item)),
+    Array.from(new Set(refs.map((item) => String(item || '').trim()).filter(Boolean))).map((item) => normalizeVideoReferenceUrl(0, item)),
   )
   return normalized.filter((item): item is string => !!item)
 }
@@ -412,7 +428,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
   // 用尽 MAX_POLLS
   logTaskError('VideoTask', 'poll-timeout', { id, taskId, maxPolls: MAX_POLLS })
   db.update(schema.videoGenerations)
-    .set({ status: 'failed', errorMsg: `Poll timeout after ${MAX_POLLS} attempts (${MAX_POLLS * POLL_INTERVAL_MS / 1000}s)`, updatedAt: now() })
+    .set({ status: 'failed', errorMsg: `Poll timeout after ${MAX_POLLS} attempts`, updatedAt: now() })
     .where(eq(schema.videoGenerations.id, id)).run()
 }
 

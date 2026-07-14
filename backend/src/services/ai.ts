@@ -103,3 +103,63 @@ export function getConfigById(id: number): AIConfig | null {
     model: models[0] || '',
   }
 }
+
+/**
+ * 检测 prompt 是否包含非英文字符
+ */
+export function hasNonEnglishChars(text: string): boolean {
+  return /[^\x00-\x7F]/.test(text)
+}
+
+/**
+ * 将非英文 prompt 翻译为英文（调用 text provider）
+ */
+export async function translatePromptToEnglish(prompt: string): Promise<string> {
+  const config = getActiveConfig('text')
+  if (!config) {
+    logTaskWarn('PromptTranslation', 'text-config-missing', { reason: 'skipping translation, using original prompt' })
+    return prompt
+  }
+
+  const baseUrl = getTextProviderBaseUrl(config)
+  const payload = {
+    model: config.model || 'agnes-2.0-flash',
+    messages: [
+      {
+        role: 'system',
+        content: (
+          'Translate the user\'s image/video generation prompt into fluent English. '
+          + 'Preserve all concrete visual details, style words, camera motion, lighting, '
+          + 'composition constraints, and negative instructions. Return only the English prompt.'
+        ),
+      },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0,
+    max_tokens: 800,
+  }
+
+  const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30_000),
+  })
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '')
+    logTaskWarn('PromptTranslation', 'translation-failed', { status: resp.status, error: errText.slice(0, 200) })
+    return prompt // fallback to original
+  }
+
+  const data = await resp.json() as any
+  const translated = data?.choices?.[0]?.message?.content?.trim()
+  if (!translated) {
+    logTaskWarn('PromptTranslation', 'empty-translation', { reason: 'no content in response' })
+    return prompt
+  }
+  return translated
+}
