@@ -2421,6 +2421,25 @@ async function refresh() {
       sbs.value = await episodeAPI.storyboards(ep.id)
       if (sbs.value.length && !selectedSb.value) selectedSb.value = sbs.value[0]
 
+      // Clean up stale pending IDs: remove from pending list if image is already generated
+      pendingCharImageIds.value = pendingCharImageIds.value.filter(id => {
+        const char = chars.value.find(c => c.id === id)
+        return !char || !(char.image_url || char.imageUrl)
+      })
+      pendingSceneImageIds.value = pendingSceneImageIds.value.filter(id => {
+        const scene = scenes.value.find(s => s.id === id)
+        return !scene || !(scene.image_url || scene.imageUrl)
+      })
+      pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(key => {
+        const [sbIdStr, frameType] = key.split(':')
+        const sbId = Number(sbIdStr)
+        const sb = sbs.value.find(s => s.id === sbId)
+        if (!sb) return false
+        if (frameType === 'first_frame') return !getFirstFrame(sb)
+        if (frameType === 'last_frame') return !getLastFrame(sb)
+        return true
+      })
+
       const epHasContent = !!(episode.value?.content)
       const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
       const epHasSbs = sbs.value.length > 0
@@ -2479,7 +2498,7 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function watchAsyncResult(check, attempts = 24, delay = 2500) {
+function watchAsyncResult(check, attempts = 120, delay = 5000) {
   return new Promise<void>(resolve => {
     void (async () => {
       for (let i = 0; i < attempts; i++) {
@@ -2524,7 +2543,7 @@ function batchCharImages() {
       const done = !!(char?.image_url || char?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       return done
-    }), 36)
+    }))
   }).catch(e => {
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !ids.includes(item))
     toast.error(e.message)
