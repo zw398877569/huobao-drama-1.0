@@ -2499,7 +2499,7 @@ function sleep(ms) {
 }
 
 function watchAsyncResult(check, attempts = 120, delay = 5000) {
-  return new Promise<void>(resolve => {
+  return new Promise(resolve => {
     void (async () => {
       for (let i = 0; i < attempts; i++) {
         await sleep(delay)
