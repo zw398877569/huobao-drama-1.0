@@ -7,6 +7,12 @@ import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -242,18 +248,35 @@ async function normalizeVideoReferenceUrl(vRecordId: number, value: string | nul
   const raw = String(value || '').trim()
   if (!raw) return null
   if (raw.startsWith('data:')) {
-    logTaskWarn('VideoTask', 'base64-reference-rejected', {
-      videoGenId: vRecordId,
-      reason: 'Agnes video API requires public URLs, not data: URIs',
-    })
-    return null
+    // 已经是 base64，直接返回（适配器需要处理是否接受）
+    return raw
   }
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
+    // 本地静态文件 → 需要转为公网 URL 或 base64
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
-    // 不要转 base64（Agnes 不支持），而是返回 /static/ 公网 URL
-    const storageBaseUrl = process.env.STORAGE_BASE_URL || `http://localhost:${process.env.PORT || 5679}/static`
     const cleanPath = localPath.startsWith('/') ? localPath : `/${localPath}`
-    return `${storageBaseUrl}${cleanPath}`
+    const filePath = path.join(STORAGE_ROOT, cleanPath)
+
+    // 有公网存储地址 → 用公网 URL
+    const storageBaseUrl = process.env.STORAGE_BASE_URL
+    if (storageBaseUrl && fs.existsSync(filePath)) {
+      return `${storageBaseUrl}${cleanPath}`
+    }
+
+    // 没有公网地址 → 读本地文件为 base64 传给 Agnes
+    try {
+      const buffer = fs.readFileSync(filePath)
+      const ext = path.extname(filePath).toLowerCase()
+      const mimeType = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[ext] || 'image/png'
+      return `data:${mimeType};base64,${buffer.toString('base64')}`
+    } catch (err: any) {
+      logTaskWarn('VideoTask', 'read-local-image-failed', {
+        videoGenId: vRecordId,
+        filePath,
+        error: err.message,
+      })
+    }
+    return null
   }
   return raw
 }

@@ -40,27 +40,19 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
     }
 
     // 图生视频
-    // 重要: agnes-video-v2.0 要求 image 是可公网访问的 URL,
-    // 不接受 data:image base64(会静默失败,任务不进 worker)
-    // 如果传进来的是 base64,fallback 到文生视频(去掉 image 字段)
+    // 重要: agnes-video-v2.0 要求 image 是可公网访问的 URL 或 base64 数据
     if (record.referenceMode === 'single' && record.imageUrl) {
-      if (record.imageUrl.startsWith('data:')) {
-        // 本地 base64,agnes 不支持 → 降级为文生视频
-        console.warn('[AgnesVideo] imageUrl is base64, agnes does not support data URL. Falling back to text-to-video.')
-      } else {
-        body.image = record.imageUrl
-      }
+      body.image = record.imageUrl
     }
 
-    // 多图视频 / 关键帧动画
-    // 过滤掉 base64(agnes 不支持),只保留 http URL
+    // 多图视频 / 关键帧动画 — 保留所有有效 URL（http(s) 或 base64）
     if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
-        const httpRefs = refs.filter((r: string) => r && !r.startsWith('data:'))
-        if (httpRefs.length > 0) {
+        const validRefs = refs.filter((r: string) => r && (r.startsWith('http') || r.startsWith('data:')))
+        if (validRefs.length > 0) {
           body.extra_body = {
-            image: httpRefs,
+            image: validRefs,
             mode: 'keyframes',
           }
         }
@@ -69,10 +61,15 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
       }
     }
 
-    // 首尾帧 — 过滤 base64
+    // 首尾帧 — 保留所有有效 URL
     if (record.referenceMode === 'first_last') {
-      const urls = [record.firstFrameUrl, record.lastFrameUrl]
-        .filter((u: string) => u && !u.startsWith('data:'))
+      const urls: string[] = []
+      if (record.firstFrameUrl && (record.firstFrameUrl.startsWith('http') || record.firstFrameUrl.startsWith('data:'))) {
+        urls.push(record.firstFrameUrl)
+      }
+      if (record.lastFrameUrl && (record.lastFrameUrl.startsWith('http') || record.lastFrameUrl.startsWith('data:'))) {
+        urls.push(record.lastFrameUrl)
+      }
       if (urls.length > 0) {
         body.extra_body = {
           ...(body.extra_body || {}),
