@@ -130,12 +130,11 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
   }
 
   buildPollRequest(config: AIConfig, videoId: string, taskId?: string): ProviderRequest {
-    // 技能文档 v0.1.0 推荐优先使用 /agnesapi?video_id=...
-    // video_id 通常以 "video_" 开头，taskId 以 "task_" 开头
-    // 优先用 video_id 走推荐端点，只有 videoId 缺失时才 fallback 到 taskId
+    // 技能文档推荐优先使用 /agnesapi?video_id=...
     if (videoId) {
+      const baseUrl = (config.baseUrl || '').replace(/\/+$/, '')
       return {
-        url: joinProviderUrl(config.baseUrl, '', `/agnesapi?video_id=${videoId}`),
+        url: `${baseUrl}/agnesapi?video_id=${videoId}`,
         method: 'GET',
         headers: { 'Authorization': `Bearer ${config.apiKey}` },
         body: undefined,

@@ -252,9 +252,11 @@ async function normalizeVideoReferenceUrl(vRecordId: number, value: string | nul
     return raw
   }
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
-    // 本地静态文件 → 需要转为公网 URL 或 base64
+    // 本地静态文件 → 转为公网 URL 或 base64
+    // STORAGE_ROOT 已包含 "static"，需要去掉路径中的 "static/" 前缀
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
-    const cleanPath = localPath.startsWith('/') ? localPath : `/${localPath}`
+    const relativePath = localPath.startsWith('static/') ? localPath.slice(8) : localPath
+    const cleanPath = relativePath.startsWith('/') ? relativePath : `/${relativePath}`
     const filePath = path.join(STORAGE_ROOT, cleanPath)
 
     // 有公网存储地址 → 用公网 URL
