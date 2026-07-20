@@ -2724,15 +2724,20 @@ async function genShotFrame(sb, frameType) {
 }
 
 async function genVid(sb) {
-  const params = {
-    storyboard_id: sb.id,
-    drama_id: dramaId,
-    prompt: sb.video_prompt || sb.videoPrompt || '',
-    duration: Number(sb.duration || 5),
-  }
+  let prompt = sb.video_prompt || sb.videoPrompt || ''
+  // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
   const first = getFirstFrame(sb)
   const last = getLastFrame(sb)
   const refs = getRefs(sb)
+  if (first && prompt) {
+    prompt += '；保持首帧画面构图一致，镜头运动从首帧状态开始'
+  }
+  const params = {
+    storyboard_id: sb.id,
+    drama_id: dramaId,
+    prompt,
+    duration: Number(sb.duration || 5),
+  }
   if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
   else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
   else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
