@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
+import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -65,6 +66,18 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
   }
 }
 
+function resolveAutoNegativePrompt(episodeId: number, explicit?: string | null): string | null {
+  if (explicit !== undefined && explicit !== null && explicit !== '') return explicit
+  const [ep] = db.select({ dramaId: schema.episodes.dramaId })
+    .from(schema.episodes)
+    .where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep) return null
+  const [drama] = db.select({ style: schema.dramas.style })
+    .from(schema.dramas)
+    .where(eq(schema.dramas.id, ep.dramaId)).all()
+  return getPresetByStyle(drama?.style).prompt
+}
+
 // POST /storyboards
 app.post('/', async (c) => {
   const body = await c.req.json()
@@ -86,6 +99,7 @@ app.post('/', async (c) => {
     dialogue: body.dialogue,
     sceneId: body.scene_id,
     duration: body.duration || 10,
+    negativePrompt: resolveAutoNegativePrompt(Number(body.episode_id), body.negative_prompt),
     createdAt: ts,
     updatedAt: ts,
   }).run()

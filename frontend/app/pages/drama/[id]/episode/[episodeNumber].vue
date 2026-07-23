@@ -674,6 +674,19 @@
                         @blur="updateField(selectedSb, 'sound_effect', $event.target.value)" placeholder="如：风雪声、脚踩积雪、衣料摩擦声" />
                     </label>
                   </div>
+                  <label class="field">
+                    <span class="field-label" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+                      <span>反向提示词（不要出现的内容）</span>
+                      <span style="display:flex; gap:4px; flex-wrap:wrap">
+                        <button v-for="p in NEGATIVE_PROMPT_PRESETS" :key="p.id" type="button"
+                          class="preset-chip"
+                          @click="applyStylePreset(selectedSb, p.id)"
+                          :title="p.prompt">{{ p.label }}</button>
+                      </span>
+                    </span>
+                    <textarea :value="selectedSb.negative_prompt || selectedSb.negativePrompt || ''" class="textarea" rows="2"
+                      @blur="updateField(selectedSb, 'negative_prompt', $event.target.value)" placeholder="点上方预设一键套用，或手写「不要」的内容" />
+                  </label>
                 </div>
               </div>
             </div>
@@ -2342,6 +2355,21 @@ const shotTypes = [
 ]
 const shotAngles = ['平视', '仰视', '俯视', '侧拍', '背拍', '斜侧', '主观视角', '过肩']
 const shotMovements = ['固定', '推镜', '拉镜', '摇镜', '移镜', '跟拍', '升降', '手持', '环绕']
+
+// 反向提示词预设（与 backend/src/services/negative-prompt-presets.ts 保持一致）
+const NEGATIVE_PROMPT_PRESETS = [
+  { id: 'anime', label: '动漫', prompt: 'realistic, photo, photograph, 3d render, live action, blurry, watermark, text, deformed, ugly, low quality, extra fingers, disfigured, bad anatomy' },
+  { id: 'realistic', label: '真人电影', prompt: 'cartoon, anime, drawing, illustration, 3d render, blurry, watermark, text, deformed face, extra fingers, ugly, low quality, bad anatomy' },
+  { id: 'ink', label: '水墨', prompt: 'neon, vibrant colors, modern, cartoon, anime, 3d, photo, blurry, watermark, text, low quality' },
+  { id: 'cinematic', label: '电影感', prompt: 'cartoon, anime, drawing, flat lighting, overexposed, underexposed, blurry, watermark, text, low quality, amateur' },
+  { id: 'generic', label: '通用', prompt: 'blurry, watermark, text, low quality, deformed, ugly, extra fingers, disfigured, bad anatomy, jpeg artifacts' },
+]
+
+function applyStylePreset(sb, presetId) {
+  const preset = NEGATIVE_PROMPT_PRESETS.find(p => p.id === presetId)
+  if (!preset) return
+  updateField(sb, 'negative_prompt', preset.prompt)
+}
 
 function updateField(sb, field, value) {
   const current = sb[field] ?? sb[toCamel(field)]
@@ -4339,5 +4367,20 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   .latest-grid-strip-actions {
     justify-content: flex-start;
   }
+}
+
+.preset-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.preset-chip:hover {
+  background: var(--hover, #2a2a2a);
 }
 </style>

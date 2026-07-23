@@ -8,6 +8,7 @@ import { db, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { getPresetByStyle } from '../../services/negative-prompt-presets.js'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
@@ -56,6 +57,12 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
 }
 
 export function createStoryboardTools(episodeId: number, dramaId: number) {
+  // 预计算自动反词：按 drama.style 匹配一次，整个会话复用
+  const [drama] = db.select({ style: schema.dramas.style })
+    .from(schema.dramas)
+    .where(eq(schema.dramas.id, dramaId)).all()
+  const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
+
   const readStoryboardContext = createTool({
     id: 'read_storyboard_context',
     description: 'Read the screenplay, characters, and scenes for storyboard breakdown.',
@@ -166,6 +173,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         video_prompt: z.string().optional(),
         bgm_prompt: z.string().optional(),
         sound_effect: z.string().optional(),
+        negative_prompt: z.string().optional(),
         duration: z.number().optional(),
         scene_id: z.number().nullable().optional(),
         character_ids: z.array(z.number()).optional(),
@@ -204,6 +212,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
+          negativePrompt: sb.negative_prompt || autoNegativePrompt,
           createdAt: ts, updatedAt: ts,
         }).run()
         syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])

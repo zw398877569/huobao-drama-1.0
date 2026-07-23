@@ -105,6 +105,7 @@ sqlite.exec(`
     atmosphere TEXT,
     image_prompt TEXT,
     video_prompt TEXT,
+    negative_prompt TEXT,
     bgm_prompt TEXT,
     sound_effect TEXT,
     dialogue TEXT,
@@ -358,6 +359,7 @@ function ensureColumn(table: string, column: string, definition: string) {
 ensureColumn('episodes', 'image_config_id', 'INTEGER')
 ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
+ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 export const db = drizzle(sqlite, { schema })
 export { schema }
