@@ -4,9 +4,9 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../db/index.js'
+import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
-import { now } from '../../utils/response.js'
+import { now } from '../../utils/response'
 
 export function createScriptTools(episodeId: number) {
   const readEpisodeScript = createTool({

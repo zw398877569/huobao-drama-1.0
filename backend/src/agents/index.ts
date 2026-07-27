@@ -1,16 +1,16 @@
 import { Agent } from '@mastra/core/agent'
 import { createOpenAI } from '@ai-sdk/openai'
 import { eq, isNull, and } from 'drizzle-orm'
-import { db, schema } from '../db/index.js'
-import { getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
-import { logTaskProgress } from '../utils/task-logger.js'
-import { createSceneIntentionAgent, createSceneIntentionTools } from './scene-intention.js' // Added tools import
-import { loadAgentSkills } from './skills.js'
-import { createScriptTools } from './tools/script-tools.js'
-import { createExtractTools } from './tools/extract-tools.js'
-import { createStoryboardTools } from './tools/storyboard-tools.js'
-import { createVoiceTools } from './tools/voice-tools.js'
-import { createGridPromptTools } from './tools/grid-prompt-tools.js'
+import { db, schema } from '../db/index'
+import { getTextConfig, getTextProviderBaseUrl } from '../services/ai'
+import { logTaskProgress } from '../utils/task-logger'
+import { createSceneIntentionAgent, createSceneIntentionTools } from './scene-intention'
+import { loadAgentSkills } from './skills'
+import { createScriptTools } from './tools/script-tools'
+import { createExtractTools } from './tools/extract-tools'
+import { createStoryboardTools } from './tools/storyboard-tools'
+import { createVoiceTools } from './tools/voice-tools'
+import { createGridPromptTools } from './tools/grid-prompt-tools'
 
 // Default prompts (used when DB has no config)
 const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {

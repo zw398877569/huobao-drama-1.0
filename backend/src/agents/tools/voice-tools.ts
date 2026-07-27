@@ -3,10 +3,10 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../db/index.js'
+import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
-import { now } from '../../utils/response.js'
-import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { now } from '../../utils/response'
+import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {

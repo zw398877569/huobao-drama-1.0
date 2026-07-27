@@ -4,13 +4,13 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../db/index.js'
+import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
-import { now } from '../../utils/response.js'
-import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
-import { getPresetByStyle } from '../../services/negative-prompt-presets.js'
+import { now } from '../../utils/response'
+import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
+import { getPresetByStyle } from '../../services/negative-prompt-presets'
 // Import scene intention analysis function and templates
-import { analyzeSceneIntentionForScene } from '../../agents/scene-intention.js'
+import { analyzeSceneIntentionForScene } from '../../agents/scene-intention'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../../agents/director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
