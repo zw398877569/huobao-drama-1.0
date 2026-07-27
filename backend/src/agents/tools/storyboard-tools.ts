@@ -9,6 +9,9 @@ import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { getPresetByStyle } from '../../services/negative-prompt-presets.js'
+// Import scene intention analysis function and templates
+import { analyzeSceneIntentionForScene } from '../../agents/scene-intention.js'
+import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../../agents/director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
@@ -116,6 +119,64 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           storyboard_count: s.storyboardCount || 0,
         }))
 
+      // === Add scene intention analysis for director engine ===
+      // Get all episode characters to use as context for each scene
+      const episodeCharacters = chars.filter(c => !c.deletedAt);
+      const characterNames = episodeCharacters.map(c => c.name);
+
+      // Analyze intentions for each scene in parallel (fire and forget for speed)
+      const enhancedScenes = await Promise.all(
+        scenes.map(async (scene) => {
+          try {
+            // Analyze the dramatic intention of this scene
+            const intentionResult = await analyzeSceneIntentionForScene({
+              location: scene.location,
+              time: scene.time,
+              characters: characterNames.length > 0 ? characterNames : ['未知角色'],
+              action: '',
+              description: scene.prompt,
+            });
+
+            // Get the template for visual strategy guidance (includes cameraSpeed, shortDramaTips etc.)
+            const template = INTENTION_TEMPLATES[intentionResult.function] || INTENTION_TEMPLATES['铺垫'];
+
+            // Build intention object enriched with template data (cameraSpeed, shortDramaTips)
+            const intention = {
+              intention: intentionResult.intention,
+              function: intentionResult.function,
+              visualStrategy: intentionResult.visualStrategy,
+              cameraSpeed: template.cameraSpeed || '',
+              shortDramaTips: template.shortDramaTips || '',
+            };
+
+            return {
+              ...scene,
+              intention,
+              intentionTemplate: template,
+            };
+          } catch (e) {
+            console.warn(`Failed to analyze intention for scene ${scene.id}:`, e);
+            const fallbackTemplate = INTENTION_TEMPLATES['铺垫'];
+            const intention = {
+              intention: '场景意图分析失败',
+              function: '铺垫' as DramaticFunctionKey,
+              visualStrategy: '请手动设定或稍后分析',
+              cameraSpeed: fallbackTemplate.cameraSpeed || '',
+              shortDramaTips: fallbackTemplate.shortDramaTips || '',
+            };
+            return {
+              ...scene,
+              intention,
+              intentionTemplate: fallbackTemplate,
+            };
+          }
+        })
+      );
+      logTaskProgress('StoryboardTool', 'intentions-analyzed', {
+        sceneCount: enhancedScenes.length,
+      });
+      // ==============================================
+
       const payload = {
         episode: {
           id: ep.id,
@@ -125,7 +186,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         },
         script,
         characters,
-        scenes,
+        scenes: enhancedScenes, // Use enhanced scenes with intention data
         existing_storyboards: existingStoryboards
           .filter(sb => !sb.deletedAt)
           .map(sb => ({

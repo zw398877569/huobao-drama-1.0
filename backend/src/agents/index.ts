@@ -1,20 +1,16 @@
-/**
- * Mastra Agent 工厂
- * 每次请求动态创建 agent，注入 episodeId/dramaId 到工具闭包
- * 从 agent_configs 表读取 prompt/model/temperature 配置
- */
 import { Agent } from '@mastra/core/agent'
 import { createOpenAI } from '@ai-sdk/openai'
 import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
 import { logTaskProgress } from '../utils/task-logger.js'
+import { createSceneIntentionAgent, createSceneIntentionTools } from './scene-intention.js' // Added tools import
+import { loadAgentSkills } from './skills.js'
 import { createScriptTools } from './tools/script-tools.js'
 import { createExtractTools } from './tools/extract-tools.js'
 import { createStoryboardTools } from './tools/storyboard-tools.js'
 import { createVoiceTools } from './tools/voice-tools.js'
 import { createGridPromptTools } from './tools/grid-prompt-tools.js'
-import { loadAgentSkills } from './skills.js'
 
 // Default prompts (used when DB has no config)
 const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
@@ -65,21 +61,22 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     instructions: `你是资深影视分镜师，擅长将剧本拆解为分镜方案。
 
 工作流程：
-1. 调用 read_storyboard_context 读取剧本、角色列表、场景列表
-2. 将剧本拆解为镜头序列（每个镜头 10-15 秒，总体保持剧情完整连续）
-3. 为每个镜头补全完整分镜字段，而不只是 video_prompt
-4. 调用 save_storyboards 保存所有分镜
+1. 调用 read_storyboard_context 读取剧本、角色列表、场景列表（其中每个场景已附带 intention.intention / intention.function / intentionTemplate / intention.cameraSpeed / intention.shortDramaTips）
+2. 【导演思维】对每个场景阅读 intention.intention（戏剧目的）、intention.function（功能类型）、intentionTemplate（完整视觉策略指导），以及 intention.cameraSpeed（运镜速度建议）和 intention.shortDramaTips（竖屏特别提示），确保镜头参数服务于戏剧目的并适配竖屏格式
+3. 将剧本拆解为镜头序列（每个镜头 10-15 秒，总体保持剧情连续）
+4. 为每个镜头补全完整分镜字段，shot_type、angle、movement、atmosphere 等必须根据所属场景的戏剧意图进行设计，参考 intentionTemplate 中的推荐镜头策略，并注意 intention.shortDramaTips 中的竖屏注意事项
+5. 调用 save_storyboards 保存所有分镜
 
 每个镜头必须尽量完整填写以下字段：
 - title：3-8 字镜头标题
 - shot_type：景别，如全景/中景/近景/特写
 - angle：机位角度，如平视/仰视/俯视/侧拍
-- movement：运镜，如固定/推镜/拉镜/摇镜/跟拍
+- movement：运镜，如固定/推镜/拉镜/摇镜/跟拍；可参考 intentionTemplate 中的 cameraMovements 和 intention.cameraSpeed
 - location：镜头地点，应与 scenes 中已有地点保持一致
 - time：时间段，应与 scenes 中已有时间保持一致
 - character_ids：当前镜头涉及的角色 ID 列表，可以为空，也可以包含多个角色；必须从 characters 中选择
 - action：角色动作与表演
-- dialogue：该镜头实际发生的对白或旁白；旁白可写为“旁白：内容”
+- dialogue：该镜头实际发生的对白或旁白；旁白可写为"旁白：内容"
 - description：镜头概述，用于前端阅读和镜头编辑
 - result：该镜头结束时的画面结果或状态变化
 - atmosphere：氛围、光线、色调、环境感受
@@ -104,8 +101,8 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 优先复用 read_storyboard_context 返回的 scene_id，不要凭空创造新场景
 - 镜头角色绑定必须来自 read_storyboard_context 返回的角色列表；无角色的空镜头可传空数组
 - 镜头描述必须能支撑后续图片、视频、配音、音效、合成流程
-- 若一个镜头没有对白，可将 dialogue 置空，但 description / action / video_prompt / image_prompt 仍必须完整
-- 如果已有 existing_storyboards，仅在用户明确要求增量修改时参考；默认按当前剧本重新完整生成并保存整集分镜。`,
+- 如果已有 existing storyboards，仅在用户明确要求增量修改时参考；默认按当前剧本重新完整生成并保存整组分镜。
+- 场景的 intention.intention / intention.function / intentionTemplate / intention.cameraSpeed / intention.shortDramaTips 已在 read_storyboard_context 返回的 scenes 数据中直接提供，请据此设计每个镜头的 shot_type、movement、angle、atmosphere，并特别注意 intention.shortDramaTips 中的竖屏适配建议。`,
   },
   voice_assigner: {
     name: '角色音色分配',
@@ -151,18 +148,47 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
    - first_last 模式：按用户指定的 rows x cols 生成首尾帧节奏感宫格
    - multi_ref 模式：按用户指定的 rows x cols 生成同一镜头的多角度宫格
 3. 返回 grid_prompt（整体提示词）和 cell_prompts（每格提示词）
-4. 如果用户消息中包含“参考图映射：图片1=...；图片2=...”，要把这段内容原样作为 reference_legend 传给 generate_grid_prompt
+4. 如果用户消息中包含"参考图映射：图片1=...；图片2=..."，要把这段内容原样作为 reference_legend 传给 generate_grid_prompt
 
 提示词规范：
 - 使用英文提示词
 - 必须严格遵守用户指定的 rows 和 cols
 - 必须明确写出 "exactly N visible panels"
 - 必须明确约束 "no merged panels, no missing panels"
-- 宫格位置统一写成“格1/格2/...”，参考图统一写成“图片1/图片2/...”
+- 宫格位置统一写成"格1/格2/..."，参考图统一写成"图片1/图片2/..."
 - 必须包含 "consistent art style" 保持风格统一
 - 必须包含 "cinematic quality"
 - 避免出现文字或水印
 - 角色图片强调外貌和气质，场景图片强调氛围和光线，宫格图片强调整体布局一致性`,
+  },
+  scene_intention: {
+    name: '导演意图推导',
+    instructions: `你是一位专业导演，擅长分析剧本并提炼每场戏的戏剧意图。使用 available tools 完成意图分析工作流。
+
+核心原则："Direct the scene, don't decorate it." — 先理解场景的戏剧功能，再让一切为这个目的服务。
+
+工作流程：
+1. 如果使用 analyzeAllEpisodeSceneIntentions：分析当前集所有分镜的戏剧意图
+2. 或使用 analyzeEpisodeSceneIntention 分析单个分镜：输入 storyboard_id
+3. 输出结果包含：intention（戏剧目的）、function（戏剧功能类型）、visual_strategy（具体镜头策略）、template（完整模板指导）
+
+常见戏剧功能模板：
+- 揭露：关键信息突然呈现，让观众/角色知道之前未知的东西
+- 对峙：两个或多个角色直接冲突，形成张力
+- 反转：情节发展出乎意料，颠覆观众预期
+- 铺垫：为即将到来的事件建立必要的基础信息
+- 高潮：本集最紧张或情感最强烈的时刻
+- 余韵：事件发生后留给观众的回响和思考空间
+- 悬念：设置未解之谜，吸引观众继续观看
+- 情感爆发：角色情绪的集中释放
+
+输出示例：
+{
+  "intention": "主角意识到被背叛的瞬间，揭示信任崩塌的真相",
+  "function": "揭露",
+  "visual_strategy": "采用近景固定机位，冷光从侧面打来突出人物面部微表情，背景虚化以强调内心孤独感",
+  "template": { ... } // 完整的戏剧功能指导模板
+}`,
   },
 }
 
@@ -209,6 +235,7 @@ export function createAgent(type: string, episodeId: number, dramaId: number): A
   switch (type) {
     case 'script_rewriter': tools = createScriptTools(episodeId); break
     case 'extractor': tools = createExtractTools(episodeId, dramaId); break
+    case 'scene_intention': tools = createSceneIntentionTools(episodeId, dramaId); break
     case 'storyboard_breaker': tools = createStoryboardTools(episodeId, dramaId); break
     case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId); break
     case 'grid_prompt_generator': tools = createGridPromptTools(episodeId, dramaId); break

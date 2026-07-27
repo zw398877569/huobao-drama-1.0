@@ -125,6 +125,9 @@ export const storyboards = sqliteTable('storyboards', {
   subtitleUrl: text('subtitle_url'),
   composedVideoUrl: text('composed_video_url'),
   status: text('status').default('pending'),
+  // P0: Scene Intention field
+  sceneIntention: text('scene_intention'),
+  // Derived intention + visual strategy for the shot
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
