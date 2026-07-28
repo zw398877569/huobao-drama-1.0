@@ -4,14 +4,14 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../db/index'
+import { db, schema } from '../../../src/db/index'
 import { eq } from 'drizzle-orm'
-import { now } from '../../utils/response'
-import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
-import { getPresetByStyle } from '../../services/negative-prompt-presets'
+import { now } from '../../../src/utils/response'
+import { logTaskProgress, logTaskSuccess } from '../../../src/utils/task-logger'
+import { getPresetByStyle } from '../../../src/services/negative-prompt-presets'
 // Import scene intention analysis function and templates
-import { analyzeSceneIntentionForScene } from '../../agents/scene-intention'
-import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../../agents/director-intent-templates'
+import { analyzeSceneIntentionForScene } from '../agents/scene-intention'
+import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../agents/director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
