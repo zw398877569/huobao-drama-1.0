@@ -136,7 +136,7 @@ app.put('/:id', async (c) => {
     dialogue: 'dialogue', duration: 'duration', video_prompt: 'videoPrompt',
     image_prompt: 'imagePrompt', scene_id: 'sceneId', location: 'location',
     time: 'time', atmosphere: 'atmosphere', result: 'result',
-    bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect',
+    bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect', scene_intention: 'sceneIntention',
   }
 
   const updates: Record<string, any> = { updatedAt: now() }

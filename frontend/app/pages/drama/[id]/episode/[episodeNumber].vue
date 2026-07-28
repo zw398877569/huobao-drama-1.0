@@ -520,6 +520,46 @@
                 </div>
                 <div class="detail-section">
                   <div class="detail-section-head">
+                    <span class="detail-section-title">导演意图</span>
+                    <span class="detail-section-copy">Direct the scene, don't decorate it — 先回答「这一镜在叙事上做什么」</span>
+                  </div>
+                  <div class="intention-pills">
+                    <button v-for="fn in dramaticFunctions" :key="fn" type="button"
+                      :class="['intention-pill', { active: intentionField(selectedSb, 'function') === fn }]"
+                      @click="updateIntentionField(selectedSb, 'function', intentionField(selectedSb, 'function') === fn ? '' : fn)">
+                      {{ fn }}
+                    </button>
+                  </div>
+                  <div class="field-grid field-grid-2">
+                    <label class="field">
+                      <span class="field-label">戏剧目的</span>
+                      <textarea :value="intentionField(selectedSb, 'intention')" class="textarea" rows="2"
+                        @blur="updateIntentionField(selectedSb, 'intention', $event.target.value)" placeholder="一句话概括本镜的戏剧目的，例如：主角意识到被背叛的瞬间" />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">视觉策略</span>
+                      <textarea :value="intentionField(selectedSb, 'visualStrategy')" class="textarea" rows="2"
+                        @blur="updateIntentionField(selectedSb, 'visualStrategy', $event.target.value)" placeholder="镜头、灯光、调度如何服务于戏剧目的" />
+                    </label>
+                  </div>
+                  <div class="field-grid field-grid-2">
+                    <label class="field">
+                      <span class="field-label">运镜速度</span>
+                      <input :value="intentionField(selectedSb, 'cameraSpeed')" class="input"
+                        @blur="updateIntentionField(selectedSb, 'cameraSpeed', $event.target.value)" placeholder="如：快速(<1秒) / 缓慢(5-10秒) / 固定" />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">竖屏提示</span>
+                      <input :value="intentionField(selectedSb, 'shortDramaTips')" class="input"
+                        @blur="updateIntentionField(selectedSb, 'shortDramaTips', $event.target.value)" placeholder="如：居中构图、避开状态栏" />
+                    </label>
+                  </div>
+                  <div v-if="!parseIntention(selectedSb)" class="intention-empty-hint">
+                    尚未生成导演意图分析。先填写戏剧目的和视觉策略；后续可接入 scene_intention agent 自动生成。
+                  </div>
+                </div>
+                <div class="detail-section">
+                  <div class="detail-section-head">
                     <span class="detail-section-title">镜头结构</span>
                     <span class="detail-section-copy">景别、角度、运镜、场景绑定和时长</span>
                   </div>
@@ -2384,6 +2424,35 @@ function toCamel(field) {
   return field.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 }
 
+// ── Scene Intention (导演意图) helpers ────────────────────────────
+const dramaticFunctions = ['揭露', '对峙', '反转', '铺垫', '高潮', '余韵', '悬念', '情感爆发']
+
+function parseIntention(sb) {
+  const raw = sb?.scene_intention ?? sb?.sceneIntention
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+function intentionField(sb, field) {
+  return parseIntention(sb)?.[field] ?? ''
+}
+
+function updateIntentionField(sb, field, value) {
+  const current = parseIntention(sb) || {}
+  const next = { ...current, [field]: value }
+  // Drop empty optional fields so JSON stays compact
+  if (next.cameraSpeed === '') delete next.cameraSpeed
+  if (next.shortDramaTips === '') delete next.shortDramaTips
+  if (next.function === '') delete next.function
+  if (!next.intention) delete next.intention
+  if (!next.visualStrategy) delete next.visualStrategy
+  const json = Object.keys(next).length ? JSON.stringify(next) : ''
+  sb.scene_intention = json
+  sb.sceneIntention = json
+  storyboardAPI.update(sb.id, { scene_intention: json })
+}
+
 function getStoryboardCharacterIds(sb) {
   return sb?.character_ids || sb?.characterIds || []
 }
@@ -3652,6 +3721,43 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   background: var(--accent);
   color: #fff;
   box-shadow: 0 8px 18px rgba(29, 77, 176, 0.18);
+}
+
+/* Scene Intention (导演意图) pills */
+.intention-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.intention-pill {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 41, 64, 0.12);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.02em;
+}
+.intention-pill:hover {
+  border-color: var(--accent);
+  color: var(--text-0);
+  transform: translateY(-1px);
+}
+.intention-pill.active {
+  border-color: rgba(29, 77, 176, 0.5);
+  background: linear-gradient(135deg, rgba(29, 77, 176, 0.12), rgba(33, 88, 255, 0.18));
+  color: var(--accent);
+  box-shadow: 0 6px 14px rgba(29, 77, 176, 0.14);
+}
+.intention-empty-hint {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(29, 77, 176, 0.04);
+  border: 1px dashed rgba(29, 77, 176, 0.18);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* Production tabs */
