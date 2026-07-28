@@ -361,6 +361,16 @@ ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
+// P1 Take Triage: quality evaluation + retake bookkeeping
+ensureColumn('storyboards', 'eval_score_prompt', 'REAL')
+ensureColumn('storyboards', 'eval_score_visual', 'REAL')
+ensureColumn('storyboards', 'eval_score_motion', 'REAL')
+ensureColumn('storyboards', 'eval_score_continuity', 'REAL')
+ensureColumn('storyboards', 'eval_notes', 'TEXT')
+ensureColumn('storyboards', 'evaluated_at', 'TEXT')
+ensureColumn('storyboards', 'retake_count', 'INTEGER DEFAULT 0')
+ensureColumn('storyboards', 'retake_variable', 'TEXT')
+
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db

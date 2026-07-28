@@ -57,6 +57,7 @@ export const storyboardAPI = {
   update: (id: number, data: any) => api.put(`/storyboards/${id}`, data),
   generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
+  evaluate: (id: number) => api.post(`/storyboards/${id}/evaluate`),
   del: (id: number) => api.del(`/storyboards/${id}`),
 }
 

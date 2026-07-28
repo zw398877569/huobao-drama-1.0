@@ -128,6 +128,15 @@ export const storyboards = sqliteTable('storyboards', {
   // P0: Scene Intention field
   sceneIntention: text('scene_intention'),
   // Derived intention + visual strategy for the shot
+  // P1 Take Triage: 4-dim quality evaluation (0-10) + retake bookkeeping
+  evalScorePrompt: real('eval_score_prompt'),
+  evalScoreVisual: real('eval_score_visual'),
+  evalScoreMotion: real('eval_score_motion'),
+  evalScoreContinuity: real('eval_score_continuity'),
+  evalNotes: text('eval_notes'),
+  evaluatedAt: text('evaluated_at'),
+  retakeCount: integer('retake_count').default(0),
+  retakeVariable: text('retake_variable'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

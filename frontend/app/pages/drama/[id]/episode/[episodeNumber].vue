@@ -739,6 +739,47 @@
                       @blur="updateField(selectedSb, 'negative_prompt', $event.target.value)" placeholder="点上方预设一键套用，或手写「不要」的内容" />
                   </label>
                 </div>
+
+                <!-- 镜头质量评估 -->
+                <div class="detail-section">
+                  <div class="detail-section-head">
+                    <span class="detail-section-title">镜头质量评估</span>
+                    <span class="detail-section-copy">基于已生成首帧 + 戏剧意图的 4 维评分（0-10）</span>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      style="margin-left:auto"
+                      :disabled="evaluatingId === selectedSb?.id || !(selectedSb.first_frame_image || selectedSb.firstFrameImage)"
+                      :title="!(selectedSb.first_frame_image || selectedSb.firstFrameImage) ? '请先生成首帧' : ''"
+                      @click="evaluateStoryboard(selectedSb)"
+                    >
+                      <Loader2 v-if="evaluatingId === selectedSb?.id" :size="11" class="animate-spin" />
+                      <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
+                      {{ evaluatingId === selectedSb?.id ? '评估中…' : (hasEvalScores(selectedSb) ? '重新评估' : 'AI 评估') }}
+                    </button>
+                  </div>
+                  <div v-if="hasEvalScores(selectedSb)" class="eval-grid">
+                    <div v-for="dim in evalDimensions" :key="dim.key" class="eval-row">
+                      <span class="eval-label">{{ dim.label }}</span>
+                      <div class="eval-bar-track">
+                        <div
+                          :class="['eval-bar-fill', 'tone-' + evalTone(evalScore(selectedSb, dim.key))]"
+                          :style="{ width: ((evalScore(selectedSb, dim.key) || 0) * 10) + '%' }"
+                        ></div>
+                      </div>
+                      <span :class="['eval-num', 'tone-' + evalTone(evalScore(selectedSb, dim.key))]">
+                        {{ evalScore(selectedSb, dim.key)?.toFixed(1) }}
+                      </span>
+                    </div>
+                  </div>
+                  <div v-if="hasEvalScores(selectedSb) && (selectedSb.eval_notes || selectedSb.evalNotes)" class="eval-notes">
+                    <span class="eval-notes-label">模型反馈</span>
+                    <div class="eval-notes-text">{{ selectedSb.eval_notes || selectedSb.evalNotes }}</div>
+                  </div>
+                  <div v-else class="eval-empty">
+                    该镜头尚未评估。点击右上角「AI 评估」按 prompt 契合度、画面质量、运镜自然度、意图一致性 4 维打分。
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1013,6 +1054,28 @@
                       <span v-if="intentionField(sb, 'function')" class="intention-badge" :title="intentionField(sb, 'intention') || ''">
                         {{ intentionField(sb, 'function') }}
                       </span>
+                      <button
+                        v-if="hasEvalScores(sb)"
+                        type="button"
+                        :class="['eval-chip', 'tone-' + evalTone(evalAverage(sb))]"
+                        :title="`最近评估：${evalAverage(sb)?.toFixed(1)}/10`"
+                        @click.stop="selectedSb = sb"
+                      >
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
+                        {{ evalAverage(sb)?.toFixed(1) }}
+                      </button>
+                      <button
+                        v-else-if="sb.first_frame_image || sb.firstFrameImage"
+                        type="button"
+                        class="eval-chip eval-chip-empty"
+                        title="对该镜头进行质量评估"
+                        :disabled="evaluatingId === sb.id"
+                        @click.stop="evaluateStoryboard(sb)"
+                      >
+                        <Loader2 v-if="evaluatingId === sb.id" :size="9" class="animate-spin" />
+                        <svg v-else width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
+                        {{ evaluatingId === sb.id ? '评估中' : '评估' }}
+                      </button>
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
@@ -1534,6 +1597,9 @@ const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.
 
 // Tracks which storyboard currently has an in-flight scene_intention analysis
 const analyzingIntentionId = ref<number | null>(null)
+
+// Tracks which storyboard currently has an in-flight quality evaluation
+const evaluatingId = ref<number | null>(null)
 
 const scriptStep = ref(0)
 const prodTab = ref('chars')
@@ -2444,6 +2510,14 @@ function toCamel(field) {
 // ── Scene Intention (导演意图) helpers ────────────────────────────
 const dramaticFunctions = ['揭露', '对峙', '反转', '铺垫', '高潮', '余韵', '悬念', '情感爆发']
 
+// Order matters — keeps the eval grid consistent in the detail panel
+const evalDimensions = [
+  { key: 'eval_score_prompt',     label: '提示契合度' },
+  { key: 'eval_score_visual',     label: '画面质量' },
+  { key: 'eval_score_motion',     label: '运镜自然度' },
+  { key: 'eval_score_continuity', label: '意图一致性' },
+]
+
 function parseIntention(sb) {
   const raw = sb?.scene_intention ?? sb?.sceneIntention
   if (!raw) return null
@@ -2485,6 +2559,61 @@ async function analyzeIntention(sb) {
     toast.error(e?.message || '重新生成失败')
   } finally {
     analyzingIntentionId.value = null
+  }
+}
+
+// Read a single eval score from a storyboard (snake or camel)
+function evalScore(sb, key) {
+  if (!sb) return null
+  const v = sb[key] ?? sb[key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+// True if any of the 4 eval dimensions has a recorded score
+function hasEvalScores(sb) {
+  if (!sb) return false
+  return ['eval_score_prompt', 'eval_score_visual', 'eval_score_motion', 'eval_score_continuity']
+    .some(k => typeof sb[k] === 'number' && Number.isFinite(sb[k]))
+}
+
+// Average across the 4 eval dimensions, or null if none set
+function evalAverage(sb) {
+  const values = ['eval_score_prompt', 'eval_score_visual', 'eval_score_motion', 'eval_score_continuity']
+    .map(k => sb?.[k])
+    .filter(v => typeof v === 'number' && Number.isFinite(v))
+  if (!values.length) return null
+  return values.reduce((a, b) => a + b, 0) / values.length
+}
+
+// Score → tone (success / warn / danger) for color treatment in UI
+function evalTone(score) {
+  if (score == null) return 'neutral'
+  if (score >= 7.5) return 'good'
+  if (score >= 5) return 'warn'
+  return 'bad'
+}
+
+// Trigger a quality evaluation on the generated first frame
+async function evaluateStoryboard(sb) {
+  if (!sb?.id || evaluatingId.value === sb.id) return
+  if (!sb.first_frame_image && !sb.firstFrameImage) {
+    toast.error('该镜头尚未生成首帧，无法评估')
+    return
+  }
+  evaluatingId.value = sb.id
+  try {
+    const res: any = await storyboardAPI.evaluate(sb.id)
+    // Apply returned scores back onto the local sb (both snake and camel keys)
+    sb.eval_score_prompt = res?.eval_score_prompt ?? null
+    sb.eval_score_visual = res?.eval_score_visual ?? null
+    sb.eval_score_motion = res?.eval_score_motion ?? null
+    sb.eval_score_continuity = res?.eval_score_continuity ?? null
+    sb.eval_notes = res?.eval_notes ?? ''
+    toast.success('评估完成')
+  } catch (e: any) {
+    toast.error(e?.message || '评估失败')
+  } finally {
+    evaluatingId.value = null
   }
 }
 
@@ -3790,6 +3919,132 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   border-radius: 12px;
   background: rgba(29, 77, 176, 0.04);
   border: 1px dashed rgba(29, 77, 176, 0.18);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Frame-row eval chip — compact star + score badge, or empty "评估" CTA */
+.eval-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  transition: all 0.15s ease;
+  background: transparent;
+}
+.eval-chip.tone-good {
+  background: rgba(36, 125, 72, 0.12);
+  color: #1f6f3f;
+  border-color: rgba(36, 125, 72, 0.22);
+}
+.eval-chip.tone-warn {
+  background: rgba(184, 122, 18, 0.14);
+  color: #8d5a05;
+  border-color: rgba(184, 122, 18, 0.28);
+}
+.eval-chip.tone-bad {
+  background: rgba(176, 32, 32, 0.12);
+  color: #9c1c1c;
+  border-color: rgba(176, 32, 32, 0.24);
+}
+.eval-chip.tone-neutral {
+  background: rgba(27, 41, 64, 0.06);
+  color: var(--text-2);
+  border-color: rgba(27, 41, 64, 0.12);
+}
+.eval-chip-empty {
+  background: transparent;
+  color: var(--text-3);
+  border-color: rgba(27, 41, 64, 0.12);
+}
+.eval-chip-empty:hover:not(:disabled) {
+  background: rgba(29, 77, 176, 0.08);
+  color: var(--accent);
+  border-color: rgba(29, 77, 176, 0.28);
+}
+.eval-chip:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Detail panel: eval grid (one row per dimension) */
+.eval-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.eval-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 44px;
+  gap: 12px;
+  align-items: center;
+}
+.eval-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.eval-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(27, 41, 64, 0.08);
+  overflow: hidden;
+}
+.eval-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s var(--ease-out);
+}
+.eval-bar-fill.tone-good { background: linear-gradient(90deg, rgba(36, 125, 72, 0.55), rgba(36, 125, 72, 0.85)); }
+.eval-bar-fill.tone-warn { background: linear-gradient(90deg, rgba(184, 122, 18, 0.55), rgba(184, 122, 18, 0.85)); }
+.eval-bar-fill.tone-bad  { background: linear-gradient(90deg, rgba(176, 32, 32, 0.55), rgba(176, 32, 32, 0.85)); }
+.eval-num {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-align: right;
+}
+.eval-num.tone-good { color: #1f6f3f; }
+.eval-num.tone-warn { color: #8d5a05; }
+.eval-num.tone-bad  { color: #9c1c1c; }
+.eval-num.tone-neutral { color: var(--text-3); }
+
+.eval-notes {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(29, 77, 176, 0.04);
+  border: 1px solid rgba(29, 77, 176, 0.14);
+}
+.eval-notes-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.eval-notes-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-1);
+}
+.eval-empty {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(27, 41, 64, 0.04);
+  border: 1px dashed rgba(27, 41, 64, 0.16);
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.6;

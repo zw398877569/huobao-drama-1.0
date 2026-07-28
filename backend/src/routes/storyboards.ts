@@ -7,6 +7,7 @@ import { generateTTS } from '../services/tts-generation.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
+import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 
 const app = new Hono()
 
@@ -273,6 +274,36 @@ app.post('/:id/analyze-intention', async (c) => {
   })
 
   return success(c, { scene_intention: payload, intention })
+})
+
+
+// POST /storyboards/:id/evaluate
+// Run quality evaluation on the generated first frame via vision LLM and persist scores
+app.post('/:id/evaluate', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+
+  try {
+    const scores = await evaluateStoryboard(id)
+    if (!scores) return badRequest(c, '镜头不存在')
+    const avg = averageEvalScore({
+      evalScorePrompt: scores.prompt_adherence,
+      evalScoreVisual: scores.visual_quality,
+      evalScoreMotion: scores.motion_naturalness,
+      evalScoreContinuity: scores.continuity,
+    })
+    return success(c, {
+      eval_score_prompt: scores.prompt_adherence,
+      eval_score_visual: scores.visual_quality,
+      eval_score_motion: scores.motion_naturalness,
+      eval_score_continuity: scores.continuity,
+      eval_notes: scores.notes,
+      eval_average: avg,
+    })
+  } catch (e: any) {
+    return badRequest(c, e?.message || '评估失败')
+  }
 })
 
 export default app
