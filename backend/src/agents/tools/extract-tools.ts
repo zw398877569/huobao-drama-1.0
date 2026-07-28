@@ -9,10 +9,10 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../../src/db/index'
+import { db, schema } from '../../db/index'
 import { eq, and } from 'drizzle-orm'
-import { now } from '../../../src/utils/response'
-import { logTaskProgress, logTaskSuccess } from '../../../src/utils/task-logger'
+import { now } from '../../utils/response'
+import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 function linkCharToEpisode(episodeId: number, characterId: number) {

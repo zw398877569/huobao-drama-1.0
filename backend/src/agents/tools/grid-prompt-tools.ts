@@ -9,7 +9,7 @@
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
-import { db, schema } from '../../../src/db/index'
+import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
 
 export function createGridPromptTools(episodeId: number, dramaId: number) {
