@@ -1,11 +1,12 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
 
 const app = new Hono()
 
@@ -229,6 +230,49 @@ app.delete('/:id', async (c) => {
   db.delete(schema.storyboards).where(eq(schema.storyboards.id, id)).run()
   logTaskSuccess('StoryboardAPI', 'delete', { storyboardId: id })
   return success(c)
+})
+
+
+// POST /storyboards/:id/analyze-intention
+// Run scene_intention analysis for a single storyboard and persist the result
+app.post('/:id/analyze-intention', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+
+  logTaskStart('StoryboardAPI', 'analyze-intention', {
+    storyboardId: id,
+    episodeId: sb.episodeId,
+  })
+
+  const links = db.select().from(schema.storyboardCharacters)
+    .where(eq(schema.storyboardCharacters.storyboardId, id)).all()
+  const characterIds = links.map((l) => l.characterId)
+  const characterNames = characterIds.length
+    ? db.select({ name: schema.characters.name }).from(schema.characters)
+        .where(inArray(schema.characters.id, characterIds)).all()
+        .map((row) => row.name)
+    : ['未知角色']
+
+  const intention = await analyzeSceneIntentionForScene({
+    location: sb.location || '',
+    time: sb.time || '',
+    characters: characterNames,
+    action: sb.action || '',
+    dialogue: sb.dialogue || '',
+    description: sb.description || '',
+  })
+
+  await saveStoryboardIntent(id, intention)
+  const payload = JSON.stringify(intention)
+
+  logTaskSuccess('StoryboardAPI', 'analyze-intention', {
+    storyboardId: id,
+    function: intention.function,
+    intentionLength: intention.intention.length,
+  })
+
+  return success(c, { scene_intention: payload, intention })
 })
 
 export default app

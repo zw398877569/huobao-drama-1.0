@@ -522,6 +522,17 @@
                   <div class="detail-section-head">
                     <span class="detail-section-title">导演意图</span>
                     <span class="detail-section-copy">Direct the scene, don't decorate it — 先回答「这一镜在叙事上做什么」</span>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      style="margin-left:auto"
+                      :disabled="analyzingIntentionId === selectedSb?.id"
+                      @click="analyzeIntention(selectedSb)"
+                    >
+                      <Loader2 v-if="analyzingIntentionId === selectedSb?.id" :size="11" class="animate-spin" />
+                      <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                      {{ analyzingIntentionId === selectedSb?.id ? '生成中…' : 'AI 重新生成' }}
+                    </button>
                   </div>
                   <div class="intention-pills">
                     <button v-for="fn in dramaticFunctions" :key="fn" type="button"
@@ -999,6 +1010,9 @@
                     <div class="frame-top">
                       <span class="frame-num">#{{ String(i+1).padStart(2,'0') }}</span>
                       <span class="frame-badge">{{ sb.shot_type || sb.shotType || '—' }}</span>
+                      <span v-if="intentionField(sb, 'function')" class="intention-badge" :title="intentionField(sb, 'intention') || ''">
+                        {{ intentionField(sb, 'function') }}
+                      </span>
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
@@ -1517,6 +1531,9 @@ const charsVoiced = computed(() => chars.value.filter(c => c.voice_style || c.vo
 const voiceSampleCount = computed(() => chars.value.filter(c => c.voice_sample_url || c.voiceSampleUrl).length)
 const composedCount = computed(() => sbs.value.filter(s => s.composed_video_url || s.composedVideoUrl).length)
 const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.mergedUrl || null)
+
+// Tracks which storyboard currently has an in-flight scene_intention analysis
+const analyzingIntentionId = ref<number | null>(null)
 
 const scriptStep = ref(0)
 const prodTab = ref('chars')
@@ -2451,6 +2468,24 @@ function updateIntentionField(sb, field, value) {
   sb.scene_intention = json
   sb.sceneIntention = json
   storyboardAPI.update(sb.id, { scene_intention: json })
+}
+
+// Trigger scene_intention agent analysis for a single storyboard and refresh local state
+async function analyzeIntention(sb) {
+  if (!sb?.id || analyzingIntentionId.value === sb.id) return
+  analyzingIntentionId.value = sb.id
+  try {
+    const res: any = await storyboardAPI.analyzeIntention(sb.id)
+    // API returns { scene_intention: stringified JSON } — write it back to the local sb
+    const raw = res?.scene_intention ?? ''
+    sb.scene_intention = raw
+    sb.sceneIntention = raw
+    toast.success('导演意图已重新生成')
+  } catch (e: any) {
+    toast.error(e?.message || '重新生成失败')
+  } finally {
+    analyzingIntentionId.value = null
+  }
 }
 
 function getStoryboardCharacterIds(sb) {
@@ -3758,6 +3793,26 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* Frame-row intention badge — small chip showing the dramatic function */
+.intention-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(29, 77, 176, 0.12), rgba(33, 88, 255, 0.18));
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(29, 77, 176, 0.18);
+  white-space: nowrap;
+  cursor: help;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Production tabs */
