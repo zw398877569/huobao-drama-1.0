@@ -13,6 +13,7 @@ import { getPresetByStyle } from '../../services/negative-prompt-presets'
 import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
 import { validateEventDensity } from '../../services/prompt-validation'
+import { checkPromptSafety } from '../../services/prompt-safety'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -262,10 +263,13 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
 
       let totalDuration = 0
       const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
+      const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
       for (const sb of storyboards) {
         validateStoryboardBindings(episodeId, sb.scene_id, sb.character_ids)
+        const cleanedImage = applyQualityChecklist(sb.image_prompt, 'image').cleaned
         const cleanedVideo = applyQualityChecklist(sb.video_prompt, 'video').cleaned
         const densityResult = validateEventDensity(cleanedVideo)
+        const safetyResult = checkPromptSafety(cleanedImage, 'image')
         const res = db.insert(schema.storyboards).values({
           episodeId,
           storyboardNumber: sb.shot_number,
@@ -275,7 +279,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           action: sb.action, dialogue: sb.dialogue,
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere,
-          imagePrompt: applyQualityChecklist(sb.image_prompt, 'image').cleaned,
+          imagePrompt: safetyResult.cleaned,
           videoPrompt: cleanedVideo,
           bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
@@ -283,6 +287,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           negativePrompt: sb.negative_prompt || autoNegativePrompt,
           eventDensity: densityResult.density,
           eventList: densityResult.events.length ? JSON.stringify(densityResult.events) : '',
+          promptOriginal: safetyResult.flagged ? sb.image_prompt : '',
+          safetyFlagged: safetyResult.flagged ? 1 : 0,
+          safetyNotes: safetyResult.notes.length ? JSON.stringify(safetyResult.notes) : '',
           createdAt: ts, updatedAt: ts,
         }).run()
         syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])
@@ -293,6 +300,13 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
             density: densityResult.density,
             suggestion: densityResult.suggestion,
             events: densityResult.events,
+          })
+        }
+        if (safetyResult.flagged) {
+          safetyWarnings.push({
+            shot_number: sb.shot_number,
+            flagged: true,
+            notes: safetyResult.notes,
           })
         }
       }
@@ -306,12 +320,14 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         count: storyboards.length,
         totalDuration,
         densityWarnings: densityWarnings.length,
+        safetyWarnings: safetyWarnings.length,
       })
       return {
         message: `Saved ${storyboards.length} storyboards`,
         count: storyboards.length,
         total_duration: totalDuration,
         density_warnings: densityWarnings,
+        safety_warnings: safetyWarnings,
       }
     },
   })
@@ -369,7 +385,20 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('action' in fields) updates.action = fields.action
       if ('result' in fields) updates.result = fields.result
       if ('atmosphere' in fields) updates.atmosphere = fields.atmosphere
-      if ('image_prompt' in fields) updates.imagePrompt = applyQualityChecklist(fields.image_prompt, 'image').cleaned
+      if ('image_prompt' in fields) {
+        const cleanedImage = applyQualityChecklist(fields.image_prompt, 'image').cleaned
+        const safetyResult = checkPromptSafety(cleanedImage, 'image')
+        updates.imagePrompt = safetyResult.cleaned
+        if (safetyResult.flagged) {
+          updates.promptOriginal = fields.image_prompt
+          updates.safetyFlagged = 1
+          updates.safetyNotes = JSON.stringify(safetyResult.notes)
+        } else {
+          updates.safetyFlagged = 0
+          updates.safetyNotes = ''
+          updates.promptOriginal = ''
+        }
+      }
       if ('video_prompt' in fields) {
         const cleanedVideo = applyQualityChecklist(fields.video_prompt, 'video').cleaned
         const densityResult = validateEventDensity(cleanedVideo)

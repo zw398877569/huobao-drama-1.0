@@ -809,6 +809,38 @@
                     <div class="density-warn-text">中密度可以接受，但建议合并部分动作或运镜，让镜头节奏更紧凑。</div>
                   </div>
                 </div>
+
+                <!-- IP 安全检查 -->
+                <div class="detail-section">
+                  <div class="detail-section-head">
+                    <span class="detail-section-title">IP 安全检查</span>
+                    <span class="detail-section-copy">pre-flight 重写 — 检测并替换 prompt 中的名人 / 商标 / IP 角色</span>
+                    <span v-if="safetyFlagged(selectedSb)" class="safety-flag-tag">已改写 {{ safetyNotes(selectedSb).length }} 处</span>
+                    <span v-else class="safety-flag-tag safety-flag-clean">通过</span>
+                  </div>
+                  <div v-if="safetyFlagged(selectedSb)" class="safety-diff">
+                    <div class="safety-diff-col">
+                      <span class="safety-diff-label">原始</span>
+                      <div class="safety-diff-text">{{ safetyOriginal(selectedSb) }}</div>
+                    </div>
+                    <div class="safety-diff-col">
+                      <span class="safety-diff-label">改写后</span>
+                      <div class="safety-diff-text">{{ selectedSb.image_prompt || selectedSb.imagePrompt }}</div>
+                    </div>
+                  </div>
+                  <div v-if="safetyFlagged(selectedSb)" class="safety-notes-list">
+                    <div v-for="(n, i) in safetyNotes(selectedSb)" :key="i" class="safety-note-row">
+                      <span class="safety-note-idx">#{{ i + 1 }}</span>
+                      <span class="safety-note-cat">[{{ n.category }}]</span>
+                      <span class="safety-note-orig">{{ n.original }}</span>
+                      <span class="safety-note-arrow">→</span>
+                      <span class="safety-note-repl">{{ n.replacement }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="safety-empty">
+                    本镜头 prompt 未命中商标 / 版权 / 名人敏感词，无需改写。
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1111,6 +1143,18 @@
                         :title="`事件密度：${eventDensity(sb)} (${eventCount(sb)} 个独立事件)`"
                       >
                         {{ eventCount(sb) }}
+                      </span>
+                      <span
+                        v-if="safetyFlagged(sb)"
+                        class="safety-warn-icon"
+                        :title="`安全检查：检测到 ${safetyNotes(sb).length} 处可能涉及商标/版权/名人，已自动改写`"
+                        @click.stop="selectedSb = sb"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                          <line x1="12" y1="9" x2="12" y2="13"/>
+                          <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
                       </span>
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
@@ -2644,6 +2688,28 @@ function eventCount(sb) {
 // Tone tag for UI colour mapping (mirrors backend classifyEventDensity).
 function eventDensityTone(d) {
   return d === 'high' ? 'bad' : d === 'medium' ? 'warn' : 'good'
+}
+
+// ── IP Safety helpers ──────────────────────────────────────────────
+// True if backend flagged this storyboard's prompt for IP / celebrity /
+// brand rewriting during pre-flight safety check.
+function safetyFlagged(sb) {
+  const v = sb?.safety_flagged ?? sb?.safetyFlagged
+  return v === 1 || v === true
+}
+
+// Parse the JSON safety_notes (or [] if missing / invalid).
+function safetyNotes(sb) {
+  const raw = sb?.safety_notes ?? sb?.safetyNotes
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw
+  try { return JSON.parse(raw) } catch { return [] }
+}
+
+// Original prompt text (before safety rewrite), empty string if none.
+function safetyOriginal(sb) {
+  const v = sb?.prompt_original ?? sb?.promptOriginal
+  return v || ''
 }
 
 // Score → tone (success / warn / danger) for color treatment in UI
@@ -4220,6 +4286,123 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-1);
+}
+
+/* IP safety — frame-row warn icon + detail-panel diff/list */
+.safety-warn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(184, 122, 18, 0.14);
+  color: #8d5a05;
+  border: 1px solid rgba(184, 122, 18, 0.28);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.safety-warn-icon:hover { transform: translateY(-1px); }
+
+.safety-flag-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(184, 122, 18, 0.14);
+  color: #8d5a05;
+  border: 1px solid rgba(184, 122, 18, 0.28);
+  margin-left: auto;
+}
+.safety-flag-clean {
+  background: rgba(36, 125, 72, 0.10);
+  color: #1f6f3f;
+  border-color: rgba(36, 125, 72, 0.20);
+}
+
+.safety-diff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.safety-diff-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.safety-diff-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.safety-diff-text {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(27, 41, 64, 0.04);
+  border: 1px solid rgba(27, 41, 64, 0.10);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.safety-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.safety-note-row {
+  display: grid;
+  grid-template-columns: 36px 80px minmax(0, 1fr) 16px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(184, 122, 18, 0.06);
+  align-items: baseline;
+  font-size: 12px;
+}
+.safety-note-idx {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.safety-note-cat {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #8d5a05;
+}
+.safety-note-orig {
+  color: var(--text-2);
+  text-decoration: line-through;
+  word-break: break-word;
+}
+.safety-note-arrow {
+  color: var(--text-3);
+  text-align: center;
+}
+.safety-note-repl {
+  color: var(--text-1);
+  word-break: break-word;
+}
+
+.safety-empty {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(36, 125, 72, 0.04);
+  border: 1px dashed rgba(36, 125, 72, 0.22);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* Frame-row intention badge — small chip showing the dramatic function */

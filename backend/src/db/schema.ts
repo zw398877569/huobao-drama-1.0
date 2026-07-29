@@ -141,6 +141,13 @@ export const storyboards = sqliteTable('storyboards', {
   // 1-2 = low, 3-4 = medium, 5+ = high (consider splitting into multiple shots)
   eventDensity: text('event_density').default('low'),
   eventList: text('event_list'), // JSON array of detected event descriptions
+  // P2 IP-safe 改写: pre-flight rewrite of IP / celebrity / brand references
+  // before the prompt is sent to the image / video provider. promptOriginal
+  // keeps the user's literal text for diff display; safetyNotes is a JSON
+  // array describing each rewrite.
+  promptOriginal: text('prompt_original'),
+  safetyFlagged: integer('safety_flagged').default(0),
+  safetyNotes: text('safety_notes'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

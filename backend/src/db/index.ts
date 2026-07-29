@@ -375,6 +375,11 @@ ensureColumn('storyboards', 'retake_variable', 'TEXT')
 ensureColumn('storyboards', 'event_density', "TEXT DEFAULT 'low'")
 ensureColumn('storyboards', 'event_list', 'TEXT')
 
+// P2 IP-safe 改写: original prompt + flag + rewrite notes
+ensureColumn('storyboards', 'prompt_original', 'TEXT')
+ensureColumn('storyboards', 'safety_flagged', "INTEGER DEFAULT 0")
+ensureColumn('storyboards', 'safety_notes', 'TEXT')
+
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db
