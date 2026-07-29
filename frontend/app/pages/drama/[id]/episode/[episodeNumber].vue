@@ -1565,7 +1565,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
