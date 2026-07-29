@@ -137,6 +137,10 @@ export const storyboards = sqliteTable('storyboards', {
   evaluatedAt: text('evaluated_at'),
   retakeCount: integer('retake_count').default(0),
   retakeVariable: text('retake_variable'),
+  // P2 Event Density Firewall: number of independent events detected in video_prompt
+  // 1-2 = low, 3-4 = medium, 5+ = high (consider splitting into multiple shots)
+  eventDensity: text('event_density').default('low'),
+  eventList: text('event_list'), // JSON array of detected event descriptions
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

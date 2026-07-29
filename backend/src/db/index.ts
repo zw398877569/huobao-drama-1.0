@@ -371,6 +371,10 @@ ensureColumn('storyboards', 'evaluated_at', 'TEXT')
 ensureColumn('storyboards', 'retake_count', 'INTEGER DEFAULT 0')
 ensureColumn('storyboards', 'retake_variable', 'TEXT')
 
+// P2 Event Density Firewall: density classification + detected events list
+ensureColumn('storyboards', 'event_density', "TEXT DEFAULT 'low'")
+ensureColumn('storyboards', 'event_list', 'TEXT')
+
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db

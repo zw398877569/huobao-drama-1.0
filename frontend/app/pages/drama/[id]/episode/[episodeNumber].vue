@@ -780,6 +780,35 @@
                     该镜头尚未评估。点击右上角「AI 评估」按 prompt 契合度、画面质量、运镜自然度、意图一致性 4 维打分。
                   </div>
                 </div>
+
+                <!-- 事件密度 -->
+                <div class="detail-section">
+                  <div class="detail-section-head">
+                    <span class="detail-section-title">事件密度</span>
+                    <span class="detail-section-copy">一镜只做一件事 — 检测 video_prompt 里塞了几个独立事件</span>
+                    <span :class="['density-tag', 'tone-' + eventDensityTone(eventDensity(selectedSb))]" style="margin-left:auto">
+                      {{ eventDensity(selectedSb) === 'high' ? '高' : eventDensity(selectedSb) === 'medium' ? '中' : '低' }}
+                      <span class="density-tag-count">{{ eventCount(selectedSb) }}</span>
+                    </span>
+                  </div>
+                  <div v-if="eventCount(selectedSb) > 0" class="density-events">
+                    <div v-for="(ev, i) in eventList(selectedSb)" :key="i" class="density-event-row">
+                      <span class="density-event-idx">#{{ i + 1 }}</span>
+                      <span class="density-event-text">{{ ev }}</span>
+                    </div>
+                  </div>
+                  <div v-else class="density-empty">
+                    镜头 video_prompt 内未检测到独立事件（属于低密度，正常）。
+                  </div>
+                  <div v-if="eventDensity(selectedSb) === 'high'" class="density-warn">
+                    <span class="density-warn-label">建议</span>
+                    <div class="density-warn-text">高密度镜头容易让模型生成画面混乱。考虑拆分到 2-3 个分镜，每个 1-2 个事件。</div>
+                  </div>
+                  <div v-else-if="eventDensity(selectedSb) === 'medium'" class="density-warn tone-warn">
+                    <span class="density-warn-label">提示</span>
+                    <div class="density-warn-text">中密度可以接受，但建议合并部分动作或运镜，让镜头节奏更紧凑。</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1076,6 +1105,13 @@
                         <svg v-else width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5 12 2"/></svg>
                         {{ evaluatingId === sb.id ? '评估中' : '评估' }}
                       </button>
+                      <span
+                        v-if="eventCount(sb) > 0"
+                        :class="['density-dot', 'tone-' + eventDensityTone(eventDensity(sb))]"
+                        :title="`事件密度：${eventDensity(sb)} (${eventCount(sb)} 个独立事件)`"
+                      >
+                        {{ eventCount(sb) }}
+                      </span>
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
@@ -2585,6 +2621,31 @@ function evalAverage(sb) {
   return values.reduce((a, b) => a + b, 0) / values.length
 }
 
+// ── Event Density helpers ──────────────────────────────────────────
+// Read event_density field, defaulting to 'low' if missing/empty.
+function eventDensity(sb) {
+  const v = sb?.event_density ?? sb?.eventDensity
+  return v === 'medium' || v === 'high' ? v : 'low'
+}
+
+// Parse the JSON event_list (or [] if missing/invalid).
+function eventList(sb) {
+  const raw = sb?.event_list ?? sb?.eventList
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw
+  try { return JSON.parse(raw) } catch { return [] }
+}
+
+// Count of detected events (length of the list).
+function eventCount(sb) {
+  return eventList(sb).length
+}
+
+// Tone tag for UI colour mapping (mirrors backend classifyEventDensity).
+function eventDensityTone(d) {
+  return d === 'high' ? 'bad' : d === 'medium' ? 'warn' : 'good'
+}
+
 // Score → tone (success / warn / danger) for color treatment in UI
 function evalTone(score) {
   if (score == null) return 'neutral'
@@ -4048,6 +4109,117 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   color: var(--text-2);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* Event density — frame-row dot + detail-panel list */
+.density-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: help;
+  border: 1px solid transparent;
+}
+.density-dot.tone-good { background: rgba(36, 125, 72, 0.12); color: #1f6f3f; border-color: rgba(36, 125, 72, 0.22); }
+.density-dot.tone-warn { background: rgba(184, 122, 18, 0.18); color: #8d5a05; border-color: rgba(184, 122, 18, 0.32); }
+.density-dot.tone-bad  { background: rgba(176, 32, 32, 0.14); color: #9c1c1c; border-color: rgba(176, 32, 32, 0.28); }
+
+.density-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.density-tag-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 4px;
+  height: 16px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.density-tag.tone-good { background: rgba(36, 125, 72, 0.12); color: #1f6f3f; border-color: rgba(36, 125, 72, 0.22); }
+.density-tag.tone-warn { background: rgba(184, 122, 18, 0.16); color: #8d5a05; border-color: rgba(184, 122, 18, 0.32); }
+.density-tag.tone-bad  { background: rgba(176, 32, 32, 0.14); color: #9c1c1c; border-color: rgba(176, 32, 32, 0.28); }
+
+.density-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.density-event-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(27, 41, 64, 0.04);
+  align-items: baseline;
+}
+.density-event-idx {
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text-3);
+}
+.density-event-text {
+  font-size: 12px;
+  color: var(--text-1);
+  line-height: 1.5;
+}
+.density-empty {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(27, 41, 64, 0.04);
+  border: 1px dashed rgba(27, 41, 64, 0.14);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.density-warn {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(176, 32, 32, 0.06);
+  border: 1px solid rgba(176, 32, 32, 0.22);
+}
+.density-warn.tone-warn {
+  background: rgba(184, 122, 18, 0.06);
+  border-color: rgba(184, 122, 18, 0.22);
+}
+.density-warn-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9c1c1c;
+  margin-bottom: 4px;
+}
+.density-warn.tone-warn .density-warn-label {
+  color: #8d5a05;
+}
+.density-warn-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-1);
 }
 
 /* Frame-row intention badge — small chip showing the dramatic function */

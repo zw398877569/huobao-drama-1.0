@@ -12,6 +12,7 @@ import { getPresetByStyle } from '../../services/negative-prompt-presets'
 // Import scene intention analysis function and templates
 import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
+import { validateEventDensity } from '../../services/prompt-validation'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -260,8 +261,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
 
       let totalDuration = 0
+      const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
       for (const sb of storyboards) {
         validateStoryboardBindings(episodeId, sb.scene_id, sb.character_ids)
+        const cleanedVideo = applyQualityChecklist(sb.video_prompt, 'video').cleaned
+        const densityResult = validateEventDensity(cleanedVideo)
         const res = db.insert(schema.storyboards).values({
           episodeId,
           storyboardNumber: sb.shot_number,
@@ -272,15 +276,25 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           description: sb.description, result: sb.result,
           atmosphere: sb.atmosphere,
           imagePrompt: applyQualityChecklist(sb.image_prompt, 'image').cleaned,
-          videoPrompt: applyQualityChecklist(sb.video_prompt, 'video').cleaned,
+          videoPrompt: cleanedVideo,
           bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
           negativePrompt: sb.negative_prompt || autoNegativePrompt,
+          eventDensity: densityResult.density,
+          eventList: densityResult.events.length ? JSON.stringify(densityResult.events) : '',
           createdAt: ts, updatedAt: ts,
         }).run()
         syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])
         totalDuration += sb.duration || 10
+        if (densityResult.suggestion) {
+          densityWarnings.push({
+            shot_number: sb.shot_number,
+            density: densityResult.density,
+            suggestion: densityResult.suggestion,
+            events: densityResult.events,
+          })
+        }
       }
 
       db.update(schema.episodes)
@@ -291,8 +305,14 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         episodeId,
         count: storyboards.length,
         totalDuration,
+        densityWarnings: densityWarnings.length,
       })
-      return { message: `Saved ${storyboards.length} storyboards`, count: storyboards.length, total_duration: totalDuration }
+      return {
+        message: `Saved ${storyboards.length} storyboards`,
+        count: storyboards.length,
+        total_duration: totalDuration,
+        density_warnings: densityWarnings,
+      }
     },
   })
 
@@ -350,7 +370,13 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('result' in fields) updates.result = fields.result
       if ('atmosphere' in fields) updates.atmosphere = fields.atmosphere
       if ('image_prompt' in fields) updates.imagePrompt = applyQualityChecklist(fields.image_prompt, 'image').cleaned
-      if ('video_prompt' in fields) updates.videoPrompt = applyQualityChecklist(fields.video_prompt, 'video').cleaned
+      if ('video_prompt' in fields) {
+        const cleanedVideo = applyQualityChecklist(fields.video_prompt, 'video').cleaned
+        const densityResult = validateEventDensity(cleanedVideo)
+        updates.videoPrompt = cleanedVideo
+        updates.eventDensity = densityResult.density
+        updates.eventList = densityResult.events.length ? JSON.stringify(densityResult.events) : ''
+      }
       if ('bgm_prompt' in fields) updates.bgmPrompt = fields.bgm_prompt
       if ('sound_effect' in fields) updates.soundEffect = fields.sound_effect
       if ('description' in fields) updates.description = fields.description
