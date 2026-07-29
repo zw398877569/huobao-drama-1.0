@@ -1627,6 +1627,68 @@
         </button>
       </div>
 
+        <!-- 单变量重拍 modal -->
+        <div v-if="retakeDialog" class="overlay" @click.self="closeRetakeDialog">
+          <div class="card retake-dialog">
+            <div class="retake-dialog-head">
+              <div class="retake-dialog-title">单变量重拍</div>
+              <button class="btn btn-ghost btn-icon" @click="closeRetakeDialog">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div class="retake-dialog-body">
+              <div v-if="retakeTargetSb" class="retake-dialog-target">
+                <div class="retake-dialog-target-title">
+                  镜头 #{{ sbs.indexOf(retakeTargetSb) + 1 }} · {{ retakeTargetSb.title || '(无标题)' }}
+                </div>
+                <div class="retake-dialog-target-meta">
+                  已重拍 {{ retakeCount(retakeTargetSb) }} / {{ RETAKE_UI_SOFT_CAP }} 次
+                  · 预估成本 ¥{{ retakeCostCNY(retakeTargetSb.duration || 10) }} / 次
+                </div>
+              </div>
+              <div class="retake-dim-list">
+                <div class="retake-dim-label">选择要改进的维度（只改这一个，其他不变）</div>
+                <div class="retake-dim-grid">
+                  <button
+                    v-for="dim in RETAKE_DIMENSIONS"
+                    :key="dim.key"
+                    type="button"
+                    :class="['retake-dim-pill', { active: retakeDimension === dim.key }]"
+                    @click="retakeDimension = dim.key"
+                  >
+                    <span class="retake-dim-key">{{ dim.label }}</span>
+                    <span class="retake-dim-hint">{{ dim.hint }}</span>
+                  </button>
+                </div>
+              </div>
+              <label class="field" style="margin-top:8px">
+                <span class="field-label">具体反馈（可选）</span>
+                <textarea
+                  v-model="retakeUserNote"
+                  class="textarea"
+                  rows="3"
+                  placeholder="例如：把暖色调压一点；让头发不要挡住脸；增加前景层次"
+                />
+              </label>
+              <div class="retake-dialog-warn">
+                <strong>提示：</strong>单变量重拍会在 LLM 端强制只调整选定维度；如果改动过大（丢失关键地点 / 人物 / 戏剧意图），系统会自动拒绝并提示你重试。
+              </div>
+            </div>
+            <div class="retake-dialog-foot">
+              <button class="btn" @click="closeRetakeDialog" :disabled="retakingId !== null">取消</button>
+              <button
+                class="btn btn-primary"
+                :disabled="retakingId !== null || !retakeDimension"
+                @click="submitRetake"
+              >
+                <Loader2 v-if="retakingId !== null" :size="11" class="animate-spin" />
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                {{ retakingId !== null ? '重拍中…' : '开始重拍' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
       <div v-if="imageViewer.open && imageViewer.src" class="overlay image-viewer-overlay" @click.self="closeImageViewer">
         <div class="card image-viewer-dialog">
           <div class="image-viewer-head">
@@ -1680,6 +1742,14 @@ const analyzingIntentionId = ref<number | null>(null)
 
 // Tracks which storyboard currently has an in-flight quality evaluation
 const evaluatingId = ref<number | null>(null)
+
+// Tracks which storyboard currently has an in-flight single-variable retake
+const retakingId = ref<number | null>(null)
+// Retake modal state
+const retakeDialog = ref(false)
+const retakeTargetSb = ref<any>(null)
+const retakeDimension = ref('prompt')
+const retakeUserNote = ref('')
 
 const scriptStep = ref(0)
 const prodTab = ref('chars')
@@ -2712,6 +2782,47 @@ function safetyOriginal(sb) {
   return v || ''
 }
 
+// ── Retake helpers ────────────────────────────────────────────────
+// UI-facing soft cap (the backend hard limit is 10).
+const RETAKE_UI_SOFT_CAP = 3
+// Approximate per-shot cost in CNY. Mirrors estimateRetakeCostCNY in
+// backend/src/services/retake.ts. Override via HUOBAO_RETAKE_COST_CNY
+// env var (configurable on the backend; we just pick a sensible
+// default for the UI).
+const RETAKE_COST_CNY_PER_SHOT = 2.0
+
+const RETAKE_DIMENSIONS = [
+  { key: 'prompt',     label: '提示词契合度', hint: '让描述更贴合 intended 画面' },
+  { key: 'visual',     label: '画面质量',     hint: '提升构图 / 锐度 / 光线措辞' },
+  { key: 'motion',     label: '运镜自然度',   hint: '调整运镜 / 节奏描述' },
+  { key: 'continuity', label: '意图一致性',   hint: '对齐戏剧功能 / 视觉策略' },
+]
+
+function retakeCount(sb) {
+  const v = sb?.retake_count ?? sb?.retakeCount
+  return typeof v === 'number' ? v : 0
+}
+
+function retakeVariable(sb) {
+  return sb?.retake_variable ?? sb?.retakeVariable ?? ''
+}
+
+function retakeAtCap(sb) {
+  return retakeCount(sb) >= RETAKE_UI_SOFT_CAP
+}
+
+function retakeDimLabel(key) {
+  const d = RETAKE_DIMENSIONS.find((x) => x.key === key)
+  return d ? d.label : key || ''
+}
+
+// Estimate cost in CNY for a single retake given shot duration.
+function retakeCostCNY(durationSec) {
+  const dur = durationSec || 10
+  const videoFactor = Math.max(1, dur / 10)
+  return Number((RETAKE_COST_CNY_PER_SHOT * (0.2 + 0.8 * videoFactor)).toFixed(2))
+}
+
 // Score → tone (success / warn / danger) for color treatment in UI
 function evalTone(score) {
   if (score == null) return 'neutral'
@@ -2741,6 +2852,55 @@ async function evaluateStoryboard(sb) {
     toast.error(e?.message || '评估失败')
   } finally {
     evaluatingId.value = null
+  }
+}
+
+// Open the retake modal pre-filled with the selected storyboard
+function openRetakeDialog(sb) {
+  if (!sb?.id) return
+  if (retakeAtCap(sb)) {
+    toast.error(`已达 UI 提示上限（${RETAKE_UI_SOFT_CAP} 次）。请直接修改镜头结构。`)
+    return
+  }
+  retakeTargetSb.value = sb
+  retakeDimension.value = 'prompt' // sensible default
+  retakeUserNote.value = ''
+  retakeDialog.value = true
+}
+
+function closeRetakeDialog() {
+  retakeDialog.value = false
+  retakeTargetSb.value = null
+}
+
+// Submit the retake. Backend enforces dimension validity, soft cap (3),
+// and single-variable validation. The returned prompts overwrite the
+// local sb; retake_count and retake_variable update reactively.
+async function submitRetake() {
+  const sb = retakeTargetSb.value
+  if (!sb?.id || retakingId.value === sb.id) return
+  retakingId.value = sb.id
+  try {
+    const res: any = await storyboardAPI.retake(sb.id, {
+      dimension: retakeDimension.value,
+      user_note: retakeUserNote.value.trim(),
+    })
+    // Apply returned fields back onto the local sb
+    sb.image_prompt = res?.image_prompt ?? sb.image_prompt
+    sb.imagePrompt = res?.image_prompt ?? sb.imagePrompt
+    sb.video_prompt = res?.video_prompt ?? sb.video_prompt
+    sb.videoPrompt = res?.video_prompt ?? sb.videoPrompt
+    sb.retake_count = res?.retake_count ?? (retakeCount(sb) + 1)
+    sb.retakeCount = sb.retake_count
+    sb.retake_variable = res?.retake_variable ?? retakeDimension.value
+    sb.retakeVariable = sb.retake_variable
+    const summary = res?.change_summary ? ` · ${res.change_summary}` : ''
+    toast.success(`重拍完成（第 ${sb.retake_count} 次）${summary}`)
+    closeRetakeDialog()
+  } catch (e: any) {
+    toast.error(e?.message || '重拍失败')
+  } finally {
+    retakingId.value = null
   }
 }
 
@@ -4404,6 +4564,192 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* ── Retake — frame-row chip + eval cost row + dialog ─────────── */
+.retake-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  background: rgba(29, 77, 176, 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(29, 77, 176, 0.22);
+  white-space: nowrap;
+}
+.retake-chip.tone-bad {
+  background: rgba(176, 32, 32, 0.14);
+  color: #9c1c1c;
+  border-color: rgba(176, 32, 32, 0.32);
+}
+
+.retake-cost-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(27, 41, 64, 0.10);
+  margin-top: 2px;
+}
+.retake-cost-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(29, 77, 176, 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(29, 77, 176, 0.22);
+}
+.retake-cost-pill.tone-bad {
+  background: rgba(176, 32, 32, 0.14);
+  color: #9c1c1c;
+  border-color: rgba(176, 32, 32, 0.32);
+}
+.retake-var-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(27, 41, 64, 0.06);
+  color: var(--text-2);
+  border: 1px solid rgba(27, 41, 64, 0.10);
+}
+.retake-cost-amt {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.btn-disabled,
+.btn:disabled.btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.retake-dialog {
+  width: min(560px, calc(100vw - 32px));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 255, 0.92));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  max-height: calc(100vh - 64px);
+  animation: scaleIn 0.2s var(--ease-out);
+}
+.retake-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(27, 41, 64, 0.08);
+}
+.retake-dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--text-0);
+}
+.retake-dialog-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.retake-dialog-target {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(29, 77, 176, 0.04);
+  border: 1px solid rgba(29, 77, 176, 0.14);
+}
+.retake-dialog-target-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-0);
+  margin-bottom: 4px;
+}
+.retake-dialog-target-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+.retake-dim-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.retake-dim-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.retake-dim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.retake-dim-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(27, 41, 64, 0.12);
+  background: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 2px;
+}
+.retake-dim-pill:hover {
+  border-color: rgba(29, 77, 176, 0.28);
+  background: rgba(29, 77, 176, 0.04);
+}
+.retake-dim-pill.active {
+  border-color: rgba(29, 77, 176, 0.5);
+  background: linear-gradient(135deg, rgba(29, 77, 176, 0.10), rgba(33, 88, 255, 0.18));
+  box-shadow: 0 4px 12px rgba(29, 77, 176, 0.10);
+}
+.retake-dim-key {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+.retake-dim-hint {
+  font-size: 10.5px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.retake-dialog-warn {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(184, 122, 18, 0.06);
+  border: 1px solid rgba(184, 122, 18, 0.22);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-1);
+}
+.retake-dialog-warn strong { color: #8d5a05; }
+.retake-dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid rgba(27, 41, 64, 0.08);
+  background: rgba(248, 251, 255, 0.6);
+}
+.retake-dialog-foot .btn-primary { margin-left: auto; }
 
 /* Frame-row intention badge — small chip showing the dramatic function */
 .intention-badge {

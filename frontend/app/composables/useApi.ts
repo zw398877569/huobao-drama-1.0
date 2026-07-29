@@ -58,6 +58,7 @@ export const storyboardAPI = {
   generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
   evaluate: (id: number) => api.post(`/storyboards/${id}/evaluate`),
+  retake: (id: number, body: { dimension: string; user_note?: string }) => api.post(`/storyboards/${id}/retake`, body),
   del: (id: number) => api.del(`/storyboards/${id}`),
 }
 

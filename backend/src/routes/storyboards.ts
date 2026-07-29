@@ -8,6 +8,7 @@ import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
 import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
+import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
 
 const app = new Hono()
 
@@ -303,6 +304,45 @@ app.post('/:id/evaluate', async (c) => {
     })
   } catch (e: any) {
     return badRequest(c, e?.message || '评估失败')
+  }
+})
+
+// POST /storyboards/:id/retake
+// Single-variable retake: regenerate image/video prompts while only
+// adjusting the user-selected dimension. Enforces the attempt budget.
+app.post('/:id/retake', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json()
+  const dimension = String(body?.dimension || '')
+  const userNote = String(body?.user_note || body?.userNote || '')
+
+  if (!RETAKE_DIMENSIONS[dimension as keyof typeof RETAKE_DIMENSIONS]) {
+    return badRequest(c, `未知重拍维度：${dimension}。可选：${Object.keys(RETAKE_DIMENSIONS).join(', ')}`)
+  }
+
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+
+  // Soft UI-facing cap before service-level hard cap
+  const currentCount = sb.retakeCount || 0
+  if (currentCount >= 3) {
+    return badRequest(c, `已达 UI 提示上限（3 次）。当前 ${currentCount}。继续请修改镜头结构。`)
+  }
+
+  try {
+    const result = await retakeStoryboard(id, dimension as keyof typeof RETAKE_DIMENSIONS, userNote)
+    const cost = estimateRetakeCostCNY(sb.duration || 10)
+    return success(c, {
+      image_prompt: result.image_prompt,
+      video_prompt: result.video_prompt,
+      change_summary: result.change_summary,
+      retake_count: result.retake_count,
+      retake_variable: dimension,
+      estimated_cost_cny: cost,
+      retake_hard_limit: RETAKE_HARD_LIMIT,
+    })
+  } catch (e: any) {
+    return badRequest(c, e?.message || '重拍失败')
   }
 })
 
