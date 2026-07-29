@@ -148,6 +148,14 @@ export const storyboards = sqliteTable('storyboards', {
   promptOriginal: text('prompt_original'),
   safetyFlagged: integer('safety_flagged').default(0),
   safetyNotes: text('safety_notes'),
+  // P1 状态门控: vision LLM description of the generated video's actual
+  // final frame (or any chosen time). Populated by the "video generation
+  // post-analysis" step which uses services/ffmpeg-frame.ts to extract
+  // the last frame, then services/observation.ts (TODO) to ask the
+  // vision LLM what it shows. Used by the next shot's prompt generator
+  // to chain off the actual end state.
+  observedFinalState: text('observed_final_state'),
+  observedFinalStateAt: text('observed_final_state_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

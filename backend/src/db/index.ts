@@ -380,6 +380,10 @@ ensureColumn('storyboards', 'prompt_original', 'TEXT')
 ensureColumn('storyboards', 'safety_flagged', "INTEGER DEFAULT 0")
 ensureColumn('storyboards', 'safety_notes', 'TEXT')
 
+// P1 状态门控: vision LLM description of the actual final frame
+ensureColumn('storyboards', 'observed_final_state', 'TEXT')
+ensureColumn('storyboards', 'observed_final_state_at', 'TEXT')
+
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db
