@@ -24,6 +24,31 @@ skills/    — Agent SKILL.md definitions
 ### Frontend (`frontend/`)
 - `npm run dev` — Vite dev server (port 3013, proxies /api to 5679)
 - `npm run build` — Production build
+- `npm run generate` — Nuxt static-site generation (used by Docker `frontend-build` stage; run this locally to catch SFC / template / type errors before committing)
+
+## Workflow
+
+When the user asks to commit / push code, follow this order:
+
+1. Make the edits in the working tree.
+2. **Verify locally before staging anything:**
+   - For backend changes: `cd backend && npm run typecheck`.
+   - For frontend changes: `cd frontend && npm run generate` — this is
+     the exact command Docker runs in the `frontend-build` stage, so a
+     green run locally means the container build will also pass. If
+     `tsc --noEmit` and superficial regex checks pass but this fails,
+     fix the failure before continuing (a 2026-07-28 incident shipped
+     a `<script setup>` block with TypeScript annotations but no
+     `lang="ts"`, which only surfaced during the Nuxt production
+     build).
+   - For cross-stack changes: run both.
+3. `git add` only the files the user asked to commit; do not lump in
+   unrelated package-lock churn or untracked scratch files.
+4. Commit with a focused message and push to `origin/master`.
+
+Never commit code that hasn't been verified to build. If a verification
+command cannot run (sandbox limits, missing network, etc.), say so
+explicitly rather than skipping the step.
 
 ## Architecture
 
