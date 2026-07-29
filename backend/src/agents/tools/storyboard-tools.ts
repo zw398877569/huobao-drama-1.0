@@ -11,6 +11,7 @@ import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
 import { getPresetByStyle } from '../../services/negative-prompt-presets'
 // Import scene intention analysis function and templates
 import { analyzeSceneIntentionForScene } from '../scene-intention'
+import { applyQualityChecklist } from '../../services/prompt-quality'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -269,8 +270,10 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           location: sb.location, time: sb.time,
           action: sb.action, dialogue: sb.dialogue,
           description: sb.description, result: sb.result,
-          atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
+          atmosphere: sb.atmosphere,
+          imagePrompt: applyQualityChecklist(sb.image_prompt, 'image').cleaned,
+          videoPrompt: applyQualityChecklist(sb.video_prompt, 'video').cleaned,
+          bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
           sceneId: sb.scene_id, duration: sb.duration || 10,
           negativePrompt: sb.negative_prompt || autoNegativePrompt,
@@ -346,8 +349,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('action' in fields) updates.action = fields.action
       if ('result' in fields) updates.result = fields.result
       if ('atmosphere' in fields) updates.atmosphere = fields.atmosphere
-      if ('image_prompt' in fields) updates.imagePrompt = fields.image_prompt
-      if ('video_prompt' in fields) updates.videoPrompt = fields.video_prompt
+      if ('image_prompt' in fields) updates.imagePrompt = applyQualityChecklist(fields.image_prompt, 'image').cleaned
+      if ('video_prompt' in fields) updates.videoPrompt = applyQualityChecklist(fields.video_prompt, 'video').cleaned
       if ('bgm_prompt' in fields) updates.bgmPrompt = fields.bgm_prompt
       if ('sound_effect' in fields) updates.soundEffect = fields.sound_effect
       if ('description' in fields) updates.description = fields.description
