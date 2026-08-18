@@ -15,6 +15,7 @@ import { AliImageAdapter } from './ali-image'
 import { AliVideoAdapter } from './ali-video'
 import { AgnesImageAdapter } from './agnes-image'
 import { AgnesVideoAdapter } from './agnes-video'
+import { AutoDLComfyUIWorkflowAdapter } from './autodl-comfyui-workflow'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
 // 图片 Adapter 注册表
@@ -36,6 +37,7 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
   vidu: new ViduVideoAdapter(),
   ali: new AliVideoAdapter(),
   agnes: new AgnesVideoAdapter(),
+  'autodl-comfyui': new AutoDLComfyUIWorkflowAdapter(),
   // Chatfire 视频 - 待确认 API 格式
 }
 
