@@ -421,7 +421,7 @@ const cfgTestResult = ref(null)
 const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0 })
 const huobaoForm = reactive({ apiKey: '' })
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
-const providers = ['agnes', 'ali', 'chatfire', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine']
+const providers = ['autodl-comfyui', 'agnes', 'ali', 'chatfire', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine']
 const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
 const serviceMeta = {
   text: { label: '文本', desc: '剧本改写、角色场景提取、分镜拆解等 Agent 文本能力' },
@@ -446,6 +446,7 @@ const providerPresets = {
     vidu: { label: 'Vidu 推荐', baseUrl: 'https://api.vidu.com', models: ['viduq3-turbo'] },
     ali: { label: '阿里推荐', baseUrl: 'https://dashscope.aliyuncs.com', models: ['wan2.6-i2v-flash'] },
     agnes: { label: 'Agnes 推荐', baseUrl: 'https://apihub.agnes-ai.com', models: ['agnes-video-v2.0'] },
+    'autodl-comfyui': { label: 'AutoDL H3 推荐', baseUrl: 'https://autodl.art/api/v1', models: ['minimax_h3_lightx2v_no_pic'] },
   },
   audio: {
     minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
@@ -467,6 +468,7 @@ const endpointPrefixes = {
   ali: '/api/v1',
   vidu: '/ent/v2',
   agnes: '/v1',
+  'autodl-comfyui': '/api/v1',
 }
 
 const endpointHint = computed(() => {
