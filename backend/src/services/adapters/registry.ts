@@ -16,6 +16,7 @@ import { AliVideoAdapter } from './ali-video'
 import { AgnesImageAdapter } from './agnes-image'
 import { AgnesVideoAdapter } from './agnes-video'
 import { AutoDLComfyUIWorkflowAdapter } from './autodl-comfyui-workflow'
+import { NanoBananaImageAdapter } from './nano-banana-image'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
 // 图片 Adapter 注册表
@@ -26,6 +27,7 @@ export const imageAdapters: Record<string, ImageProviderAdapter> = {
   volcengine: new VolcEngineImageAdapter(),
   ali: new AliImageAdapter(),
   agnes: new AgnesImageAdapter(),
+  'nano-banana': new NanoBananaImageAdapter(),
   // Chatfire - 待确认 API 格式，暂用 OpenAI
   chatfire: new OpenAIImageAdapter(),
 }
