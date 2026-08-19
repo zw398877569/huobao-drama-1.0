@@ -21,6 +21,12 @@
  * - 输出: URL(2 小时有效),不支持 base64
  * - aspectRatio: 从 record.size 推断
  * - imageSize: 默认 "1K",由 model 决定支持上限
+ *
+ * ⚠️ buildPollRequest 签名陷阱:ImageProviderAdapter interface 声明
+ * `buildPollRequest(config, videoId, taskId?)`,但 image-generation.ts
+ * 实际只传 2 个参数 `(config, taskId)`,把 taskId 当作 videoId 位置传入。
+ * 跟随其他 image adapter (ali / volcengine) 写法,只用 2 个参数,
+ * 第二个参数就是 taskId。
  */
 import type {
   ImageProviderAdapter,
@@ -94,7 +100,8 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
     )
   }
 
-  buildPollRequest(config: AIConfig, _videoId: string, taskId?: string): ProviderRequest {
+  // ⚠️ 见顶部 doc — 2 参数 (config, taskId),不是 interface 写的 3 参数
+  buildPollRequest(config: AIConfig, taskId: string): ProviderRequest {
     if (!taskId) {
       throw new Error('Nano Banana: taskId required for polling')
     }
@@ -167,7 +174,7 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
       ['21:9', 21 / 9],
     ]
 
-    // tolerance 0 0.05 足以覆盖常见舍入
+    // tolerance 0.05 足以覆盖常见舍入
     for (const [name, value] of presets) {
       if (Math.abs(ratio - value) < 0.05) return name
     }
