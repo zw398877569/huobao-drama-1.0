@@ -361,6 +361,9 @@ ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
+// P0 Scene Intention: derived from scene_intention agent
+ensureColumn('storyboards', 'scene_intention', 'TEXT')
+
 // P1 Take Triage: quality evaluation + retake bookkeeping
 ensureColumn('storyboards', 'eval_score_prompt', 'REAL')
 ensureColumn('storyboards', 'eval_score_visual', 'REAL')
