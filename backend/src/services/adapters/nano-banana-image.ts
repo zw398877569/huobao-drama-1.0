@@ -1,17 +1,26 @@
 /**
- * Nano Banana 图像生成 Adapter
- * 文档: /Users/mac/Obsidian/ComfyUi/nanoBanana.md
+ * Nano Banana 图像生成 Adapter (v2 API, 2026-08-19)
+ * 文档: /Users/mac/Obsidian/ComfyUi/nanoBanana（new）.md
  * 国内直连: https://grsai.dakka.com.cn
  * 海外节点: https://grsaiapi.com
- * 端点: POST {base_url}/draw/nano-banana
- * 轮询: POST {base_url}/draw/result
+ * 端点: POST {base_url}/api/generate
+ * 轮询: GET  {base_url}/api/result?id={task_id}
+ *
+ * v2 相对 v1 的变化:
+ * - 端点 /v1/draw/nano-banana → /v1/api/generate
+ * - 端点 /v1/draw/result    → /v1/api/result (GET 而不是 POST)
+ * - 字段 urls → images(参考图,仍支持 URL 与 base64)
+ * - 新增 replyType 字段: json(同步) / stream(流式) / async(异步轮询)
+ * - 异步模式提交响应简化:{ id, status: "running" }(不再有 code/msg/data 包装)
+ * - 轮询响应同样简化(顶层就是对象,不再嵌套 data)
+ * - 新增 status 值:"violation"(违规) — 与 "failed" 同等处理
  *
  * 设计要点:
-- 鉴权: Authorization: Bearer <apiKey>
-- 异步任务: 必须传 webHook="-1" 强制轮询模式(避免 webhook 回调链路)
-- 输出: URL(2小时有效),不支持 base64
-- aspectRatio: 从 record.size 推断(nano-banana 不用像素,用比例字符串)
-- imageSize: 默认 "1K",由 model 决定支持上限(2K/4K 需选 nano-banana-2-2k-cl 等专用 model)
+ * - 鉴权: Authorization: Bearer <apiKey>
+ * - 强制 replyType="async" 走轮询(adapter 不支持 stream consumer)
+ * - 输出: URL(2 小时有效),不支持 base64
+ * - aspectRatio: 从 record.size 推断
+ * - imageSize: 默认 "1K",由 model 决定支持上限
  */
 import type {
   ImageProviderAdapter,
@@ -32,24 +41,23 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
     const body: any = {
       model: record.model || 'nano-banana-fast',
       prompt: record.prompt || '',
-      // 强制轮询模式: webHook="-1" 让端点立即返回 task_id
-      webHook: '-1',
-      shutProgress: false,
+      // 强制异步轮询模式 — adapter 不支持 stream consumer
+      replyType: 'async',
     }
 
     // aspectRatio: 像素 size → 比例字符串
     const aspectRatio = this.sizeToAspectRatio(record.size)
     if (aspectRatio) body.aspectRatio = aspectRatio
 
-    // imageSize: 默认 1K(huobao schema 暂无此字段,留 TODO 由 model 选择决定)
+    // imageSize: 默认 1K(由 model 决定支持上限)
     body.imageSize = '1K'
 
-    // 参考图(支持 URL 数组)
+    // 参考图(支持 URL 与 base64)
     if (record.referenceImages) {
       try {
         const refs = JSON.parse(record.referenceImages)
         if (Array.isArray(refs) && refs.length > 0) {
-          body.urls = refs.filter((u): u is string => typeof u === 'string' && u.length > 0)
+          body.images = refs.filter((u): u is string => typeof u === 'string' && u.length > 0)
         }
       } catch {
         // ignore parse errors
@@ -57,7 +65,7 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
     }
 
     return {
-      url: joinProviderUrl(baseUrl, '', '/draw/nano-banana'),
+      url: joinProviderUrl(baseUrl, '', '/api/generate'),
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -68,12 +76,15 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
   }
 
   parseGenerateResponse(result: any): ImageGenResponse {
-    // 异步响应: { code: 0, msg: "success", data: { id: "..." } }
-    const taskId = result?.data?.id || result?.id
-    if (taskId) {
+    // v2 异步响应(顶层):
+    //   { id: "...", status: "running" }
+    // 或成功时:
+    //   { id: "...", status: "succeeded", results: [{ url: "..." }] }
+    const taskId = result?.id
+    if (taskId && String(result?.status || '').toLowerCase() === 'running') {
       return { isAsync: true, taskId }
     }
-    // 兼容同步返回(部分 webhook 回调路径可能直接给 url)
+    // 兼容同步返回(选了 json 模式或服务端已经生成完成)
     const imageUrl = this.extractImageUrl(result)
     if (imageUrl) {
       return { isAsync: false, imageUrl }
@@ -89,30 +100,29 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
     }
     const baseUrl = config.baseUrl || 'https://grsai.dakka.com.cn/v1'
     return {
-      url: joinProviderUrl(baseUrl, '', '/draw/result'),
-      method: 'POST',
+      // GET 方法, taskId 作为 query string (非 body)
+      url: `${joinProviderUrl(baseUrl, '', '/api/result')}?id=${encodeURIComponent(taskId)}`,
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.apiKey}`,
       },
-      body: { id: taskId },
+      body: undefined,
     }
   }
 
   parsePollResponse(result: any): ImagePollResponse {
-    // 响应: { code: 0, msg: "success", data: { id, results: [{url, content}], progress, status, failure_reason, error } }
-    const data = result?.data || result || {}
-    const status = String(data?.status || '').toLowerCase()
+    // v2 轮询响应(顶层,无 data 包装):
+    //   { id, status: "running" | "succeeded" | "violation" | "failed", progress?, results?, error? }
+    const status = String(result?.status || '').toLowerCase()
 
     if (status === 'succeeded') {
       const imageUrl = this.extractImageUrl(result)
       return { status: 'completed', imageUrl: imageUrl || undefined }
     }
 
-    if (status === 'failed') {
-      const reason = data?.failure_reason || 'unknown'
-      const detail = data?.error || 'Nano Banana generation failed'
-      return { status: 'failed', error: `${reason}: ${detail}` }
+    if (status === 'failed' || status === 'violation') {
+      const detail = result?.error || `Nano Banana generation ${status}`
+      return { status: 'failed', error: detail }
     }
 
     // running / 任何中间状态都视为 processing
@@ -120,8 +130,7 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
   }
 
   extractImageUrl(result: any): string | null {
-    const data = result?.data || result || {}
-    const results = data?.results
+    const results = result?.results
     if (Array.isArray(results) && results.length > 0) {
       return results[0]?.url || null
     }
@@ -158,7 +167,7 @@ export class NanoBananaImageAdapter implements ImageProviderAdapter {
       ['21:9', 21 / 9],
     ]
 
-    // tolerance 0.05 足以覆盖常见舍入
+    // tolerance 0 0.05 足以覆盖常见舍入
     for (const [name, value] of presets) {
       if (Math.abs(ratio - value) < 0.05) return name
     }
