@@ -70,7 +70,7 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', 高质量, 正面, 白色背景'
+  const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', character reference sheet, four views layout (face closeup + full body front + side + back), T-pose, consistent character design, white background'
   const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
@@ -94,7 +94,7 @@ app.post('/batch-generate-images', async (c) => {
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
-    const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', 高质量, 正面, 白色背景'
+    const rawPrompt = char.name + ', ' + (char.appearance || char.description || '人物立绘') + ', character reference sheet, four views layout (face closeup + full body front + side + back), T-pose, consistent character design, white background'
     const prompt = await sanitizeImagePrompt(rawPrompt)
     try {
       const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
