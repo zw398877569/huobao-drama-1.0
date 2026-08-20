@@ -388,9 +388,11 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
   }
   if (record?.characterId) {
     db.update(schema.characters).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.characters.id, record.characterId)).run()
+    logTaskSuccess('ImageTask', 'character-image-synced', { id, characterId: record.characterId, localPath })
   }
   if (record?.sceneId) {
     db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
+    logTaskSuccess('ImageTask', 'scene-image-synced', { id, sceneId: record.sceneId, localPath })
   }
 }
 

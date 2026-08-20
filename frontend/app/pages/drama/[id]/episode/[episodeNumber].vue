@@ -3051,7 +3051,13 @@ function watchAsyncResult(check, attempts = 120, delay = 5000) {
     void (async () => {
       for (let i = 0; i < attempts; i++) {
         await sleep(delay)
-        await refresh()
+        // refresh 单次失败(网络抖动 / DB error)不能永久停掉轮询
+        // 之前异常被吞且外层无 catch,导致 i > 0 后永远不再 refresh
+        try {
+          await refresh()
+        } catch (err: any) {
+          console.warn('[watchAsyncResult] refresh failed at attempt', i + 1, '— will retry:', err?.message || err)
+        }
         if (check()) { resolve(); return }
       }
       resolve()
