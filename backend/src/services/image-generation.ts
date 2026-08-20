@@ -343,8 +343,15 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         }
       }
       if (pollResp.status === 'failed') {
-        logTaskError('ImageTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Generation failed' })
-        throw new Error(pollResp.error || 'Generation failed')
+        const errorMsg = pollResp.error || 'Generation failed'
+        logTaskError('ImageTask', 'poll-failed', { id, taskId, error: errorMsg })
+        // 上游明确失败:直接标记 failed + return,避免被 catch 块当网络错误重试
+        // (否则会一直 poll-retry 到 10 分钟上限,浪费上游 API 配额)
+        db.update(schema.imageGenerations)
+          .set({ status: 'failed', errorMsg, updatedAt: now() })
+          .where(eq(schema.imageGenerations.id, id))
+          .run()
+        return
       }
     } catch (err: any) {
       if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
