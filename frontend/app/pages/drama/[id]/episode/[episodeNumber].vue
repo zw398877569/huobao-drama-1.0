@@ -3046,22 +3046,52 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function watchAsyncResult(check, attempts = 120, delay = 5000) {
-  return new Promise(resolve => {
-    void (async () => {
-      for (let i = 0; i < attempts; i++) {
-        await sleep(delay)
-        // refresh 单次失败(网络抖动 / DB error)不能永久停掉轮询
-        // 之前异常被吞且外层无 catch,导致 i > 0 后永远不再 refresh
-        try {
-          await refresh()
-        } catch (err: any) {
-          console.warn('[watchAsyncResult] refresh failed at attempt', i + 1, '— will retry:', err?.message || err)
-        }
-        if (check()) { resolve(); return }
+function watchAsyncResult(check, attempts = 120, delay = 2000) {
+  // 用 setInterval 替代 sleep+loop:
+  // - 不依赖调用栈持有 IIFE,组件卸载后 interval 会被 GC 回收
+  // - 比 setTimeout 链更稳,前端框架/inactive tab 节流友好
+  // - inFlight 防重叠:如果 refresh() 耗时 > delay,skip 下一轮(避免请求堆积)
+  // - 单次 refresh 异常被 try/catch 吞,不影响后续轮询
+  let cancelled = false
+  let count = 0
+  let inFlight = false
+  let intervalId: ReturnType<typeof setInterval> | null = null
+
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId)
+        intervalId = null
       }
       resolve()
-    })()
+    }
+
+    const tick = async () => {
+      if (cancelled || count >= attempts) {
+        finish()
+        return
+      }
+      if (inFlight) return  // 上一次 refresh 还没结束,skip 避免请求堆积
+      inFlight = true
+      count++
+      try {
+        await refresh()
+      } catch (err: any) {
+        console.warn('[watchAsyncResult] refresh failed at attempt', count, '— will retry:', err?.message || err)
+      } finally {
+        inFlight = false
+      }
+      if (cancelled) {
+        finish()
+        return
+      }
+      if (check()) {
+        cancelled = true
+        finish()
+      }
+    }
+
+    intervalId = setInterval(tick, delay)
   })
 }
 
