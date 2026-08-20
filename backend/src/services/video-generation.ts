@@ -255,7 +255,7 @@ async function normalizeVideoReferenceUrl(vRecordId: number, value: string | nul
     // 本地静态文件 → 转为公网 URL 或 base64
     // STORAGE_ROOT 已包含 "static"，需要去掉路径中的 "static/" 前缀
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
-    const relativePath = localPath.startsWith('static/') ? localPath.slice(8) : localPath
+    const relativePath = localPath.startsWith('static/') ? localPath.slice(7) : localPath
     const cleanPath = relativePath.startsWith('/') ? relativePath : `/${relativePath}`
     const filePath = path.join(STORAGE_ROOT, cleanPath)
 
