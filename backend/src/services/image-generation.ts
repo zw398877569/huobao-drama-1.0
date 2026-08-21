@@ -297,8 +297,15 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   const adapter = getImageAdapter(config.provider)
   const startedAt = Date.now()
   const maxDurationMs = 600_000
+  // 指数退避轮询: 3s → 6s → 10s → 20s(封顶)。图片生成通常 5-30s 出图,
+  // 起步快一点确认任务已被上游接受,后段拉长减轻 grsai/nano-banana 压力。
+  const POLL_INTERVALS_MS = [3_000, 6_000, 10_000, 20_000]
+  function getPollIntervalMs(attempt: number): number {
+    const idx = Math.min(attempt - 1, POLL_INTERVALS_MS.length - 1)
+    return POLL_INTERVALS_MS[idx]
+  }
 
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 80; i++) {
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
       db.update(schema.imageGenerations)
@@ -307,7 +314,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         .run()
       return
     }
-    await new Promise(r => setTimeout(r, 5000))
+    await new Promise(r => setTimeout(r, getPollIntervalMs(i + 1)))
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
       db.update(schema.imageGenerations)

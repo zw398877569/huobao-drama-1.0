@@ -3049,19 +3049,26 @@ function sleep(ms) {
 function watchAsyncResult(check, attempts = 120, delay = 2000) {
   // 用 setInterval 替代 sleep+loop:
   // - 不依赖调用栈持有 IIFE,组件卸载后 interval 会被 GC 回收
-  // - 比 setTimeout 链更稳,前端框架/inactive tab 节流友好
+  // - 比 setTimeout 链更稳,前端框架节流友好
   // - inFlight 防重叠:如果 refresh() 耗时 > delay,skip 下一轮(避免请求堆积)
   // - 单次 refresh 异常被 try/catch 吞,不影响后续轮询
+  // - visibilitychange 监听:浏览器后台 tab 把 setInterval 降到 1 次/分钟,
+  //   用户切回时立即 tick 一次,避免图片/视频生成好了看不到(2026-08-21 bug)
   let cancelled = false
   let count = 0
   let inFlight = false
   let intervalId: ReturnType<typeof setInterval> | null = null
+  let onVisibility: (() => void) | null = null
 
   return new Promise<void>((resolve) => {
     const finish = () => {
       if (intervalId !== null) {
         clearInterval(intervalId)
         intervalId = null
+      }
+      if (onVisibility) {
+        document.removeEventListener('visibilitychange', onVisibility)
+        onVisibility = null
       }
       resolve()
     }
@@ -3090,6 +3097,14 @@ function watchAsyncResult(check, attempts = 120, delay = 2000) {
         finish()
       }
     }
+
+    onVisibility = () => {
+      // tab 重新可见时立即补一次 tick;inFlight 防重叠,无需 await
+      if (!cancelled && document.visibilityState === 'visible') {
+        void tick()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
 
     intervalId = setInterval(tick, delay)
   })
