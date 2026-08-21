@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { getActiveConfig, getConfigById, hasNonEnglishChars, translatePromptToEnglish } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
 import { getImageAdapter } from './adapters/registry'
@@ -110,11 +110,26 @@ async function processImageGeneration(id: number, config: AIConfig) {
           frameType: genRecord.frameType,
         })
 
+        // 提示词翻译兜底: 非英文 prompt 先翻译成英文再发给上游(nano-banana/Agnes 等)。
+        // 中文/日文等非英文 prompt 在大多数 diffusion 模型上效果差,翻译成英文提升出图质量。
+        // 跟 video-generation.ts:113 同模式;失败 non-fatal,fallback 到原文。
+        let finalPrompt = genRecord.prompt
+        if (finalPrompt && hasNonEnglishChars(finalPrompt)) {
+          try {
+            logTaskProgress('ImageTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
+            finalPrompt = await translatePromptToEnglish(finalPrompt)
+            logTaskProgress('ImageTask', 'translated-prompt', { id, translated: finalPrompt.slice(0, 80) })
+          } catch (err: any) {
+            logTaskWarn('ImageTask', 'translation-failed', { id, error: err.message })
+            // translation failure is non-fatal, fall through with original prompt
+          }
+        }
+
         const resolvedReferenceImages = await normalizeReferenceImages(genRecord.referenceImages)
         const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
           id: genRecord.id,
           model: genRecord.model,
-          prompt: genRecord.prompt,
+          prompt: finalPrompt,
           size: genRecord.size,
           frameType: genRecord.frameType,
           referenceImages: resolvedReferenceImages ? JSON.stringify(resolvedReferenceImages) : null,
