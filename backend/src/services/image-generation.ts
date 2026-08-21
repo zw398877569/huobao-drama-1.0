@@ -142,7 +142,21 @@ async function processImageGeneration(id: number, config: AIConfig) {
         })
 
         if (resp.ok) {
-          const result = await resp.json() as any
+          const respText = await resp.text()
+          let result: any = null
+          try {
+            result = JSON.parse(respText)
+          } catch (parseErr: any) {
+            // JSON 解析失败(空 body / 非 JSON / 截断)— 记 body 帮后续诊断
+            logTaskPayload('ImageTask', 'non-json-response', {
+              id,
+              status: resp.status,
+              contentType: resp.headers.get('content-type'),
+              body: respText.slice(0, 800),
+              error: parseErr.message,
+            })
+            throw new Error(`Provider returned non-JSON (status ${resp.status}, content-type=${resp.headers.get('content-type')}): ${respText.slice(0, 200)}`)
+          }
           logTaskPayload('ImageTask', 'response payload', { id, provider: config.provider, result })
           const { isAsync, taskId, imageUrl } = adapter.parseGenerateResponse(result)
 
@@ -319,7 +333,21 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         signal: AbortSignal.timeout(remainingMs),
       })
       if (!resp.ok) continue
-      const result = await resp.json() as any
+      const respText = await resp.text()
+      let result: any = null
+      try {
+        result = JSON.parse(respText)
+      } catch (parseErr: any) {
+        // 轮询响应非 JSON — 记 body 等下次重试
+        logTaskPayload('ImageTask', 'non-json-poll-response', {
+          id,
+          taskId,
+          status: resp.status,
+          contentType: resp.headers.get('content-type'),
+          body: respText.slice(0, 500),
+        })
+        continue
+      }
 
       const pollResp = adapter.parsePollResponse(result)
 
