@@ -3241,27 +3241,54 @@ function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
-function getShotReferenceImages(sb) {
-  const refs = []
-  const pushRef = (value) => {
-    if (!value || refs.includes(value) || refs.length >= 6) return
-    refs.push(value)
+// 构造镜头首/尾帧用的参考资产列表(场景 + 绑定角色 + 手动 ref + 已有帧)
+// 返回带 label/characterName/characterAppearance 的对象,供 buildShotImagePrompt
+// 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
+function buildShotReferenceAssets(sb) {
+  const assets = []
+  const pushAsset = (asset) => {
+    if (!asset?.path || assets.some(a => a.path === asset.path) || assets.length >= 6) return
+    assets.push(asset)
   }
+
   const sceneId = sb?.scene_id || sb?.sceneId
   const scene = scenes.value.find(item => item.id === sceneId)
-  pushRef(scene?.image_url || scene?.imageUrl)
+  if (scene?.image_url || scene?.imageUrl) {
+    pushAsset({
+      path: scene.image_url || scene.imageUrl,
+      kind: 'scene',
+      label: scene.location ? `${scene.location}${scene.time ? `(${scene.time})` : ''}场景` : '场景',
+    })
+  }
+
   for (const charId of getStoryboardCharacterIds(sb)) {
     const char = chars.value.find(item => item.id === charId)
-    pushRef(char?.image_url || char?.imageUrl)
+    const path = char?.image_url || char?.imageUrl
+    if (!path) continue
+    pushAsset({
+      path,
+      kind: 'character',
+      label: `${char.name}角色形象`,
+      characterName: char.name,
+      characterAppearance: (char.appearance || char.description || '').trim(),
+    })
   }
+
   for (const ref of getRefs(sb)) {
-    pushRef(ref)
+    pushAsset({ path: ref, kind: 'reference', label: '参考图' })
   }
+
   const first = getFirstFrame(sb)
   const last = getLastFrame(sb)
-  pushRef(first)
-  pushRef(last)
-  return refs.filter(Boolean).slice(0, 6)
+  if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' })
+  if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' })
+
+  return assets.map((a, i) => ({ ...a, index: i + 1, imageLabel: `图片${i + 1}` }))
+}
+
+// 向后兼容: 保留 getShotReferenceImages,内部走 buildShotReferenceAssets
+function getShotReferenceImages(sb) {
+  return buildShotReferenceAssets(sb).map(a => a.path)
 }
 
 function buildShotImagePrompt(sb, frameType) {
@@ -3279,19 +3306,47 @@ function buildShotImagePrompt(sb, frameType) {
     ? '生成这个镜头的起始关键帧，突出建立关系和动作开始瞬间'
     : '生成这个镜头的结束关键帧，突出动作结束、情绪落点或结果状态'
 
-  return [
+  const assets = buildShotReferenceAssets(sb)
+  const characterAssets = assets.filter(a => a.kind === 'character')
+
+  const sections = [
     title ? `镜头标题：${title}` : '',
     description ? `画面描述：${description}` : '',
     shotType ? `景别：${shotType}` : '',
     angle ? `机位：${angle}` : '',
     movement ? `运镜：${movement}` : '',
     charactersText ? `角色：${charactersText}` : '',
+    // 给每个角色追加外貌描述,空时只保留名字
+    ...characterAssets.map(a => {
+      const appearance = a.characterAppearance ? `:${a.characterAppearance}` : ''
+      return `${a.characterName}外貌${appearance}`
+    }),
     location ? `地点：${location}` : '',
     time ? `时间：${time}` : '',
     action ? `动作：${action}` : '',
     atmosphere ? `氛围：${atmosphere}` : '',
     frameHint,
-  ].filter(Boolean).join('；')
+  ]
+
+  // 参考图说明 + 角色一致性要求(nano-banana 的 images 字段不强制 character
+  // consistency,必须用 prompt 显式声明谁对应哪张图,并要求保持脸部特征)
+  if (assets.length) {
+    const legend = assets.map(a => {
+      const detail = a.characterAppearance
+        ? `${a.characterName}(${a.characterAppearance})`
+        : a.label
+      return `${a.imageLabel}=${detail}`
+    }).join('；')
+    sections.push(`参考图: ${legend}`)
+    if (characterAssets.length) {
+      sections.push(
+        `角色一致性: ${characterAssets.map(a => a.imageLabel).join('、')} 是 ${characterAssets.map(a => a.characterName).join('、')} 的形象参考,`
+        + `首帧中必须严格保持其脸部特征、发型、年龄、衣着,不要换脸或改变体型。`
+      )
+    }
+  }
+
+  return sections.filter(Boolean).join('；')
 }
 
 async function genShotFrame(sb, frameType) {
