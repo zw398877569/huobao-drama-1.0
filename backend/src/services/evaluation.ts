@@ -29,25 +29,49 @@ function clampScore(v: unknown): number {
   return Math.max(SCORE_RANGE.min, Math.min(SCORE_RANGE.max, n))
 }
 
-function parseEvalJson(text: string): EvalScores {
-  // 防御性 JSON 解析：模型偶发返回 ```json fenced，先剥掉再做 JSON.parse
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim()
-  try {
-    const parsed = JSON.parse(cleaned)
-    return {
-      prompt_adherence: clampScore(parsed.prompt_adherence),
-      visual_quality: clampScore(parsed.visual_quality),
-      motion_naturalness: clampScore(parsed.motion_naturalness),
-      continuity: clampScore(parsed.continuity),
-      notes: typeof parsed.notes === 'string' ? parsed.notes : '',
+function stripThinkBlocks(text: string): string {
+  // MiniMax-M3 等 reasoning model 会输出 <think>...</think> 块,JSON.parse 会挂。剥掉。
+  // 可能有多个(罕见),用 global + dotall
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '')
+}
+
+function extractJsonCandidate(text: string): string {
+  // 跟 backend/src/routes/grid.ts:282 同模式 — 先 fence,后 plain object
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fenced?.[1]) return fenced[1].trim()
+
+  const plain = text.match(/\{[\s\S]*\}/)
+  return plain?.[0]?.trim() || ''
+}
+
+function parseEvalJson(text: string, storyboardId?: number): EvalScores {
+  // 三步兜底(2026-08-22 bug):
+  // 1) 剥 <think>...</think>(reasoning model 必走这步)
+  // 2) 剥 ```json 围栏 + 提取最外层 {...} 块
+  // 3) JSON.parse — 仍失败才返回全 0 + 完整 raw text 进 notes
+  const stripped = stripThinkBlocks(text)
+  const candidate = extractJsonCandidate(stripped)
+  if (candidate) {
+    try {
+      const parsed = JSON.parse(candidate)
+      return {
+        prompt_adherence: clampScore(parsed.prompt_adherence),
+        visual_quality: clampScore(parsed.visual_quality),
+        motion_naturalness: clampScore(parsed.motion_naturalness),
+        continuity: clampScore(parsed.continuity),
+        notes: typeof parsed.notes === 'string' ? parsed.notes : '',
+      }
+    } catch {
+      // candidate 提取到了但不是合法 JSON,落到下面的最终兜底
     }
-  } catch {
-    // 兜底：返回全 0 + 错误信息，避免把整个评估流程搞挂
-    return { prompt_adherence: 0, visual_quality: 0, motion_naturalness: 0, continuity: 0, notes: text.slice(0, 500) }
   }
+  logTaskError('StoryboardEval', 'json-parse-failed', {
+    storyboardId,
+    rawLength: text.length,
+    rawPreview: text.slice(0, 500),
+    rawTail: text.length > 500 ? text.slice(-200) : '',
+  })
+  return { prompt_adherence: 0, visual_quality: 0, motion_naturalness: 0, continuity: 0, notes: '解析失败,原文已记入后端日志(eval-error): ' + text.slice(0, 300) }
 }
 
 const SYSTEM_PROMPT = `你是一位严格但公正的视觉导演，专门审 AI 生成的首帧画面。
@@ -178,7 +202,7 @@ export async function evaluateStoryboard(storyboardId: number): Promise<EvalScor
   const data = await resp.json()
   const raw = data?.choices?.[0]?.message?.content?.trim()
   if (!raw) throw new Error('评估模型未返回内容')
-  const scores = parseEvalJson(raw)
+  const scores = parseEvalJson(raw, storyboardId)
 
   db.update(schema.storyboards).set({
     evalScorePrompt: scores.prompt_adherence,
