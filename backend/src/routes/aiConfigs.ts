@@ -25,6 +25,22 @@ const HUOBAO_AGENT_DEFAULTS = [
 
 const HUOBAO_AGENT_MODEL = 'gemini-3-pro-preview'
 
+// 每 Agent 最优参数(2026-08-22 优化,基于 claude-memory/reference/ 沉淀的方法论):
+// - script_rewriter: 长文改写,T 低=不乱发挥;MaxT 高=剧本不截断
+// - extractor: 结构化 JSON 输出,T 极低=格式稳定
+// - storyboard_breaker: 17 字段 × N 镜头,MaxT 必须高;T 中=兼顾创造+可控
+// - voice_assigner: 选择决策类,T 不需高
+// - grid_prompt_generator: 中→英翻译 + 创意,T 中高平衡
+// 兜底值给未来新加 Agent 用
+const HUOBAO_AGENT_PARAMS: Record<string, { temperature: number; maxTokens: number }> = {
+  script_rewriter:       { temperature: 0.5, maxTokens: 8192 },
+  extractor:             { temperature: 0.3, maxTokens: 4096 },
+  storyboard_breaker:    { temperature: 0.6, maxTokens: 8192 },
+  voice_assigner:        { temperature: 0.4, maxTokens: 2048 },
+  grid_prompt_generator: { temperature: 0.6, maxTokens: 4096 },
+}
+const AGENT_PARAMS_FALLBACK = { temperature: 0.5, maxTokens: 2048 }
+
 function bearerHeaders(apiKey?: string, withJson = false) {
   const headers: Record<string, string> = {}
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
@@ -228,10 +244,13 @@ app.post('/huobao-preset', async (c) => {
   }
 
   for (const agent of HUOBAO_AGENT_DEFAULTS) {
+    const params = HUOBAO_AGENT_PARAMS[agent.agentType] || AGENT_PARAMS_FALLBACK
     const [existing] = db.select().from(schema.agentConfigs).where(eq(schema.agentConfigs.agentType, agent.agentType)).all()
     const values = {
       name: agent.name,
       model: HUOBAO_AGENT_MODEL,
+      temperature: params.temperature,
+      maxTokens: params.maxTokens,
       isActive: true,
       updatedAt: ts,
     }
@@ -245,8 +264,8 @@ app.post('/huobao-preset', async (c) => {
         model: HUOBAO_AGENT_MODEL,
         name: agent.name,
         systemPrompt: '',
-        temperature: 0.7,
-        maxTokens: 4096,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
         maxIterations: 10,
         isActive: true,
         createdAt: ts,
