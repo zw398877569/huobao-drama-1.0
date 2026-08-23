@@ -135,7 +135,15 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     时间戳分段:0-3秒/3-6秒/6-9秒 ... 用 <n> 分隔
     标记场景: <location>地点</location>
     标记角色: <role>角色名</role>
-    标记画外音: <voice>角色名</voice>
+    标记画外音/旁白: <voice>角色名/旁白</voice>(本镜说话者直接嵌对白,无需 <voice>)
+
+    对白嵌入(关键!容易漏):
+      - dialogue 字段的每一句对白都必须按时间顺序嵌入到 video_prompt 的对应时间段,不能省略
+      - 每段(<n> 分隔)同时包含动作 + 视觉 + 对白(格式:"<角色动作>，开口:'<对白>'")
+      - 时间分配按"动作起势 → 对白 → 收尾动作"三段式
+      - 旁白(如"旁白:三年前...")用 <voice>旁白</voice> 标记
+      - 例:对话字段有 3 句 → video_prompt 至少 3 个时间段各塞 1 句对白
+
     单镜头:不要在 prompt 内跨机位/跨场景切换
     首帧延续:开头写"延续 [上一镜末尾状态]"
     末帧收尾:本镜末尾明确 result 字段,告诉模型动作在哪里收住
