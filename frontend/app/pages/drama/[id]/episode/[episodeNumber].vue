@@ -417,6 +417,11 @@
               <template v-if="!sbs.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
+              <button class="btn btn-sm" :disabled="rn || !selectedSb" @click="regenerateSelectedStoryboard" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
+                <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
+                重新生成本镜头
+              </button>
               <button class="btn btn-sm" :disabled="rn" @click="doBreakdown">
                 <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -1712,7 +1717,7 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1785,6 +1790,7 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
+const regeneratingOne = ref(false)
 const pendingSceneImageIds = ref([])
 const pendingShotFrameKeys = ref([])
 const pendingVideoIds = ref([])
@@ -3038,6 +3044,24 @@ function doBreakdown() {
   const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
   runAgent('storyboard_breaker', `请拆解分镜并生成视频提示词。视频模型：${label}，请根据该模型的特性和时长限制生成合适的视频提示词。`, dramaId, epId.value, refresh)
+async function regenerateSelectedStoryboard() {
+  if (!selectedSb.value) {
+    toast.warning('请先在左侧选择一个镜头')
+    return
+  }
+  const sb = selectedSb.value
+  regeneratingOne.value = true
+  try {
+    await agentAPI.regenerateStoryboard(sb.id, { drama_id: dramaId, episode_id: epId.value })
+    toast.success(`镜头 #${sbs.value.indexOf(sb) + 1} 已重新生成`)
+    await refresh()
+  } catch (err: any) {
+    toast.error(err.message || '重新生成本镜头失败')
+  } finally {
+    regeneratingOne.value = false
+  }
+}
+
 }
 async function genSample(id) { try { await characterAPI.voiceSample(id, epId.value); toast.success('试听已生成'); refresh() } catch (e) { toast.error(e.message) } }
 async function addShot() { await storyboardAPI.create({ episode_id: epId.value, storyboard_number: sbs.value.length + 1, title: `镜头${sbs.value.length + 1}`, duration: 10 }); refresh() }

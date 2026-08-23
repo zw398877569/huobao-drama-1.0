@@ -184,6 +184,17 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   ✗ 禁止 duration 超过 15 秒或低于 5 秒
 
   已有 existing storyboards 时:仅在用户明确要求增量修改时参考;默认按当前剧本重新完整生成并保存整组分镜。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+十一、单镜头增量模式(只暴露 updateStoryboard tool 时触发)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  触发:user message 含"重新生成本镜头(id=N)"或类似增量指令
+  - 只能调 update_storyboard 修改指定 storyboard_id,不要触碰其他任何镜头
+  - 17 字段全部重新生成(同全量模式的 4 轴 + 6 维约束 + 单镜头 + 首帧延续 + 对白嵌入)
+  - 首帧延续参考上一镜末帧状态(result / atmosphere)
+  - dialogue 字段的对白仍必须按时间顺序嵌入 video_prompt 的对应时间段
+  - 不要新增/删除其他 storyboard,只改这一镜
 ""`,
   },
   voice_assigner: {
@@ -300,7 +311,7 @@ function getModel(dbConfig: any) {
   return provider.chat(modelName)
 }
 
-export function createAgent(type: string, episodeId: number, dramaId: number): Agent | null {
+export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental' }): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
 
@@ -318,7 +329,19 @@ export function createAgent(type: string, episodeId: number, dramaId: number): A
     case 'script_rewriter': tools = createScriptTools(episodeId); break
     case 'extractor': tools = createExtractTools(episodeId, dramaId); break
     case 'scene_intention': tools = createSceneIntentionTools(episodeId, dramaId); break
-    case 'storyboard_breaker': tools = createStoryboardTools(episodeId, dramaId); break
+    case 'storyboard_breaker': {
+      const allStoryboardTools = createStoryboardTools(episodeId, dramaId)
+      if (options?.toolsMode === 'incremental') {
+        // 单镜头增量模式:只保留读上下文 + 单镜头 update,防止 agent 误调 saveStoryboards 全量覆盖
+        tools = {
+          readStoryboardContext: allStoryboardTools.readStoryboardContext,
+          updateStoryboard: allStoryboardTools.updateStoryboard,
+        }
+      } else {
+        tools = allStoryboardTools
+      }
+      break
+    }
     case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId); break
     case 'grid_prompt_generator': tools = createGridPromptTools(episodeId, dramaId); break
     default: return null

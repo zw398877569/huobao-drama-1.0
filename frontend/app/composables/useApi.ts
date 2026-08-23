@@ -101,6 +101,14 @@ export const mergeAPI = {
   merge: (epId: number) => api.post(`/merge/episodes/${epId}/merge`),
   status: (epId: number) => api.get(`/merge/episodes/${epId}/merge`),
 }
+export const agentAPI = {
+  chat: (type: string, body: { message: string; drama_id: number; episode_id: number }) =>
+    api.post(`/agent/${type}/chat`, body),
+  // 重新生成本镜头(单镜头增量,不覆盖其他镜头)
+  regenerateStoryboard: (storyboardId: number, body: { drama_id: number; episode_id: number }) =>
+    api.post(`/agent/storyboard_breaker/storyboard/${storyboardId}`, body),
+}
+
 export const aiConfigAPI = {
   list: (t?: string) => api.get(`/ai-configs${t ? `?service_type=${t}` : ''}`),
   create: (d: any) => api.post('/ai-configs', d),
