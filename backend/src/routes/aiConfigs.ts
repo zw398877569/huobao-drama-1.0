@@ -41,6 +41,41 @@ const HUOBAO_AGENT_PARAMS: Record<string, { temperature: number; maxTokens: numb
 }
 const AGENT_PARAMS_FALLBACK = { temperature: 0.5, maxTokens: 2048 }
 
+/**
+ * 把每个 agent 的 T/MaxT sync 到 HUOBAO_AGENT_PARAMS 推荐值。
+ * 只 sync T/MaxT,不动 systemPrompt / name / model / isActive(保留用户手动改的)。
+ * 在 backend/src/index.ts startup 时调,以及 huobao-preset endpoint 触发时调。
+ *
+ * 设计: 已 sync 过的不重复写(幂等)— 只有当 DB 当前 T/MaxT 与推荐值不同时才 update,
+ * 避免每次启动写 DB。如果用户手动改过 T/MaxT,会跟推荐值不同,会被覆盖(用户应在 UI 重新设置)。
+ */
+export function ensureAgentDefaults() {
+  let updated = 0
+  let skipped = 0
+  const ts = now()
+  for (const agent of HUOBAO_AGENT_DEFAULTS) {
+    const params = HUOBAO_AGENT_PARAMS[agent.agentType] || AGENT_PARAMS_FALLBACK
+    const [existing] = db.select().from(schema.agentConfigs)
+      .where(eq(schema.agentConfigs.agentType, agent.agentType)).all()
+    if (!existing) continue
+    if (existing.temperature === params.temperature && existing.maxTokens === params.maxTokens) {
+      skipped++
+      continue
+    }
+    db.update(schema.agentConfigs)
+      .set({ temperature: params.temperature, maxTokens: params.maxTokens, updatedAt: ts })
+      .where(eq(schema.agentConfigs.id, existing.id))
+      .run()
+    updated++
+  }
+  if (updated > 0) {
+    logTaskProgress('AIConfig', 'agent-defaults-synced', {
+      updated, skipped, total: HUOBAO_AGENT_DEFAULTS.length,
+    })
+  }
+  return { updated, skipped }
+}
+
 function bearerHeaders(apiKey?: string, withJson = false) {
   const headers: Record<string, string> = {}
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
@@ -243,21 +278,12 @@ app.post('/huobao-preset', async (c) => {
     }
   }
 
+  // 已有 agent config sync T/MaxT 到推荐值(不动 systemPrompt);新建时插推荐值
+  ensureAgentDefaults()
   for (const agent of HUOBAO_AGENT_DEFAULTS) {
     const params = HUOBAO_AGENT_PARAMS[agent.agentType] || AGENT_PARAMS_FALLBACK
     const [existing] = db.select().from(schema.agentConfigs).where(eq(schema.agentConfigs.agentType, agent.agentType)).all()
-    const values = {
-      name: agent.name,
-      model: HUOBAO_AGENT_MODEL,
-      temperature: params.temperature,
-      maxTokens: params.maxTokens,
-      isActive: true,
-      updatedAt: ts,
-    }
-
-    if (existing) {
-      db.update(schema.agentConfigs).set(values).where(eq(schema.agentConfigs.id, existing.id)).run()
-    } else {
+    if (!existing) {
       db.insert(schema.agentConfigs).values({
         agentType: agent.agentType,
         description: '',
