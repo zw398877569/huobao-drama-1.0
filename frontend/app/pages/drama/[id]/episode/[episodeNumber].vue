@@ -417,7 +417,7 @@
               <template v-if="!sbs.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
-              <button class="btn btn-sm" :disabled="rn || !selectedSb" @click="regenerateSelectedStoryboard" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
+              <button class="btn btn-sm" :disabled="rn || !selectedSb || regeneratingOne" @click="regenerateSelectedStoryboard" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
                 <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
                 重新生成本镜头
@@ -2973,7 +2973,13 @@ async function refresh() {
       try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
       try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
       sbs.value = await episodeAPI.storyboards(ep.id)
-      if (sbs.value.length && !selectedSb.value) selectedSb.value = sbs.value[0]
+      // 修复 refresh 后 selectedSb stale reference: 找到 id 相同的新对象重新指向,避免显示旧数据
+      if (selectedSb.value) {
+        const refreshed = sbs.value.find(s => s.id === selectedSb.value.id)
+        if (refreshed) selectedSb.value = refreshed
+      } else if (sbs.value.length) {
+        selectedSb.value = sbs.value[0]
+      }
 
       // Clean up stale pending IDs: remove from pending list if image is already generated
       pendingCharImageIds.value = pendingCharImageIds.value.filter(id => {
