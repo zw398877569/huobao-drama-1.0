@@ -1027,7 +1027,12 @@
                   <span class="dim">{{ sb.location || '未设地点' }}</span>
                 </div>
                 <div class="dub-foot">
-                  <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
+                  <div v-if="hasTTS(sb) && getTTSSegments(sb)" class="dub-segments" :title="getTTSSegments(sb).map(s => s.speaker + ':' + s.text).join('\n')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                  <span class="dub-segments-count">{{ getTTSSegments(sb).length }} 段对白</span>
+                  <span class="dub-segments-list">{{ getTTSSegments(sb).map(s => s.speaker).join(' / ') }}</span>
+                </div>
+                <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
                   <div v-else class="dim" style="font-size:12px">尚未生成语音文件</div>
                   <button class="btn btn-sm ml-auto" @click="genShotTTS(sb)">生成配音</button>
                 </div>
@@ -3221,6 +3226,17 @@ function isTTSIgnorable(sb) {
 function hasDialogue(sb) { return !isTTSIgnorable(sb) }
 function hasTTS(sb) { return !!(sb?.tts_audio_url || sb?.ttsAudioUrl) }
 function getTTSUrl(sb) { return sb?.tts_audio_url || sb?.ttsAudioUrl || '' }
+
+// 解析后端存的 tts_segments(JSON 数组 [{ speaker, text, voice, isNarrator, segmentPath }])
+// 老 TTS 记录(只有 ttsAudioUrl 没有 ttsSegments)返回 null
+function getTTSSegments(sb) {
+  const raw = sb?.tts_segments || sb?.ttsSegments
+  if (!raw) return null
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Array.isArray(arr) ? arr : null
+  } catch { return null }
+}
 function getDialogueSpeaker(sb) {
   const speaker = getDialogueSpeakerRaw(sb)
   if (!speaker) return '旁白'
@@ -4915,6 +4931,21 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .dub-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dub-desc { font-size: 13px; line-height: 1.6; color: var(--text-1); }
 .dub-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 11px; }
+.dub-segments {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, #6b7280);
+  margin-bottom: 4px;
+}
+.dub-segments-count {
+  color: var(--text-tertiary, #9ca3af);
+}
+.dub-segments-list {
+  color: var(--accent, #6366f1);
+  font-weight: 500;
+}
 .dub-foot { display: flex; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .dub-audio { flex: 1; min-width: 0; height: 30px; }
 
