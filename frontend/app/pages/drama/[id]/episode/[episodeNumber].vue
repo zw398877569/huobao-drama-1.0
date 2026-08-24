@@ -1719,6 +1719,7 @@ import {
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
+import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
 definePageMeta({ layout: 'studio' })
