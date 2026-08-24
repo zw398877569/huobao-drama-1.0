@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
+import { generateTTSForDialogue } from '../services/tts-concat.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
@@ -11,19 +12,6 @@ import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
 
 const app = new Hono()
-
-const IGNORE_TTS_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$/i
-const IGNORE_TTS_TEXT = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
-
-function parseDialogueForTTS(dialogue?: string | null) {
-  const raw = dialogue?.trim() || ''
-  if (!raw) return { speaker: '', pureText: '', ignorable: true }
-  const speakerMatch = raw.match(/^(.+?)[:：]/)
-  const speaker = speakerMatch ? speakerMatch[1].replace(/[（(].+?[)）]/g, '').trim() : ''
-  const pureText = raw.replace(/^.+?[:：]\s*/, '').replace(/[（(].+?[)）]/g, '').trim()
-  const ignorable = (!!speaker && IGNORE_TTS_SPEAKERS.test(speaker)) || !pureText || IGNORE_TTS_TEXT.test(pureText)
-  return { speaker, pureText, ignorable }
-}
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
@@ -169,12 +157,12 @@ app.put('/:id', async (c) => {
 })
 
 // POST /storyboards/:id/generate-tts
+// 2026-08-24 重写:多角色分段合成 — 每个 speaker 用自己的 voice 单独调 TTS,
+// 然后 ffmpeg concat 拼接。解决之前"一个角色配音包含多人对话"的 bug。
 app.post('/:id/generate-tts', async (c) => {
   const id = Number(c.req.param('id'))
   const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
   if (!sb) return badRequest(c, '镜头不存在')
-  const parsedDialogue = parseDialogueForTTS(sb.dialogue)
-  if (parsedDialogue.ignorable) return badRequest(c, '该镜头没有可生成的对白或旁白')
   logTaskStart('StoryboardAPI', 'generate-tts', {
     storyboardId: id,
     episodeId: sb.episodeId,
@@ -186,40 +174,33 @@ app.post('/:id/generate-tts', async (c) => {
     dialogue: sb.dialogue,
   })
 
-  let voiceId = 'alloy'
-  const speaker = parsedDialogue.speaker
-
-  if (speaker) {
-    if (!/^(旁白|画外音|narrator)$/i.test(speaker)) {
-      const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
-      if (ep) {
-        const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
-        const found = chars.find((char) => char.name === speaker)
-        if (found?.voiceStyle) voiceId = found.voiceStyle
-      }
-    }
-  }
-
-  const pureDialogue = parsedDialogue.pureText
-  if (!pureDialogue) return badRequest(c, '未提取到可合成的文本')
-
-  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
   try {
-    const audioPath = await generateTTS({ text: pureDialogue, voice: voiceId, configId: ep?.audioConfigId || null })
-  db.update(schema.storyboards)
-    .set({ ttsAudioUrl: audioPath, updatedAt: now() })
-    .where(eq(schema.storyboards.id, id))
-    .run()
+    const result = await generateTTSForDialogue(id, sb.episodeId, sb.dialogue)
+    if (result.ignored) {
+      return badRequest(c, '该镜头没有可生成的对白或旁白')
+    }
+    // 写回 DB:ttsAudioUrl(拼接后的总 audio) + ttsSegments(分段 metadata,JSON)
+    db.update(schema.storyboards)
+      .set({
+        ttsAudioUrl: result.audioPath,
+        ttsSegments: JSON.stringify(result.segments),
+        updatedAt: now(),
+      })
+      .where(eq(schema.storyboards.id, id))
+      .run()
 
     logTaskSuccess('StoryboardAPI', 'generate-tts', {
       storyboardId: id,
-      voiceId,
-      path: audioPath,
-      textLength: pureDialogue.length,
+      segmentCount: result.segments.length,
+      speakers: result.segments.map(s => s.speaker).join(','),
+      outPath: result.audioPath,
     })
-    return success(c, { tts_audio_url: audioPath, voice_id: voiceId, text: pureDialogue })
+    return success(c, {
+      tts_audio_url: result.audioPath,
+      tts_segments: result.segments,
+    })
   } catch (err: any) {
-    logTaskError('StoryboardAPI', 'generate-tts', { storyboardId: id, voiceId, error: err.message })
+    logTaskError('StoryboardAPI', 'generate-tts', { storyboardId: id, error: err.message })
     return badRequest(c, err.message)
   }
 })

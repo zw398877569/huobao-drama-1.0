@@ -369,6 +369,8 @@ ensureColumn('storyboards', 'eval_score_prompt', 'REAL')
 ensureColumn('storyboards', 'eval_score_visual', 'REAL')
 ensureColumn('storyboards', 'eval_score_motion', 'REAL')
 ensureColumn('storyboards', 'eval_score_continuity', 'REAL')
+// P2 TTS 多角色分段(2026-08-24):JSON 数组存每段 speaker/text/voice/path
+ensureColumn('storyboards', 'tts_segments', 'TEXT')
 ensureColumn('storyboards', 'eval_notes', 'TEXT')
 ensureColumn('storyboards', 'evaluated_at', 'TEXT')
 ensureColumn('storyboards', 'retake_count', 'INTEGER DEFAULT 0')

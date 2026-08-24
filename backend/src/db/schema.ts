@@ -122,6 +122,8 @@ export const storyboards = sqliteTable('storyboards', {
   referenceImages: text('reference_images'),
   videoUrl: text('video_url'),
   ttsAudioUrl: text('tts_audio_url'),
+  // P2 TTS 多角色分段:JSON [{ speaker, text, voice, isNarrator, segmentPath }](2026-08-24)
+  ttsSegments: text('tts_segments'),
   subtitleUrl: text('subtitle_url'),
   composedVideoUrl: text('composed_video_url'),
   status: text('status').default('pending'),

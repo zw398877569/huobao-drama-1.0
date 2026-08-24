@@ -11,15 +11,14 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../utils/response.js'
 import { generateTTS } from './tts-generation.js'
+import { generateTTSForDialogue } from './tts-concat.js'
+import { parseDialogueSegments } from '../utils/dialogue-parser.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 const DATA_ROOT = path.resolve(__dirname, '../../../data')
 let subtitleFilterSupport: boolean | null = null
-const IGNORE_TTS_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$/i
-const IGNORE_TTS_TEXT = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
-
 function toAbsPath(relativePath: string): string {
   if (path.isAbsolute(relativePath)) return relativePath
   if (relativePath.startsWith('static/')) return path.join(DATA_ROOT, relativePath)
@@ -35,16 +34,6 @@ function supportsSubtitleFilter(): boolean {
     subtitleFilterSupport = false
   }
   return subtitleFilterSupport
-}
-
-function parseDialogueForTTS(dialogue?: string | null) {
-  const raw = dialogue?.trim() || ''
-  if (!raw) return { speaker: '', pureText: '', ignorable: true }
-  const speakerMatch = raw.match(/^(.+?)[:：]/)
-  const speaker = speakerMatch ? speakerMatch[1].replace(/[（(].+?[)）]/g, '').trim() : ''
-  const pureText = raw.replace(/^.+?[:：]\s*/, '').replace(/[（(].+?[)）]/g, '').trim()
-  const ignorable = (!!speaker && IGNORE_TTS_SPEAKERS.test(speaker)) || !pureText || IGNORE_TTS_TEXT.test(pureText)
-  return { speaker, pureText, ignorable }
 }
 
 /**
@@ -68,51 +57,39 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
   const videoPath = toAbsPath(sb.videoUrl)
   let audioPath: string | null = null
   let subtitlePath: string | null = null
-  const parsedDialogue = parseDialogueForTTS(sb.dialogue)
 
-  // 1. 生成 TTS 音频（如果有对白）
+  // 1. 生成 TTS 音频(如果有对白) — 2026-08-24 多角色分段合成
   try {
-    if (!parsedDialogue.ignorable) {
-      if (sb.ttsAudioUrl) {
-        const existingAudioPath = toAbsPath(sb.ttsAudioUrl)
-        if (fs.existsSync(existingAudioPath)) {
-          audioPath = existingAudioPath
-        }
-      }
-
-      if (!audioPath) {
-        let voiceId = 'alloy'
-        const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
-        if (parsedDialogue.speaker) {
-          const charName = parsedDialogue.speaker
-          if (ep) {
-            const chars = db.select().from(schema.characters)
-              .where(eq(schema.characters.dramaId, ep.dramaId)).all()
-            const found = chars.find(c => c.name === charName)
-            if (found?.voiceStyle) voiceId = found.voiceStyle
-          }
-        }
-
-        const pureDialogue = parsedDialogue.pureText
-        if (pureDialogue) {
-          logTaskProgress('ComposeTask', 'generate-inline-tts', { storyboardId, voiceId, textPreview: pureDialogue.slice(0, 40) })
-          const ttsPath = await generateTTS({ text: pureDialogue, voice: voiceId, configId: ep?.audioConfigId ?? undefined })
-          audioPath = toAbsPath(ttsPath)
-          db.update(schema.storyboards).set({ ttsAudioUrl: ttsPath, updatedAt: now() })
-            .where(eq(schema.storyboards.id, storyboardId)).run()
-        }
+    if (sb.ttsAudioUrl) {
+      const existingAudioPath = toAbsPath(sb.ttsAudioUrl)
+      if (fs.existsSync(existingAudioPath)) {
+        audioPath = existingAudioPath
       }
     }
-
+    if (!audioPath) {
+      logTaskProgress('ComposeTask', 'generate-inline-tts', { storyboardId })
+      const ttsResult = await generateTTSForDialogue(storyboardId, sb.episodeId, sb.dialogue)
+      if (!ttsResult.ignored && ttsResult.audioPath) {
+        audioPath = toAbsPath(ttsResult.audioPath)
+        db.update(schema.storyboards)
+          .set({
+            ttsAudioUrl: ttsResult.audioPath,
+            ttsSegments: JSON.stringify(ttsResult.segments),
+            updatedAt: now(),
+          })
+          .where(eq(schema.storyboards.id, storyboardId))
+          .run()
+      }
+    }
     // 2. 生成字幕文件（SRT）
-    if (!parsedDialogue.ignorable) {
+    if (sb.dialogue && sb.dialogue.trim()) {
       const srtDir = path.join(STORAGE_ROOT, 'subtitles')
       fs.mkdirSync(srtDir, { recursive: true })
       const srtFilename = `${uuid()}.srt`
       subtitlePath = path.join(srtDir, srtFilename)
 
       const duration = sb.duration || 10
-      const pureText = parsedDialogue.pureText
+      const pureText = parseDialogueSegments(sb.dialogue).segments.map(s => s.text).join(' ')
       const srtContent = `1\n00:00:00,500 --> 00:00:${String(Math.min(duration - 1, 59)).padStart(2, '0')},000\n${pureText}\n`
       fs.writeFileSync(subtitlePath, srtContent, 'utf-8')
 
