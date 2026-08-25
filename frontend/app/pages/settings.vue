@@ -451,6 +451,7 @@ const providerPresets = {
   },
   audio: {
     minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
+    'autodl-comfyui': { label: 'AutoDL TTS 推荐', baseUrl: 'https://autodl.art/api/v1', models: ['indextts2-v1'] },
   },
 }
 const huobaoPresetCards = [
