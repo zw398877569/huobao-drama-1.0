@@ -9,7 +9,7 @@
  * - URL 路径里嵌入 workflow_id,根据 referenceMode 路由
  * - resolution 字段是 autodl 自己的命名 (480p竖/480p横/1080p横/768p竖/768p横/1080p竖)
  * - 响应格式: { code: "Success", data: { status, results: [{url, type, ...}], task_id } }
- * - 单 provider 路由到 3 个 workflow_id (T2V / FL2V / Ref2V)
+ * - 单 provider 路由到 4 个 workflow_id (T2V / FL2V / Ref2V / Ref2V-15s)
  */
 import type {
   VideoProviderAdapter,
@@ -24,12 +24,17 @@ import { joinProviderUrl } from './url'
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
 
-  /** H3 文生视频 (T2V) */
+  /** H3 文生视频 (T2V) — duration 1-10s */
   static readonly WORKFLOW_T2V = 'minimax_h3_lightx2v_no_pic'
-  /** H3 首尾帧生视频 (FL2V) */
+  /** H3 首尾帧生视频 (FL2V) — duration 1-10s */
   static readonly WORKFLOW_FL2V = 'minimax_h3_lightx2v'
-  /** H3 多图参考生视频 (Ref2V) — 最多 9 张参考图 */
+  /** H3 多图参考生视频 (Ref2V) — duration 1-10s, 最多 9 张参考图 */
   static readonly WORKFLOW_REF2V = 'minimax_h3_lightx2v_v5'
+  /** H3 多图参考生视频 15 秒版 (Ref2V) — duration 1-15s, 最多 9 张参考图 */
+  static readonly WORKFLOW_REF2V_15S = 'minimax_h3_lightx2v_v5_15s'
+
+  /** Ref2V 1-10s 用 v5; 11-15s 自动切到 v5_15s */
+  private static readonly REF2V_MAX_SHORT_S = 10
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const { workflowId, body } = this.buildBodyForRecord(record)
@@ -125,13 +130,13 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
     let lastFrame: string | undefined
 
     if (mode === 'multiple' && refCount >= 1) {
-      // 多图参考: 走 Ref2V 工作流
-      workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V
+      // 多图参考: 走 Ref2V 工作流 (按 duration 自动选 v5 / v5_15s)
+      workflowId = this.pickRef2VWorkflowId(record.duration)
       refs = this.parseRefImages(record.referenceImageUrls)
     } else if (mode === 'single' && record.imageUrl) {
       // 单图参考: 走 Ref2V 工作流, 仅填 ref_image_0
       // 与 minimax-video 行为对齐 (single → reference_image, 不是 first_frame)
-      workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V
+      workflowId = this.pickRef2VWorkflowId(record.duration)
       refs = [record.imageUrl]
     } else if (mode === 'first_last' || hasFirstLast) {
       // 首尾帧: 走 FL2V 工作流
@@ -143,14 +148,17 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
       workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V
     }
 
-    const supports1080p = workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V
+    const supports1080p =
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
     const body: any = {
       prompt: record.prompt || '',
     }
 
-    // duration 1-10, 强制整数
+    // duration 上限看具体路由: T2V/FL2V/Ref2V(v5) 1-10; Ref2V(v5_15s) 1-15
+    const durationCap = workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ? 15 : 10
     if (record.duration) {
-      body.duration = Math.max(1, Math.min(10, Math.floor(record.duration)))
+      body.duration = Math.max(1, Math.min(durationCap, Math.floor(record.duration)))
     }
 
     // resolution: 纵横比 → autodl 命名
@@ -159,13 +167,27 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
     if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V) {
       if (firstFrame) body.first_frame = firstFrame
       if (lastFrame) body.last_frame = lastFrame
-    } else if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V) {
+    } else if (
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
+    ) {
       refs.slice(0, 9).forEach((url, i) => {
         body[`ref_image_${i}`] = url
       })
     }
 
     return { workflowId, body }
+  }
+
+  /**
+   * Ref2V 工作流按 duration 自动选 v5 (≤10s) 或 v5_15s (11-15s)
+   * duration 缺省时 fallback 到 v5 (1-10s 是更常用的形态)
+   */
+  private pickRef2VWorkflowId(duration?: number | null): string {
+    if (duration && duration > AutoDLComfyUIWorkflowAdapter.REF2V_MAX_SHORT_S) {
+      return AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
+    }
+    return AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V
   }
 
   private parseRefImages(json?: string | null): string[] {
@@ -186,7 +208,7 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   /**
    * 纵横比 → autodl resolution 命名
    * 文生视频/首尾帧工作流支持 480p竖/480p横/768p竖/768p横
-   * 多图参考工作流额外支持 1080p横/1080p竖
+   * 多图参考工作流(及 15s 版)额外支持 1080p横/1080p竖
    */
   private mapResolution(aspectRatio?: string | null, supports1080p = false): string {
     if (!aspectRatio) return '768p竖'

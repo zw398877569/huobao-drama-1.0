@@ -16,6 +16,7 @@ import { AliVideoAdapter } from './ali-video'
 import { AgnesImageAdapter } from './agnes-image'
 import { AgnesVideoAdapter } from './agnes-video'
 import { AutoDLComfyUIWorkflowAdapter } from './autodl-comfyui-workflow'
+import { AutoDLComfyUITTSAsyncAdapter } from './autodl-tts-async'
 import { NanoBananaImageAdapter } from './nano-banana-image'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
@@ -48,12 +49,18 @@ export const ttsAdapters: Record<string, TTSProviderAdapter> = {
   minimax: new MiniMaxTTSAdapter(),
 }
 
-// 异步 TTS adapter（最小验证用，文档: https://platform.minimaxi.com/docs/guides/speech-t2a-async）
-export const ttsAsyncAdapters: Record<string, MiniMaxTTSAsyncAdapter> = {
+// 异步 TTS adapter 注册表
+//   minimax       - 文档: https://platform.minimaxi.com/docs/guides/speech-t2a-async
+//   autodl-comfyui - 走 autodl ComfyUI workflow `indextts2-v1` (情感 + 参考音频)
+//
+// 两者方法签名一致 (buildCreateRequest/parseCreateResponse/buildQueryRequest/parseQueryResponse),
+// 共享 AsyncTTSAdapter 接口。这里用 `any` 是为了规避 TS 在 adapter 写不同实现时的结构差异。
+export const ttsAsyncAdapters: Record<string, any> = {
   minimax: new MiniMaxTTSAsyncAdapter(),
+  'autodl-comfyui': new AutoDLComfyUITTSAsyncAdapter(),
 }
 
-export function getTTSAsyncAdapter(provider: string): MiniMaxTTSAsyncAdapter | null {
+export function getTTSAsyncAdapter(provider: string): any | null {
   return ttsAsyncAdapters[provider.toLowerCase()] || null
 }
 

@@ -1,59 +1,62 @@
 /**
- * AI 音色异步合成 - 最小验证端点
+ * AI 音色异步合成 - 验证端点
  *
  * 端点:
  *   POST /api/v1/ai-voices-async/test     - 端到端测试: 创建任务 -> 轮询 -> 下载, 返回 base64 音频
  *   POST /api/v1/ai-voices-async/create   - 仅创建任务, 返回 task_id
  *   GET  /api/v1/ai-voices-async/query    - 查询任务状态 (?task_id=xxx)
  *
- * 数据源: 直接读 aiServiceConfigs 表中 serviceType='audio' 且 provider='minimax' 的配置
+ * 数据源: aiServiceConfigs 表中 serviceType='audio' 的 active 配置
+ * 支持 provider:
+ *   - minimax        - 同步返回 tar 归档(内含 mp3), download 解 tar 提 mp3
+ *   - autodl-comfyui - 异步 results[].url 直接是远程 wav URL, 无需下载步骤
+ *
+ * 入口: ?provider=xxx (默认 'minimax')
  */
 import { Hono } from 'hono'
 import { eq, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { getTTSAsyncAdapter } from '../services/adapters/registry.js'
 import { success, badRequest } from '../utils/response.js'
-// 从 cfg.model(可能是数组 | 字符串 | undefined)中取出字符串名
-function modelOf(cfg: { model?: any }): string | undefined {
-  const m = cfg?.model
-  if (Array.isArray(m)) return m[0]
-  if (typeof m === 'string') return m
-  return undefined
-}
 
 function fail(c: any, message: string, status = 500, extra: any = null) {
   return c.json({ code: status, message, ...(extra ? { data: extra } : {}) }, status)
 }
 
-const app = new Hono()
+/** 读 provider 参数 (?provider=xxx 或 body.provider), 默认 minimax */
+function readProvider(c: any, body: any): string {
+  return (
+    c.req.query('provider') ||
+    body?.provider ||
+    'minimax'
+  ).toString().toLowerCase()
+}
 
-function getMiniMaxAudioConfig() {
+/** 找 serviceType=audio + provider=X 的 active 配置 */
+function getAudioConfig(provider: string) {
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(and(eq(schema.aiServiceConfigs.serviceType, 'audio'),
-               eq(schema.aiServiceConfigs.provider, 'minimax')))
+               eq(schema.aiServiceConfigs.provider, provider)))
     .all()
   const active = rows.find((r: any) => r.isActive) || rows[0]
   if (!active) {
-    throw new Error('No minimax audio config found. Add one in Settings first.')
+    throw new Error(`No audio config for provider="${provider}". Add one in Settings first.`)
   }
   if (!active.apiKey) {
-    throw new Error('MiniMax API key is empty in the audio config.')
+    throw new Error(`Audio config for "${provider}" has empty apiKey.`)
   }
-  // model 在 DB 里存为 JSON 字符串(参见 aiConfigs 的 schema: text('model')),
-  // 这里反序列化后才能交给 modelOf() 正确解析
-  let model: any = active.model
-  if (typeof model === 'string') {
-    try {
-      const parsed = JSON.parse(model)
-      if (Array.isArray(parsed) || typeof parsed === 'string') {
-        model = parsed
-      }
-    } catch { /* 留原值让 modelOf() 兜底 */ }
+  return {
+    baseUrl: active.baseUrl,
+    apiKey: active.apiKey,
+    model: active.model,
+    provider: active.provider,
   }
-  return { baseUrl: active.baseUrl, apiKey: active.apiKey, model }
 }
 
-interface TestBody {
+const DEFAULT_TEST_TEXT = '微风拂过柔软的草地,清新的芳香伴随着鸟儿的歌唱。'
+
+/** minimax 的接口请求体 */
+interface MinimaxTestBody {
   text?: string
   textFileId?: string
   voiceId?: string
@@ -68,41 +71,92 @@ interface TestBody {
   channel?: 1 | 2
   pronunciationDictTone?: string[]
   voiceModify?: { pitch?: number; intensity?: number; timbre?: number; soundEffects?: string }
+  /** 端到端轮询参数 */
   pollIntervalMs?: number
   pollTimeoutMs?: number
+  /** provider 派发 (默认 minimax) */
+  provider?: string
 }
 
-const DEFAULT_TEST_TEXT = '微风拂过柔软的草地,清新的芳香伴随着鸟儿的歌唱。'
+/** autodl TTS 的接口请求体 */
+interface AutoDLTestBody {
+  promptText?: string
+  promptSimple?: string
+  emotion?: {
+    happy?: number
+    angry?: number
+    sad?: number
+    afraid?: number
+    surprised?: number
+    calm?: number
+    melancholic?: number
+    disgusted?: number
+    random?: boolean
+  }
+  emoRefAudio?: string
+  emoControlMethod?: '使用情感参考音频' | '使用情感向量控制' | '不使用情感'
+  pollIntervalMs?: number
+  pollTimeoutMs?: number
+  provider?: string
+}
 
-// POST /ai-voices/async/test - 端到端验证
+const app = new Hono()
+
+// POST /ai-voices-async/test - 端到端验证
 app.post('/test', async (c) => {
+  const t0 = Date.now()
+  let provider = 'minimax'
   try {
-    const cfg = getMiniMaxAudioConfig()
-    const adapter = getTTSAsyncAdapter('minimax')
-    if (!adapter) return fail(c, 'Async TTS adapter not available', 500)
+    const body = (await c.req.json().catch(() => ({}))) as MinimaxTestBody & AutoDLTestBody
+    provider = readProvider(c, body)
+    const adapter = getTTSAsyncAdapter(provider)
+    if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
-    const body = (await c.req.json().catch(() => ({}))) as TestBody
-    const params = {
-      text: body.text || DEFAULT_TEST_TEXT,
-      voiceId: body.voiceId || 'audiobook_male_1',
-      model: body.model || modelOf(cfg) || 'speech-2.8-hd',
-      speed: body.speed ?? 1,
-      vol: body.vol ?? 10,
-      pitch: body.pitch ?? 1,
-      languageBoost: body.languageBoost,
-      audioSampleRate: body.audioSampleRate ?? 32000,
-      bitrate: body.bitrate ?? 128000,
-      format: body.format ?? 'mp3',
-      channel: body.channel ?? 1,
-      pronunciationDictTone: body.pronunciationDictTone,
-      voiceModify: body.voiceModify,
+    // 分 provider 构建 params — 不同 provider 接口签名不同
+    let createReq: any
+    let pollInterval = 2000
+    let pollTimeout = 300000
+
+    if (provider === 'autodl-comfyui') {
+      const autodlBody = body as AutoDLTestBody
+      const params = {
+        promptText: autodlBody.promptText || DEFAULT_TEST_TEXT,
+        promptSimple: autodlBody.promptSimple,
+        emotion: autodlBody.emotion,
+        emoRefAudio: autodlBody.emoRefAudio,
+        emoControlMethod: autodlBody.emoControlMethod,
+      }
+      const cfg = getAudioConfig(provider)
+      createReq = adapter.buildCreateRequest(cfg, params)
+      pollInterval = autodlBody.pollIntervalMs ?? 3000
+      pollTimeout = autodlBody.pollTimeoutMs ?? 300000
+    } else {
+      // 默认 minimax
+      const mmBody = body as MinimaxTestBody
+      const cfg = getAudioConfig(provider)
+      const params = {
+        text: mmBody.text || DEFAULT_TEST_TEXT,
+        textFileId: mmBody.textFileId,
+        voiceId: mmBody.voiceId || 'audiobook_male_1',
+        model: mmBody.model || (typeof cfg.model === 'string' ? cfg.model : 'speech-2.8-hd'),
+        speed: mmBody.speed ?? 1,
+        vol: mmBody.vol ?? 10,
+        pitch: mmBody.pitch ?? 1,
+        languageBoost: mmBody.languageBoost,
+        audioSampleRate: mmBody.audioSampleRate ?? 32000,
+        bitrate: mmBody.bitrate ?? 128000,
+        format: mmBody.format ?? 'mp3',
+        channel: mmBody.channel ?? 1,
+        pronunciationDictTone: mmBody.pronunciationDictTone,
+        voiceModify: mmBody.voiceModify,
+      }
+      createReq = adapter.buildCreateRequest(cfg, params)
+      pollInterval = mmBody.pollIntervalMs ?? 2000
+      pollTimeout = mmBody.pollTimeoutMs ?? 300000
     }
-    const pollInterval = body.pollIntervalMs ?? 2000
-    const pollTimeout = body.pollTimeoutMs ?? 300000   // 默认 5 分钟
 
     // 1) 创建任务
-    const createReq = adapter.buildCreateRequest(cfg, params)
-    const t0 = Date.now()
+    const tCreate = Date.now()
     const createResp = await fetch(createReq.url, {
       method: createReq.method,
       headers: createReq.headers,
@@ -113,18 +167,19 @@ app.post('/test', async (c) => {
       return fail(c, `create task failed: ${createResp.status} ${JSON.stringify(createJson).slice(0, 500)}`, 502)
     }
     const handle = adapter.parseCreateResponse(createJson)
-    const createdAt = Date.now() - t0
+    const createdAt = Date.now() - tCreate
 
     // 2) 轮询
-    const q0 = Date.now()
+    const tPoll = Date.now()
     let pollResult: any = null
-    while (Date.now() - q0 < pollTimeout) {
+    const cfg = getAudioConfig(provider)
+    while (Date.now() - tPoll < pollTimeout) {
       const qReq = adapter.buildQueryRequest(cfg, handle.taskId)
       const qResp = await fetch(qReq.url, { method: qReq.method, headers: qReq.headers })
       const qJson = await qResp.json().catch(() => ({}))
       const parsed = adapter.parseQueryResponse(qJson)
       if (parsed.status === 'success') {
-        pollResult = { ...parsed, raw: undefined } // 不回传整个 raw,避免太大
+        pollResult = parsed
         break
       }
       if (parsed.status === 'failed') {
@@ -135,9 +190,31 @@ app.post('/test', async (c) => {
     if (!pollResult) {
       return fail(c, `poll timeout after ${pollTimeout}ms`, 504, { taskId: handle.taskId })
     }
-    const polledAt = Date.now() - q0
+    const polledAt = Date.now() - tPoll
 
-    // 3) 下载(minimax 返回的是 tar 归档,内含 mp3 / titles / extra)
+    // 3) 拿音频 — autodl 直接是 URL; minimax 是 file_id 需要 download
+    if (provider === 'autodl-comfyui') {
+      if (!pollResult.audioUrl) {
+        return fail(c, 'autodl-comfyui task completed but no audioUrl in result', 502, { taskId: handle.taskId, raw: pollResult.raw })
+      }
+      return success(c, {
+        ok: true,
+        provider,
+        taskId: handle.taskId,
+        audioUrl: pollResult.audioUrl,
+        format: 'wav',
+        timings: {
+          createMs: createdAt,
+          pollMs: polledAt,
+          totalMs: Date.now() - t0,
+        },
+      })
+    }
+
+    // minimax: 下载 + 解 tar 归档
+    if (!adapter.buildDownloadRequest || !adapter.parseDownloadResponse) {
+      return fail(c, `provider "${provider}" task succeeded but no download helper`, 500, { taskId: handle.taskId })
+    }
     const dReq = adapter.buildDownloadRequest(cfg, pollResult.fileId)
     const dResp = await fetch(dReq.url, { method: dReq.method, headers: dReq.headers })
     if (!dResp.ok) {
@@ -153,11 +230,12 @@ app.post('/test', async (c) => {
 
     return success(c, {
       ok: true,
+      provider,
       taskId: handle.taskId,
       fileId: pollResult.fileId,
       bytes: audioBuf.length,
-      format: params.format,
-      sampleRate: params.audioSampleRate,
+      format: 'mp3',
+      sampleRate: 32000,
       timings: {
         createMs: createdAt,
         pollMs: polledAt,
@@ -166,38 +244,52 @@ app.post('/test', async (c) => {
       audioBase64: audioB64,
     })
   } catch (e: any) {
-    return fail(c, e?.message || 'unknown error', 500)
+    return fail(c, e?.message || 'unknown error', 500, { provider })
   }
 })
 
-// POST /ai-voices/async/create - 仅创建任务
+// POST /ai-voices-async/create - 仅创建任务
 app.post('/create', async (c) => {
   try {
-    const cfg = getMiniMaxAudioConfig()
-    const adapter = getTTSAsyncAdapter('minimax')
-    if (!adapter) return fail(c, 'Async TTS adapter not available', 500)
+    const body = (await c.req.json().catch(() => ({}))) as MinimaxTestBody & AutoDLTestBody
+    const provider = readProvider(c, body)
+    const adapter = getTTSAsyncAdapter(provider)
+    if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
-    const body = (await c.req.json().catch(() => ({}))) as TestBody
-    if (!body.text && !body.textFileId) {
-      return badRequest(c, 'text or textFileId is required')
+    let req: any
+    if (provider === 'autodl-comfyui') {
+      const b = body as AutoDLTestBody
+      if (!b.promptText) return badRequest(c, 'promptText is required')
+      const cfg = getAudioConfig(provider)
+      req = adapter.buildCreateRequest(cfg, {
+        promptText: b.promptText,
+        promptSimple: b.promptSimple,
+        emotion: b.emotion,
+        emoRefAudio: b.emoRefAudio,
+        emoControlMethod: b.emoControlMethod,
+      })
+    } else {
+      const b = body as MinimaxTestBody
+      if (!b.text && !b.textFileId) return badRequest(c, 'text or textFileId is required')
+      const cfg = getAudioConfig(provider)
+      req = adapter.buildCreateRequest(cfg, {
+        text: b.text,
+        textFileId: b.textFileId,
+        voiceId: b.voiceId || 'audiobook_male_1',
+        model: b.model,
+        speed: b.speed,
+        vol: b.vol,
+        pitch: b.pitch,
+        languageBoost: b.languageBoost,
+        audioSampleRate: b.audioSampleRate,
+        bitrate: b.bitrate,
+        format: b.format,
+        channel: b.channel,
+        pronunciationDictTone: b.pronunciationDictTone,
+        voiceModify: b.voiceModify,
+      })
     }
-    const params = {
-      text: body.text,
-      textFileId: body.textFileId,
-      voiceId: body.voiceId || 'audiobook_male_1',
-      model: body.model || modelOf(cfg) || 'speech-2.8-hd',
-      speed: body.speed,
-      vol: body.vol,
-      pitch: body.pitch,
-      languageBoost: body.languageBoost,
-      audioSampleRate: body.audioSampleRate,
-      bitrate: body.bitrate,
-      format: body.format,
-      channel: body.channel,
-      pronunciationDictTone: body.pronunciationDictTone,
-      voiceModify: body.voiceModify,
-    }
-    const req = adapter.buildCreateRequest(cfg, params)
+
     const resp = await fetch(req.url, {
       method: req.method,
       headers: req.headers,
@@ -208,21 +300,22 @@ app.post('/create', async (c) => {
       return fail(c, `create failed: ${resp.status} ${JSON.stringify(json).slice(0, 500)}`, 502)
     }
     const handle = adapter.parseCreateResponse(json)
-    return success(c, { taskId: handle.taskId, raw: json })
+    return success(c, { provider, taskId: handle.taskId, raw: json })
   } catch (e: any) {
     return fail(c, e?.message || 'unknown error', 500)
   }
 })
 
-// GET /ai-voices/async/query?task_id=xxx
+// GET /ai-voices-async/query?task_id=xxx&provider=xxx
 app.get('/query', async (c) => {
   try {
     const taskId = c.req.query('task_id')
     if (!taskId) return badRequest(c, 'task_id is required')
-    const cfg = getMiniMaxAudioConfig()
-    const adapter = getTTSAsyncAdapter('minimax')
-    if (!adapter) return fail(c, 'Async TTS adapter not available', 500)
+    const provider = readProvider(c, {})
+    const adapter = getTTSAsyncAdapter(provider)
+    if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
+    const cfg = getAudioConfig(provider)
     const req = adapter.buildQueryRequest(cfg, taskId)
     const resp = await fetch(req.url, { method: req.method, headers: req.headers })
     const json = await resp.json().catch(() => ({}))
@@ -230,7 +323,7 @@ app.get('/query', async (c) => {
       return fail(c, `query failed: ${resp.status} ${JSON.stringify(json).slice(0, 500)}`, 502)
     }
     const parsed = adapter.parseQueryResponse(json)
-    return success(c, { taskId, ...parsed })
+    return success(c, { provider, taskId, ...parsed })
   } catch (e: any) {
     return fail(c, e?.message || 'unknown error', 500)
   }
