@@ -73,12 +73,12 @@ function getEpisodeConfigId(episodeId: number): number | null | undefined {
  * 失败时 fallback 到 sequential concat 协议(老协议,兼容更多编解码器)。
  */
 function ffmpegConcat(segmentPaths: string[], outputPath: string): void {
-  // 所有 segment 在同一目录,使用相对路径最稳
+  // 重要:concat demuxer 里的相对路径会被解析为相对 list file 所在目录,
+  //      不是 segment 所在目录。这里统一用绝对路径,list file 仍放 /tmp。
   const listFile = path.join(os.tmpdir(), `tts-concat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
   try {
-    const segDir = path.dirname(segmentPaths[0])
     const listBody = segmentPaths
-      .map((p) => `file '${path.relative(segDir, p).replace(/'/g, "'\\''")}'`)
+      .map((p) => `file '${p.replace(/'/g, "'\\''")}'`)
       .join('\n')
     fs.writeFileSync(listFile, listBody, 'utf8')
     logTaskProgress('TTSConcat', 'ffmpeg-concat', { count: segmentPaths.length, listFile })
@@ -145,21 +145,27 @@ export async function generateTTSForDialogue(
   }
 
   // 拼接
+  // STORAGE_PATH 默认是 '.../data/static', 而 generateTTS 返回的相对路径是 'static/audio/xxx.mp3'
+  // (文件存到 ${STORAGE_PATH}/audio/xxx.mp3, URL 前缀 '/static/audio/xxx.mp3')。
+  // 这里直接把 segPath ('static/audio/xxx.mp3') 拼到 dataDir ('.../data/static') 前面会出现
+  // '.../data/static/static/audio/xxx.mp3' (多了一层 static/)。需要先剥掉 'static/' 前缀再 join。
   const dataDir = process.env.STORAGE_PATH || path.resolve(process.cwd(), 'data/static')
   const outDir = path.join(dataDir, 'audio')
   fs.mkdirSync(outDir, { recursive: true })
   const outName = `tts_${storyboardId}_${Date.now()}.mp3`
   const outAbs = path.join(outDir, outName)
 
+  const resolveSegPath = (p: string): string => {
+    if (path.isAbsolute(p)) return p
+    const stripped = p.startsWith('static/') ? p.slice('static/'.length) : p
+    return path.join(dataDir, stripped)
+  }
+
   if (segPaths.length === 1) {
     // 单段直接复制,免去 ffmpeg 调用
-    const single = path.isAbsolute(segPaths[0]) ? segPaths[0] : path.join(dataDir, segPaths[0])
-    fs.copyFileSync(single, outAbs)
+    fs.copyFileSync(resolveSegPath(segPaths[0]), outAbs)
   } else {
-    ffmpegConcat(
-      segPaths.map((p) => (path.isAbsolute(p) ? p : path.join(dataDir, p))),
-      outAbs,
-    )
+    ffmpegConcat(segPaths.map(resolveSegPath), outAbs)
   }
 
   const relativePath = `static/audio/${outName}`
