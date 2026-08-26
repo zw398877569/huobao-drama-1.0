@@ -1,7 +1,8 @@
 ---
 name: h3-official-prompt
-description: MiniMax H3 官方 prompt 写作模板 — T2VA/I2VA/FL2VA/L2VA (fl2va.md) + R2V (ref2va.md) 的完整规范
+description: Write MiniMax H3 video generation prompts for T2VA, I2VA, FL2VA, L2VA, and Ref2VA. Use when rewriting multimodal requests into H3 prompt structures, composing integrated_multimodal_description, overall_soundscape, and non_diegetic_music, aligning keyframes, or defining reference labels for images, videos, and audio.
 agent: storyboard_breaker
+compatibility: Portable to any agent that can read local files — no external API calls, MiniMax Hub tools, or proprietary runtime required. fl2va.md / ref2va.md are plain Markdown reference docs and work in Codex, Claude Code, Cursor, or any other agent harness.
 ---
 
 # MiniMax H3 官方 Prompt 模板
@@ -604,3 +605,16 @@ N/A
 ```
 
 </details>
+
+
+---
+
+## 官方 Tips for Better Results (摘自 GitHub MiniMax-AI/MiniMax-H3@main)
+
+1. **时长对齐**: 描述的总时长必须匹配请求的视频长度(4–15 秒)。如果用户要 8 秒, integrated_multimodal_description 里的 cut 时间加起来必须 ≈ 8s。
+2. **标签一致**: 参考标签 `<Picture 1>` / `<Video 1>` / `<Audio 1>` 在 subject_definitions / summary / retention_analysis / detailed_description / 音频 sections 之间必须保持同一含义(同一编号 = 同一资产)。
+3. **避免抽象词**: 用具体视觉/听觉细节代替 "cinematic" / "beautiful" / "stunning" 等抽象形容词。具体到"侧光暖黄" / "绒毛白带反光" / "钢琴慢节奏"。
+4. **关键帧接入**: 用 I2VA / FL2VA / L2VA 时,必须明确说首/尾帧怎么接到 timeline:`<Picture 1>` at 0.00s / `<Picture N>` at S.SSs / "the shot ends on `<Picture N>`" 等显式标注。
+
+(来源: https://github.com/MiniMax-AI/MiniMax-H3/blob/main/skills/h3-prompt-writing/SKILL.md commit a107547)
+
