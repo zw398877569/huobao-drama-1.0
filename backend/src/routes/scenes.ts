@@ -56,7 +56,7 @@ app.post('/:id/generate-image', async (c) => {
     const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
     logTaskSuccess('SceneImage', 'generate', { sceneId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
-  } catch (err) {
+  } catch (err: any) {
     logTaskError('SceneImage', 'generate', { sceneId: id, error: err.message })
     db.update(schema.scenes).set({ status: 'failed', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
     return badRequest(c, err.message)

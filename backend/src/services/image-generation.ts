@@ -217,7 +217,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
           // 策略违规: 用更激进的清洗重试一次
           if (retryCount === 0) {
             retryCount++
-            const originalPrompt = genRecord.prompt
+            const originalPrompt = genRecord.prompt || ''
             const aggressivePrompt = sanitizeImagePromptAggressive(originalPrompt)
             logTaskWarn('ImageTask', 'policy-violation-retrying-with-aggressive', {
               id,

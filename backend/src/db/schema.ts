@@ -283,6 +283,7 @@ export const videoGenerations = sqliteTable('video_generations', {
   motionLevel: integer('motion_level'),
   cameraMotion: text('camera_motion'),
   seed: integer('seed'),
+  negativePrompt: text('negative_prompt'),
   videoUrl: text('video_url'),
   minioUrl: text('minio_url'),
   localPath: text('local_path'),

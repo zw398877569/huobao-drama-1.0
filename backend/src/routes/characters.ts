@@ -53,7 +53,7 @@ app.post('/:id/generate-voice-sample', async (c) => {
       .where(eq(schema.characters.id, id)).run()
     logTaskSuccess('VoiceSample', 'generate', { characterId: id, path: audioPath })
     return success(c, { voice_sample_url: audioPath })
-  } catch (err) {
+  } catch (err: any) {
     logTaskError('VoiceSample', 'generate', { characterId: id, error: err.message })
     return badRequest(c, 'TTS 生成失败: ' + err.message)
   }
@@ -77,7 +77,7 @@ app.post('/:id/generate-image', async (c) => {
     const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
     logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
-  } catch (err) {
+  } catch (err: any) {
     logTaskError('CharacterImage', 'generate', { characterId: id, error: err.message })
     return badRequest(c, err.message)
   }

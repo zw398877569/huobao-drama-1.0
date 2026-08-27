@@ -113,7 +113,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
 
         // 提示词翻译: 非英文 prompt 先翻译为英文再发给 Agnes
-        let finalPrompt = vRecord.prompt
+        let finalPrompt: string = vRecord.prompt || ''
         if (hasNonEnglishChars(finalPrompt)) {
           try {
             logTaskProgress('VideoTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
@@ -195,7 +195,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
         if (isPolicyViolation) {
           if (retryCount === 0) {
             retryCount++
-            const originalPrompt = vRecord.prompt
+            const originalPrompt: string = vRecord.prompt || ''
             const aggressivePrompt = sanitizeImagePromptAggressive(originalPrompt)
             logTaskWarn('VideoTask', 'policy-violation-retrying-with-aggressive', {
               id,
