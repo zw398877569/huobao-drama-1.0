@@ -1732,6 +1732,7 @@ import { useStoryboardEdit } from '~/composables/useStoryboardEdit'
 import { useEpisodePipeline } from '~/composables/useEpisodePipeline'
 import { useConfigLoading } from '~/composables/useConfigLoading'
 import { useShotTTS } from '~/composables/useShotTTS'
+import { useEpisodeAgents } from '~/composables/useEpisodeAgents'
 import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1884,6 +1885,19 @@ const {
   ttsEligibleCount,
 })
 
+// Script-stage + production agents (rewrite / extract / voice / breakdown / samples / add shot)
+const {
+  doRewrite, skipRewrite, doExtract, doVoice,
+  batchGenSamples, doBreakdown, genSample, addShot,
+} = useEpisodeAgents({
+  ctx: { chars, sbs, epId, localRaw, localScript, rawContent, scriptStep, charsVoiced },
+  dramaId,
+  saveRaw, saveScr,
+  runAgent,
+  refresh,
+  videoConfigs, lockedVideoConfigId,
+})
+
 const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
 
@@ -1967,43 +1981,6 @@ async function refresh() {
   }
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
 }
-
-function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, epId.value, refresh) }
-function skipRewrite() {
-  const raw = (localRaw.value || rawContent.value || '').trim()
-  if (!raw) {
-    toast.warning('请先填写原始内容')
-    return
-  }
-  localScript.value = raw
-  saveScr()
-  toast.success('已跳过 AI 改写，当前将直接使用原始内容')
-  scriptStep.value = 2
-}
-function doExtract() { saveScr(); runAgent('extractor', '请从剧本中提取所有角色和场景信息，提取时自动与项目已有数据进行去重合并', dramaId, epId.value, refresh) }
-function doVoice() { runAgent('voice_assigner', '请为所有角色分配合适的音色', dramaId, epId.value, refresh) }
-async function batchGenSamples() {
-  const pending = chars.value.filter(c => (c.voice_style || c.voiceStyle) && !(c.voice_sample_url || c.voiceSampleUrl))
-  if (!pending.length) {
-    toast.info(charsVoiced.value ? '所有角色的试听文件已生成' : '请先分配音色')
-    return
-  }
-  const results = await Promise.allSettled(pending.map(c => characterAPI.voiceSample(c.id, epId.value)))
-  const okCount = results.filter(r => r.status === 'fulfilled').length
-  const failCount = results.length - okCount
-  if (okCount) toast.success(`已生成 ${okCount} 份试听文件`)
-  if (failCount) toast.error(`${failCount} 份试听文件生成失败`)
-  await refresh()
-}
-function doBreakdown() {
-  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
-  const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
-  runAgent('storyboard_breaker', `请拆解分镜并生成视频提示词。视频模型：${label}，请根据该模型的特性和时长限制生成合适的视频提示词。`, dramaId, epId.value, refresh)
-
-
-}
-async function genSample(id) { try { await characterAPI.voiceSample(id, epId.value); toast.success('试听已生成'); refresh() } catch (e) { toast.error(e.message) } }
-async function addShot() { await storyboardAPI.create({ episode_id: epId.value, storyboard_number: sbs.value.length + 1, title: `镜头${sbs.value.length + 1}`, duration: 10 }); refresh() }
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
