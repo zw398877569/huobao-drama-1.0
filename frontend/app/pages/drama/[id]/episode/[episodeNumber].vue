@@ -1724,6 +1724,7 @@ import {
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
+import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1733,20 +1734,16 @@ const route = useRoute()
 const dramaId = Number(route.params.id)
 const episodeNumber = Number(route.params.episodeNumber)
 
-const drama = ref(null), episode = ref(null), chars = ref([]), scenes = ref([]), sbs = ref([]), mergeData = ref(null)
 const panel = ref('script')
 const { running: rn, runningType: rt, run: runAgent } = useAgent()
 
-const localRaw = ref(''), localScript = ref('')
-const rawContent = computed(() => episode.value?.content || '')
-const scriptContent = computed(() => episode.value?.script_content || episode.value?.scriptContent || '')
-const epId = computed(() => episode.value?.id || 0)
-const rawLen = computed(() => localRaw.value.replace(/\s/g, '').length || 0)
-const scriptLen = computed(() => localScript.value.replace(/\s/g, '').length || 0)
-const charsVoiced = computed(() => chars.value.filter(c => c.voice_style || c.voiceStyle).length)
-const voiceSampleCount = computed(() => chars.value.filter(c => c.voice_sample_url || c.voiceSampleUrl).length)
-const composedCount = computed(() => sbs.value.filter(s => s.composed_video_url || s.composedVideoUrl).length)
-const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.mergedUrl || null)
+const {
+  drama, episode, chars, scenes, sbs, mergeData,
+  localRaw, localScript,
+  rawContent, scriptContent, epId, rawLen, scriptLen,
+  charsVoiced, voiceSampleCount, composedCount, mergeUrl,
+  saveRaw, saveScr,
+} = useEpisodeContext()
 
 // Tracks which storyboard currently has an in-flight scene_intention analysis
 const analyzingIntentionId = ref<number | null>(null)
@@ -1762,7 +1759,7 @@ const retakeTargetSb = ref<any>(null)
 const retakeDimension = ref('prompt')
 const retakeUserNote = ref('')
 
-const scriptStep = ref(0)
+
 const prodTab = ref('chars')
 const prodTabIdx = computed({
   get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
@@ -2967,8 +2964,6 @@ const scriptSteps = computed(() => {
   ]
 })
 
-watch(rawContent, v => { localRaw.value = v }, { immediate: true })
-watch(scriptContent, v => { localScript.value = v }, { immediate: true })
 
 async function refresh() {
   try {
@@ -3023,8 +3018,6 @@ async function refresh() {
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
 }
 
-function saveRaw() { episodeAPI.update(epId.value, { content: localRaw.value }); episode.value.content = localRaw.value }
-function saveScr() { episodeAPI.update(epId.value, { script_content: localScript.value }); episode.value.script_content = localScript.value }
 function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, epId.value, refresh) }
 function skipRewrite() {
   const raw = (localRaw.value || rawContent.value || '').trim()
