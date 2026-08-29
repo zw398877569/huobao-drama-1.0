@@ -1729,6 +1729,7 @@ import { useImageGeneration } from '~/composables/useImageGeneration'
 import { useVideoGeneration } from '~/composables/useVideoGeneration'
 import { useGridTool } from '~/composables/useGridTool'
 import { useStoryboardEdit } from '~/composables/useStoryboardEdit'
+import { useEpisodePipeline } from '~/composables/useEpisodePipeline'
 import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1832,12 +1833,30 @@ const {
   refresh,
 })
 
-const prodTab = ref('chars')
-const prodTabIdx = computed({
-  get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
-  set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
+// Episode pipeline navigation: sidebar sections, progress, stage gating, script-step nav
+const {
+  prodTab, prodTabIdx, frameMode, frameModeOptions,
+  charImgCount, sceneImgCount, ttsEligibleCount, ttsGeneratedCount, shotImgCount, shotVidCount, visualCharTotal, visualChars,
+  prodStepDone, canExport, goNextProd,
+  stepLabels, prevStepLabel, nextStepLabel, canGoNext, goPrevStep, goNextStep,
+  prodTabDefs, mainStageDefs,
+  sidebarSections, activeMainStage, mainStageDone, goMainStage,
+  activeSubSteps, activeSubStepKey, sidebarJumpSteps,
+  bubbleSteps, activeBubbleKey, showBottomBubble, goSubStep,
+  pipelineProgress, currentStageLabel, currentMainStageLabel, currentSubStageLabel,
+  scriptSteps,
+} = useEpisodePipeline({
+  ctx: {
+    drama, episode, chars, scenes, sbs, mergeData,
+    scriptStep, panel,
+    localRaw, localScript,
+    rawContent, scriptContent, charsVoiced, composedCount, mergeUrl,
+    agentRunningType: rt,
+  },
+  saveRaw, saveScr,
+  hasDialogue, hasTTS,
 })
-const frameMode = ref('first')
+
 const fallbackVoiceProfiles = [
   { id: 'alloy', label: 'Alloy', gender: '中性', traits: '平衡、自然、克制', suitable: '通用叙述、旁白、需要稳定输出的角色' },
   { id: 'echo', label: 'Echo', gender: '男声', traits: '低沉、稳重、冷静', suitable: '成熟男性、父辈、旁白、压迫感角色' },
@@ -1854,7 +1873,6 @@ const videoConfigSelectOptions = computed(() => videoConfigs.value.map(c => {
   const label = modelName ? `${modelName} (${c.provider})` : `${c.name} (${c.provider})`
   return { label, value: c.id }
 }))
-const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
@@ -1889,12 +1907,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleImageViewerKeydown)
 })
 
-function isNarratorCharacter(char) {
-  const text = `${char?.name || ''} ${char?.role || ''}`.toLowerCase()
-  return text.includes('旁白') || text.includes('narrator') || text.includes('画外音')
-}
-
-const visualChars = computed(() => chars.value.filter(c => !isNarratorCharacter(c)))
 
 const lockedImageConfigId = computed(() => episode.value?.image_config_id || episode.value?.imageConfigId || null)
 const lockedVideoConfigId = computed(() => episode.value?.video_config_id || episode.value?.videoConfigId || null)
@@ -1905,321 +1917,8 @@ const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.fin
 const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
 // Production step helpers
-function prodStepDone(id) {
-  if (id === 'chars') return !visualCharTotal.value || charImgCount.value === visualCharTotal.value
-  if (id === 'scenes') return !!scenes.value.length && sceneImgCount.value === scenes.value.length
-  if (id === 'dubbing') return !!sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)
-  if (id === 'shots') return !!sbs.value.length && shotImgCount.value === sbs.value.length
-  if (id === 'videos') return !!sbs.value.length && shotVidCount.value === sbs.value.length
-  if (id === 'compose') return !!sbs.value.length && composedCount.value === sbs.value.length
-  return false
-}
-const canExport = computed(() => !!sbs.value.length && composedCount.value === sbs.value.length)
-function goNextProd() {
-  if (prodTabIdx.value < prodTabDefs.value.length - 1) {
-    prodTabIdx.value++
-  } else {
-    panel.value = 'export'
-  }
-}
 
 // Script step navigation
-const stepLabels = ['原始内容', 'AI 改写', '提取', '音色', '分镜']
-const prevStepLabel = computed(() => scriptStep.value > 0 ? stepLabels[scriptStep.value - 1] : '')
-const nextStepLabel = computed(() => {
-  if (scriptStep.value === 4) return '进入制作'
-  return stepLabels[scriptStep.value + 1] || ''
-})
-const canGoNext = computed(() => {
-  if (scriptStep.value === 0) return !!localRaw.value.trim()
-  if (scriptStep.value === 1) return !!localScript.value.trim() || !!scriptContent.value
-  if (scriptStep.value === 2) return chars.value.length > 0
-  if (scriptStep.value === 3) return charsVoiced.value > 0
-  if (scriptStep.value === 4) return sbs.value.length > 0
-  return false
-})
-function goPrevStep() { if (scriptStep.value > 0) scriptStep.value-- }
-function goNextStep() {
-  if (scriptStep.value === 0 && localRaw.value.trim()) { saveRaw() }
-  if (scriptStep.value === 1 && localScript.value.trim()) { saveScr() }
-  if (scriptStep.value === 4) { panel.value = 'production'; return }
-  if (canGoNext.value) scriptStep.value++
-}
-
-const charImgCount = computed(() => visualChars.value.filter(c => c.image_url || c.imageUrl).length)
-const sceneImgCount = computed(() => scenes.value.filter(s => s.image_url || s.imageUrl).length)
-const ttsEligibleCount = computed(() => sbs.value.filter(s => hasDialogue(s)).length)
-const ttsGeneratedCount = computed(() => sbs.value.filter(s => hasDialogue(s) && hasTTS(s)).length)
-const shotImgCount = computed(() => sbs.value.filter(s => s.first_frame_image || s.firstFrameImage || s.last_frame_image || s.lastFrameImage || s.composed_image || s.composedImage).length)
-const shotVidCount = computed(() => sbs.value.filter(s => s.video_url || s.videoUrl).length)
-const visualCharTotal = computed(() => visualChars.value.length)
-
-const prodTabDefs = computed(() => [
-  { id: 'chars', label: '角色形象', icon: Users, badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
-  { id: 'scenes', label: '场景图片', icon: MapPin, badge: sceneImgCount.value ? `${sceneImgCount.value}/${scenes.value.length}` : '' },
-  { id: 'dubbing', label: '配音生成', icon: Mic2, badge: '' },
-  { id: 'shots', label: '镜头图片', icon: ImageIcon, badge: shotImgCount.value ? `${shotImgCount.value}/${sbs.value.length}` : '' },
-  { id: 'videos', label: '视频生成', icon: Video, badge: shotVidCount.value ? `${shotVidCount.value}/${sbs.value.length}` : '' },
-  { id: 'compose', label: '视频合成', icon: Layers, badge: composedCount.value ? `${composedCount.value}/${sbs.value.length}` : '' },
-])
-
-const mainStageDefs = [
-  { id: 'script', label: '剧本', desc: '内容改写与整理', icon: FileText },
-  { id: 'assets', label: '资产', desc: '角色、场景与音色', icon: FolderKanban },
-  { id: 'storyboard', label: '分镜', desc: '镜头制作与合成', icon: Clapperboard },
-  { id: 'export', label: '导出', desc: '拼接与成片输出', icon: Download },
-]
-
-const sidebarSections = computed(() => ([
-  {
-    id: 'script',
-    label: '剧本',
-    items: [
-      { key: 'script:raw', label: '原始内容', desc: '', icon: FileText, done: !!rawContent.value },
-      { key: 'script:rewrite', label: 'AI 改写', desc: '', icon: FileText, done: !!scriptContent.value },
-      { key: 'script:extract', label: '提取', desc: '', icon: Users, done: !!chars.value.length },
-      { key: 'script:voice', label: '音色', desc: '', icon: Mic2, done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'script:storyboard', label: '分镜', desc: '', icon: Clapperboard, done: !!sbs.value.length },
-    ],
-  },
-  {
-    id: 'production',
-    label: '制作',
-    items: [
-      { key: 'prod:chars', label: '角色形象', desc: '', icon: Users, done: prodStepDone('chars') },
-      { key: 'prod:scenes', label: '场景图片', desc: '', icon: MapPin, done: prodStepDone('scenes') },
-      { key: 'prod:dubbing', label: '配音生成', desc: '', icon: Mic2, done: prodStepDone('dubbing') },
-      { key: 'prod:shots', label: '镜头图片', desc: '', icon: ImageIcon, done: prodStepDone('shots') },
-      { key: 'prod:videos', label: '视频生成', desc: '', icon: Video, done: prodStepDone('videos') },
-      { key: 'prod:compose', label: '视频合成', desc: '', icon: Layers, done: prodStepDone('compose') },
-    ],
-  },
-  {
-    id: 'export',
-    label: '导出',
-    items: [
-      { key: 'export:merge', label: '拼接导出', desc: '', icon: Download, done: !!mergeUrl.value },
-    ],
-  },
-]))
-
-const activeMainStage = computed(() => {
-  if (panel.value === 'export') return 'export'
-  if (panel.value === 'production') {
-    return ['chars', 'scenes'].includes(prodTab.value) ? 'assets' : 'storyboard'
-  }
-  if (scriptStep.value <= 1) return 'script'
-  if (scriptStep.value <= 3) return 'assets'
-  return 'storyboard'
-})
-
-function mainStageDone(stageId) {
-  if (stageId === 'script') return !!scriptContent.value
-  if (stageId === 'assets') {
-    const charsReady = !!chars.value.length && charsVoiced.value === chars.value.length
-    const charImagesReady = !visualCharTotal.value || charImgCount.value === visualCharTotal.value
-    const sceneImagesReady = !scenes.value.length || sceneImgCount.value === scenes.value.length
-    return charsReady && charImagesReady && sceneImagesReady
-  }
-  if (stageId === 'storyboard') {
-    if (!sbs.value.length) return false
-    const ttsReady = !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value
-    return ttsReady
-      && shotImgCount.value === sbs.value.length
-      && shotVidCount.value === sbs.value.length
-      && composedCount.value === sbs.value.length
-  }
-  if (stageId === 'export') return !!mergeUrl.value
-  return false
-}
-
-function goMainStage(stageId) {
-  if (stageId === 'script') {
-    panel.value = 'script'
-    scriptStep.value = Math.min(scriptStep.value, 1)
-    return
-  }
-  if (stageId === 'assets') {
-    const hasAssetWorkspace = !!visualCharTotal.value || !!scenes.value.length
-    const hasPendingAssetGeneration = (visualCharTotal.value && charImgCount.value < visualCharTotal.value)
-      || (scenes.value.length && sceneImgCount.value < scenes.value.length)
-    if (panel.value === 'production' || hasPendingAssetGeneration || hasAssetWorkspace) {
-      panel.value = 'production'
-      prodTab.value = ['chars', 'scenes'].includes(prodTab.value) ? prodTab.value : 'chars'
-      return
-    }
-    panel.value = 'script'
-    scriptStep.value = chars.value.length ? 3 : 2
-    return
-  }
-  if (stageId === 'storyboard') {
-    if (panel.value === 'production') {
-      prodTab.value = ['dubbing', 'shots', 'videos', 'compose'].includes(prodTab.value) ? prodTab.value : 'dubbing'
-      return
-    }
-    panel.value = 'script'
-    scriptStep.value = 4
-    return
-  }
-  panel.value = 'export'
-}
-
-const activeSubSteps = computed(() => {
-  if (activeMainStage.value === 'script') {
-    return [
-      { key: 'script:raw', label: '原始内容', done: !!rawContent.value },
-      { key: 'script:rewrite', label: 'AI 改写', done: !!scriptContent.value },
-    ]
-  }
-  if (activeMainStage.value === 'assets') {
-    return [
-      { key: 'script:extract', label: '提取角色场景', done: !!chars.value.length },
-      { key: 'script:voice', label: '分配音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'prod:chars', label: '角色形象', done: !visualCharTotal.value || charImgCount.value === visualCharTotal.value },
-      { key: 'prod:scenes', label: '场景图片', done: !scenes.value.length || sceneImgCount.value === scenes.value.length },
-    ]
-  }
-  if (activeMainStage.value === 'storyboard') {
-    return [
-      { key: 'script:storyboard', label: '分镜拆解', done: !!sbs.value.length },
-      { key: 'prod:dubbing', label: '配音生成', done: !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value },
-      { key: 'prod:shots', label: '镜头图片', done: !!sbs.value.length && shotImgCount.value === sbs.value.length },
-      { key: 'prod:videos', label: '视频生成', done: !!sbs.value.length && shotVidCount.value === sbs.value.length },
-      { key: 'prod:compose', label: '视频合成', done: !!sbs.value.length && composedCount.value === sbs.value.length },
-    ]
-  }
-  return [
-    { key: 'export:merge', label: '拼接导出', done: !!mergeUrl.value },
-  ]
-})
-
-const activeSubStepKey = computed(() => {
-  if (panel.value === 'script') {
-    if (scriptStep.value === 0) return 'script:raw'
-    if (scriptStep.value === 1) return 'script:rewrite'
-    if (scriptStep.value === 2) return 'script:extract'
-    if (scriptStep.value === 3) return 'script:voice'
-    return 'script:storyboard'
-  }
-  if (panel.value === 'production') return `prod:${prodTab.value}`
-  return 'export:merge'
-})
-
-const sidebarJumpSteps = computed(() => {
-  const section = sidebarSections.value.find((item) => item.items.some(step => step.key === activeSubStepKey.value))
-  return section?.items || []
-})
-
-const bubbleSteps = computed(() => {
-  if (panel.value === 'script') {
-    return [
-      { key: 'script:raw', label: '原始内容', done: !!rawContent.value },
-      { key: 'script:rewrite', label: 'AI 改写', done: !!scriptContent.value },
-      { key: 'script:extract', label: '提取', done: !!chars.value.length },
-      { key: 'script:voice', label: '音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'script:storyboard', label: '分镜', done: !!sbs.value.length },
-    ]
-  }
-  if (panel.value === 'production') {
-    return prodTabDefs.value.map(step => ({
-      key: `prod:${step.id}`,
-      label: step.label,
-      done: prodStepDone(step.id),
-    }))
-  }
-  return []
-})
-
-const activeBubbleKey = computed(() => {
-  if (panel.value === 'script') return activeSubStepKey.value
-  if (panel.value === 'production') return `prod:${prodTab.value}`
-  return ''
-})
-
-const showBottomBubble = computed(() => panel.value === 'script' || panel.value === 'production')
-
-function goSubStep(key) {
-  if (key.startsWith('script:')) {
-    panel.value = 'script'
-    const stepMap = {
-      'script:raw': 0,
-      'script:rewrite': 1,
-      'script:extract': 2,
-      'script:voice': 3,
-      'script:storyboard': 4,
-    }
-    scriptStep.value = stepMap[key] ?? 0
-    return
-  }
-  if (key.startsWith('prod:')) {
-    panel.value = 'production'
-    prodTab.value = key.replace('prod:', '')
-    return
-  }
-  panel.value = 'export'
-}
-
-const pipelineProgress = computed(() => {
-  let p = 0
-  if (rawContent.value) p++
-  if (scriptContent.value) p++
-  if (chars.value.length) p++
-  if (charsVoiced.value) p++
-  if (sbs.value.length) p++
-  if (sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)) p++
-  if (sbs.value.some(s => s.composed_image || s.composedImage)) p++
-  if (sbs.value.some(s => s.video_url || s.videoUrl)) p++
-  if (sbs.value.length && composedCount.value === sbs.value.length) p++
-  if (mergeUrl.value) p++
-  return p
-})
-
-const currentStageLabel = computed(() => {
-  if (panel.value === 'script') return `剧本阶段 · ${stepLabels[scriptStep.value]}`
-  if (panel.value === 'production') return `制作阶段 · ${prodTabDefs.value[prodTabIdx.value]?.label || '制作'}`
-  return mergeUrl.value ? '导出阶段 · 成片已生成' : '导出阶段 · 等待拼接'
-})
-
-const currentMainStageLabel = computed(() => {
-  const current = mainStageDefs.find(stage => stage.id === activeMainStage.value)
-  return current?.label || '工作台'
-})
-
-const currentSubStageLabel = computed(() => {
-  const current = activeSubSteps.value.find(step => step.key === activeSubStepKey.value)
-  return current?.label || currentStageLabel.value
-})
-
-function updateCharVoice(charId, voiceId) {
-  characterAPI.update(charId, { voice_style: voiceId, voice_provider: lockedAudioProvider.value || undefined })
-  const c = chars.value.find(ch => ch.id === charId)
-  if (c) {
-    c.voice_style = voiceId
-    c.voiceStyle = voiceId
-    c.voice_provider = lockedAudioProvider.value || ''
-    c.voiceProvider = lockedAudioProvider.value || ''
-    c.voice_sample_url = ''
-    c.voiceSampleUrl = ''
-  }
-}
-function getVoiceProfile(voiceId) {
-  return voiceProfiles.value.find(v => v.id === voiceId) || null
-}
-const totalDuration = computed(() => sbs.value.reduce((s, sb) => s + (sb.duration || 10), 0))
-
-const scriptSteps = computed(() => {
-  const hasScript = !!scriptContent.value
-  const hasChars = chars.value.length > 0 && hasScript
-  const hasVoice = charsVoiced.value > 0 && hasChars
-  const hasSbs = sbs.value.length > 0
-  return [
-    { label: '原始内容', state: rawContent.value ? 'done' : 'active', spinning: false },
-    { label: 'AI 改写', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: rt.value === 'script_rewriter' },
-    { label: '提取', state: hasChars ? 'done' : (hasScript ? 'active' : ''), spinning: rt.value === 'extractor' },
-    { label: '音色', state: hasVoice ? 'done' : (hasChars ? 'active' : ''), spinning: rt.value === 'voice_assigner' },
-    { label: '分镜', state: hasSbs ? 'done' : (hasVoice ? 'active' : ''), spinning: rt.value === 'storyboard_breaker' },
-  ]
-})
 
 
 async function refresh() {
