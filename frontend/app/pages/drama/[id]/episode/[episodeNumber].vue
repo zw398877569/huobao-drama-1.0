@@ -1725,6 +1725,7 @@ import {
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
+import { useImageGeneration } from '~/composables/useImageGeneration'
 import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1744,6 +1745,22 @@ const {
   charsVoiced, voiceSampleCount, composedCount, mergeUrl,
   saveRaw, saveScr,
 } = useEpisodeContext()
+
+// Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
+const {
+  pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
+  isPendingCharImage, isPendingSceneImage, isPendingShotFrame,
+  genCharImg, batchCharImages, genSceneImg, batchSceneImages, genShotFrame,
+} = useImageGeneration({
+  ctx: { chars, scenes, sbs, epId, dramaId: dramaId.value },
+  refresh,
+  getFirstFrame,
+  getLastFrame,
+  getRefs,
+  getStoryboardCharacterNames,
+  getSceneName,
+  watchAsyncResult,
+})
 
 // Tracks which storyboard currently has an in-flight scene_intention analysis
 const analyzingIntentionId = ref<number | null>(null)
@@ -1792,10 +1809,7 @@ const gridLayoutOptions = [
 const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
-const pendingCharImageIds = ref([])
 const regeneratingOne = ref(false)
-const pendingSceneImageIds = ref([])
-const pendingShotFrameKeys = ref([])
 const pendingVideoIds = ref([])
 const pendingComposeIds = ref([])
 const failedVideoMessages = ref({})
@@ -1807,10 +1821,6 @@ function configLabel(config) {
   let modelName = ''
   try { const m = JSON.parse(config.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = config.model || '' }
   return modelName ? `${config.name} · ${modelName} (${config.provider})` : `${config.name} (${config.provider})`
-}
-
-function isPendingCharImage(id) {
-  return pendingCharImageIds.value.includes(id)
 }
 
 function openImageViewer(src, title = '') {
@@ -1833,18 +1843,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleImageViewerKeydown)
 })
-
-function isPendingSceneImage(id) {
-  return pendingSceneImageIds.value.includes(id)
-}
-
-function framePendingKey(id, frameType) {
-  return `${id}:${frameType}`
-}
-
-function isPendingShotFrame(id, frameType) {
-  return pendingShotFrameKeys.value.includes(framePendingKey(id, frameType))
-}
 
 function isPendingVideo(id) {
   return pendingVideoIds.value.includes(id)
@@ -3123,74 +3121,6 @@ function watchAsyncResult(check, attempts = 120, delay = 2000) {
   })
 }
 
-async function genCharImg(id) {
-  try {
-    if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
-    await characterAPI.generateImage(id, epId.value)
-    toast.success('角色图片生成中')
-    await refresh()
-    await watchAsyncResult(() => {
-      const char = chars.value.find(c => c.id === id)
-      const done = !!(char?.image_url || char?.imageUrl)
-      if (done) {
-        pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-        return true
-      }
-      return false
-    })
-  } catch (e) {
-    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-    toast.error(e.message)
-  }
-}
-function batchCharImages() {
-  const ids = visualChars.value.filter(c => !(c.image_url || c.imageUrl)).map(c => c.id)
-  if (!ids.length) { toast.info('所有角色图片已生成'); return }
-  pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
-  characterAPI.batchImages(ids, epId.value).then(async () => {
-    toast.success('角色图片批量生成中')
-    await refresh()
-    await watchAsyncResult(() => ids.every(id => {
-      const char = chars.value.find(c => c.id === id)
-      const done = !!(char?.image_url || char?.imageUrl)
-      if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-      return done
-    }))
-  }).catch(e => {
-    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !ids.includes(item))
-    toast.error(e.message)
-  })
-}
-async function genSceneImg(id) {
-  try {
-    if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
-    await sceneAPI.generateImage(id, epId.value)
-    toast.success('场景图片生成中')
-    await refresh()
-    await watchAsyncResult(() => {
-      const scene = scenes.value.find(s => s.id === id)
-      const done = !!(scene?.image_url || scene?.imageUrl)
-      if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-      return done
-    })
-  } catch (e) {
-    pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-    toast.error(e.message)
-  }
-}
-function batchSceneImages() {
-  const ids = scenes.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
-  if (!ids.length) { toast.info('所有场景图片已生成'); return }
-  pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
-  ids.forEach(id => { sceneAPI.generateImage(id, epId.value).then(() => refresh()).catch(e => toast.error(e.message)) })
-  toast.success('场景图片批量生成中')
-  void watchAsyncResult(() => ids.every(id => {
-    const scene = scenes.value.find(s => s.id === id)
-    const done = !!(scene?.image_url || scene?.imageUrl)
-    if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-    return done
-  }), 36)
-}
 
 const IGNORE_TTS_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$/i
 const IGNORE_TTS_TEXT = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
@@ -3267,140 +3197,6 @@ function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
 // 构造镜头首/尾帧用的参考资产列表(场景 + 绑定角色 + 手动 ref + 已有帧)
 // 返回带 label/characterName/characterAppearance 的对象,供 buildShotImagePrompt
-// 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
-function buildShotReferenceAssets(sb) {
-  const assets = []
-  const pushAsset = (asset) => {
-    if (!asset?.path || assets.some(a => a.path === asset.path) || assets.length >= 6) return
-    assets.push(asset)
-  }
-
-  const sceneId = sb?.scene_id || sb?.sceneId
-  const scene = scenes.value.find(item => item.id === sceneId)
-  if (scene?.image_url || scene?.imageUrl) {
-    pushAsset({
-      path: scene.image_url || scene.imageUrl,
-      kind: 'scene',
-      label: scene.location ? `${scene.location}${scene.time ? `(${scene.time})` : ''}场景` : '场景',
-    })
-  }
-
-  for (const charId of getStoryboardCharacterIds(sb)) {
-    const char = chars.value.find(item => item.id === charId)
-    const path = char?.image_url || char?.imageUrl
-    if (!path) continue
-    pushAsset({
-      path,
-      kind: 'character',
-      label: `${char.name}角色形象`,
-      characterName: char.name,
-      characterAppearance: (char.appearance || char.description || '').trim(),
-    })
-  }
-
-  for (const ref of getRefs(sb)) {
-    pushAsset({ path: ref, kind: 'reference', label: '参考图' })
-  }
-
-  const first = getFirstFrame(sb)
-  const last = getLastFrame(sb)
-  if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' })
-  if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' })
-
-  return assets.map((a, i) => ({ ...a, index: i + 1, imageLabel: `图片${i + 1}` }))
-}
-
-// 向后兼容: 保留 getShotReferenceImages,内部走 buildShotReferenceAssets
-function getShotReferenceImages(sb) {
-  return buildShotReferenceAssets(sb).map(a => a.path)
-}
-
-function buildShotImagePrompt(sb, frameType) {
-  const title = sb.title || ''
-  const description = sb.image_prompt || sb.imagePrompt || sb.description || ''
-  const shotType = sb.shot_type || sb.shotType || ''
-  const angle = sb.angle || ''
-  const movement = sb.movement || ''
-  const location = sb.location || getSceneName(sb)
-  const time = sb.time || ''
-  const charactersText = getStoryboardCharacterNames(sb).join('、')
-  const action = sb.action || ''
-  const atmosphere = sb.atmosphere || ''
-  const frameHint = frameType === 'first_frame'
-    ? '生成这个镜头的起始关键帧，突出建立关系和动作开始瞬间'
-    : '生成这个镜头的结束关键帧，突出动作结束、情绪落点或结果状态'
-
-  const assets = buildShotReferenceAssets(sb)
-  const characterAssets = assets.filter(a => a.kind === 'character')
-
-  const sections = [
-    title ? `镜头标题：${title}` : '',
-    description ? `画面描述：${description}` : '',
-    shotType ? `景别：${shotType}` : '',
-    angle ? `机位：${angle}` : '',
-    movement ? `运镜：${movement}` : '',
-    charactersText ? `角色：${charactersText}` : '',
-    // 给每个角色追加外貌描述,空时只保留名字
-    ...characterAssets.map(a => {
-      const appearance = a.characterAppearance ? `:${a.characterAppearance}` : ''
-      return `${a.characterName}外貌${appearance}`
-    }),
-    location ? `地点：${location}` : '',
-    time ? `时间：${time}` : '',
-    action ? `动作：${action}` : '',
-    atmosphere ? `氛围：${atmosphere}` : '',
-    frameHint,
-  ]
-
-  // 参考图说明 + 角色一致性要求(nano-banana 的 images 字段不强制 character
-  // consistency,必须用 prompt 显式声明谁对应哪张图,并要求保持脸部特征)
-  if (assets.length) {
-    const legend = assets.map(a => {
-      const detail = a.characterAppearance
-        ? `${a.characterName}(${a.characterAppearance})`
-        : a.label
-      return `${a.imageLabel}=${detail}`
-    }).join('；')
-    sections.push(`参考图: ${legend}`)
-    if (characterAssets.length) {
-      sections.push(
-        `角色一致性: ${characterAssets.map(a => a.imageLabel).join('、')} 是 ${characterAssets.map(a => a.characterName).join('、')} 的形象参考,`
-        + `首帧中必须严格保持其脸部特征、发型、年龄、衣着,不要换脸或改变体型。`
-      )
-    }
-  }
-
-  return sections.filter(Boolean).join('；')
-}
-
-async function genShotFrame(sb, frameType) {
-  const prompt = buildShotImagePrompt(sb, frameType)
-  const referenceImages = getShotReferenceImages(sb)
-  const key = framePendingKey(sb.id, frameType)
-  try {
-    if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
-    const body = {
-      storyboard_id: sb.id,
-      drama_id: dramaId,
-      prompt,
-      frame_type: frameType,
-      reference_images: referenceImages.length ? referenceImages : undefined,
-    }
-    await imageAPI.generate(body)
-    toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
-    await refresh()
-    await watchAsyncResult(() => {
-      const target = sbs.value.find(s => s.id === sb.id)
-      const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
-      if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
-      return done
-    })
-  } catch (e) {
-    pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
-    toast.error(e.message)
-  }
-}
-
 async function genVid(sb) {
   let prompt = sb.video_prompt || sb.videoPrompt || ''
   // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
