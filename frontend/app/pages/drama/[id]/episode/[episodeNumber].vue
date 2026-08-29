@@ -1726,6 +1726,7 @@ import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, 
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'
+import { useVideoGeneration } from '~/composables/useVideoGeneration'
 import { $fetch } from 'ofetch'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1760,6 +1761,22 @@ const {
   getStoryboardCharacterNames,
   getSceneName,
   watchAsyncResult,
+})
+
+// Video generation + compose pipeline (state + handlers extracted to composable)
+const {
+  pendingVideoIds, pendingComposeIds, failedVideoMessages, failedComposeMessages,
+  isPendingVideo, videoFailMessage, isPendingCompose, composeFailMessage,
+  genVid, batchVideos, doCompose, batchCompose, pollVideoGeneration, pollComposeStatus,
+} = useVideoGeneration({
+  ctx: { sbs, epId, dramaId: dramaId.value },
+  refresh,
+  getFirstFrame,
+  getLastFrame,
+  getRefs,
+  hasVid,
+  watchAsyncResult,
+  sleep,
 })
 
 // Tracks which storyboard currently has an in-flight scene_intention analysis
@@ -1810,10 +1827,6 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
 const regeneratingOne = ref(false)
-const pendingVideoIds = ref([])
-const pendingComposeIds = ref([])
-const failedVideoMessages = ref({})
-const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
 
 function configLabel(config) {
@@ -1843,22 +1856,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleImageViewerKeydown)
 })
-
-function isPendingVideo(id) {
-  return pendingVideoIds.value.includes(id)
-}
-
-function videoFailMessage(id) {
-  return failedVideoMessages.value[id] || ''
-}
-
-function isPendingCompose(id) {
-  return pendingComposeIds.value.includes(id)
-}
-
-function composeFailMessage(id) {
-  return failedComposeMessages.value[id] || ''
-}
 
 function isNarratorCharacter(char) {
   const text = `${char?.name || ''} ${char?.role || ''}`.toLowerCase()
@@ -3195,116 +3192,6 @@ function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
-// 构造镜头首/尾帧用的参考资产列表(场景 + 绑定角色 + 手动 ref + 已有帧)
-// 返回带 label/characterName/characterAppearance 的对象,供 buildShotImagePrompt
-async function genVid(sb) {
-  let prompt = sb.video_prompt || sb.videoPrompt || ''
-  // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
-  const first = getFirstFrame(sb)
-  const last = getLastFrame(sb)
-  const refs = getRefs(sb)
-  if (first && prompt) {
-    prompt += '；保持首帧画面构图一致，镜头运动从首帧状态开始'
-  }
-  const params = {
-    storyboard_id: sb.id,
-    drama_id: dramaId,
-    prompt,
-    duration: Number(sb.duration || 5),
-  }
-  if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
-  else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
-  else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
-  try {
-    delete failedVideoMessages.value[sb.id]
-    if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
-    const generation = await videoAPI.generate(params)
-    toast.success('视频生成中')
-    await refresh()
-    pollVideoGeneration(generation?.id, sb.id)
-  } catch (e) {
-    pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
-    toast.error(e.message)
-  }
-}
-async function pollVideoGeneration(generationId, storyboardId) {
-  if (!generationId) {
-    await watchAsyncResult(() => {
-      const target = sbs.value.find(s => s.id === storyboardId)
-      const done = !!(target?.video_url || target?.videoUrl)
-      if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-      return done
-    }, 60, 4000)
-    return
-  }
-  for (let i = 0; i < 120; i++) {
-    await sleep(4000)
-    try {
-      const res = await videoAPI.get(generationId)
-      await refresh()
-      if (res?.status === 'completed') {
-        pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-        delete failedVideoMessages.value[storyboardId]
-        toast.success('视频生成完成')
-        return
-      }
-      if (res?.status === 'failed') {
-        pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-        failedVideoMessages.value = {
-          ...failedVideoMessages.value,
-          [storyboardId]: res?.error_msg || res?.errorMsg || '视频生成失败',
-        }
-        toast.error(failedVideoMessages.value[storyboardId])
-        return
-      }
-    } catch {}
-  }
-  pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-  failedVideoMessages.value = {
-    ...failedVideoMessages.value,
-    [storyboardId]: '视频生成超时',
-  }
-  toast.error('视频生成超时')
-}
-async function doCompose(sb) {
-  try {
-    delete failedComposeMessages.value[sb.id]
-    if (!isPendingCompose(sb.id)) pendingComposeIds.value.push(sb.id)
-    await composeAPI.shot(sb.id)
-    toast.success('合成完成')
-    pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
-    refresh()
-  } catch (e) {
-    pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
-    failedComposeMessages.value = {
-      ...failedComposeMessages.value,
-      [sb.id]: e.message,
-    }
-    toast.error(e.message)
-  }
-}
-function batchVideos() {
-  const pendingIds = sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-  pendingIds.forEach(id => {
-    const sb = sbs.value.find(item => item.id === id)
-    if (sb) genVid(sb)
-  })
-  if (pendingIds.length) {
-    pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
-    void watchAsyncResult(() => pendingIds.every(id => {
-      const target = sbs.value.find(s => s.id === id)
-      const done = !!(target?.video_url || target?.videoUrl)
-      if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
-      return done
-    }), 80, 4000)
-  }
-}
-async function batchCompose() {
-  await composeAPI.all(epId.value)
-  pendingComposeIds.value = [...new Set(sbs.value.filter(sb => !!sb.video_url || !!sb.videoUrl).map(sb => sb.id))]
-  toast.success('批量合成已开始')
-  pollComposeStatus()
-}
 async function doMerge() {
   await mergeAPI.merge(epId.value); toast.success('拼接中...')
   const poll = setInterval(async () => {
@@ -3316,33 +3203,6 @@ async function doMerge() {
   }, 3000)
 }
 
-async function pollComposeStatus() {
-  for (let i = 0; i < 120; i++) {
-    await sleep(3000)
-    try {
-      const res = await composeAPI.status(epId.value)
-      await refresh()
-      const items = Array.isArray(res?.items) ? res.items : []
-      const processingIds = items.filter(item => item.status === 'compose_processing').map(item => item.id)
-      pendingComposeIds.value = processingIds
-
-      const failedItems = items.filter(item => item.status === 'compose_failed')
-      if (failedItems.length) {
-        const next = { ...failedComposeMessages.value }
-        failedItems.forEach((item) => {
-          next[item.id] = item.error_msg || item.errorMsg || '视频合成失败'
-        })
-        failedComposeMessages.value = next
-      }
-
-      if (!processingIds.length) {
-        if (failedItems.length) toast.error(`有 ${failedItems.length} 个镜头合成失败`)
-        else toast.success('批量合成完成')
-        return
-      }
-    } catch {}
-  }
-}
 function getRefs(sb) {
   const raw = sb.reference_images || sb.referenceImages
   if (!raw) return []
