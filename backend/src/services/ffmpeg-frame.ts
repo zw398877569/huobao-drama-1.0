@@ -1,12 +1,12 @@
 /**
  * FFmpeg frame extraction — pull a still image from a video clip.
  *
- * Used by the P1 状态门控 "视频生成后自动分析" step: after a video is
- * generated, we need to feed its last frame (or any specific time) into
- * the vision LLM so it can write `observed_final_state` for the
- * storyboard. This service produces that frame as a JPEG on disk;
- * callers then base64-encode it and pass to the LLM (see
- * `services/evaluation.ts` for the data-URL pattern).
+ * General-purpose frame extraction utility: pull a still image from
+ * any video clip at a given time, or grab the last frame for debug /
+ * preview needs. Output is a JPEG written under STORAGE_ROOT/frames
+ * (or any caller-specified subDir) and returned as a project-relative
+ * `static/...` path so it can be served by the same static handler as
+ * everything else.
  *
  * Design:
  *   - Pure file-system / ffmpeg ops, no DB, no LLM.
@@ -130,10 +130,9 @@ export function extractFrameAt(
 }
 
 /**
- * Extract the LAST frame of a video. This is the primary entry point
- * used by 状态门控 "视频生成后自动分析" — it gives the vision LLM a
- * snapshot of the shot's actual end-state, which is what the next
- * shot's prompt should chain off of.
+ * Extract the LAST frame of a video. Convenience wrapper around
+ * `extractFrameAt(duration - 0.1)` with fallback to first frame for
+ * short clips. Useful for thumbnails / previews / debug.
  *
  * For clips shorter than 0.5s the function falls back to the FIRST
  * frame (the seek-to-end trick fails on very short videos).

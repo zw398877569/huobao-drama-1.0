@@ -387,9 +387,6 @@ ensureColumn('storyboards', 'safety_flagged', "INTEGER DEFAULT 0")
 ensureColumn('storyboards', 'safety_notes', 'TEXT')
 
 // P1 状态门控: vision LLM description of the actual final frame
-ensureColumn('storyboards', 'observed_final_state', 'TEXT')
-ensureColumn('storyboards', 'observed_final_state_at', 'TEXT')
-
 // 视频生成负面提示词: storyboards/image_generations 都有,video_generations 漏了 (2026-08-27)
 // 修复后 agnes-video adapter 的 negative_prompt 才不会在重生成/重试时丢失
 ensureColumn('video_generations', 'negative_prompt', 'TEXT')
