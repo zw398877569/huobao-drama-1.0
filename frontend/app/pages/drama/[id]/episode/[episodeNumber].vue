@@ -1747,7 +1747,7 @@ const { running: rn, runningType: rt, run: runAgent } = useAgent()
 
 const {
   drama, episode, chars, scenes, sbs, mergeData,
-  localRaw, localScript,
+  localRaw, localScript, scriptStep,
   rawContent, scriptContent, epId, rawLen, scriptLen,
   charsVoiced, voiceSampleCount, composedCount, mergeUrl,
   saveRaw, saveScr,
