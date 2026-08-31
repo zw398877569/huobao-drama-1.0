@@ -6,11 +6,10 @@ type Deps = {
     sbs: Ref<any[]>
   },
   refresh: () => Promise<void>,
-  ttsEligibleCount?: ComputedRef<number>,
 }
 
 export function useShotTTS(deps: Deps) {
-  const { ctx, refresh, ttsEligibleCount } = deps
+  const { ctx, refresh } = deps
 
   // Pattern that matches speaker prefixes for which we should NOT generate TTS
   // (pure ambient audio / SFX / BGM — these need no voiceover).
@@ -73,7 +72,10 @@ export function useShotTTS(deps: Deps) {
   async function batchShotTTS() {
     const pending = ctx.sbs.value.filter(sb => hasDialogue(sb) && !hasTTS(sb))
     if (!pending.length) {
-      toast.info(ttsEligibleCount?.value ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
+      // pending is 0: either every eligible sb already has TTS, or no sb has dialogue at all.
+      // Disambiguate via inline count (avoid cross-composable dep on ttsEligibleCount).
+      const eligibleCount = ctx.sbs.value.filter(sb => hasDialogue(sb)).length
+      toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
       return
     }
     const results = await Promise.allSettled(pending.map(sb => storyboardAPI.generateTTS(sb.id)))

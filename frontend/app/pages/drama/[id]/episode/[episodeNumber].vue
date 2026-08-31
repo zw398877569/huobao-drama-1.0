@@ -1753,6 +1753,30 @@ const {
   saveRaw, saveScr,
 } = useEpisodeContext()
 
+// Storyboard detail-panel editing: provides getStoryboardCharacterNames + getSceneName
+// for downstream useImageGeneration / useVideoGeneration / useGridTool composables.
+const {
+  selectedSb,
+  analyzingIntentionId, evaluatingId, retakingId,
+  retakeDialog, retakeTargetSb, retakeDimension, retakeUserNote,
+  shotTypes, shotAngles, shotMovements,
+  NEGATIVE_PROMPT_PRESETS, dramaticFunctions, evalDimensions,
+  RETAKE_UI_SOFT_CAP, RETAKE_COST_CNY_PER_SHOT, RETAKE_DIMENSIONS,
+  applyStylePreset, updateField, toCamel,
+  parseIntention, intentionField, updateIntentionField, analyzeIntention,
+  evalScore, hasEvalScores, evalAverage, evalTone, evaluateStoryboard,
+  eventDensity, eventList, eventCount, eventDensityTone,
+  safetyFlagged, safetyNotes, safetyOriginal,
+  retakeCount, retakeVariable, retakeAtCap, retakeDimLabel, retakeCostCNY,
+  openRetakeDialog, closeRetakeDialog, submitRetake,
+  getStoryboardCharacterIds, getStoryboardCharacterNames,
+  isStoryboardCharacterSelected, toggleStoryboardCharacter,
+  getSceneName, deleteShot,
+} = useStoryboardEdit({
+  ctx: { sbs, chars, scenes },
+  refresh,
+})
+
 // Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
 const {
   pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
@@ -1813,26 +1837,27 @@ const {
   refresh,
 })
 
-// Storyboard detail-panel editing: field updates, intention, eval, retake, scene/character binding
+// Configs (image/video/audio AI providers) + voice profile loading
 const {
-  selectedSb,
-  analyzingIntentionId, evaluatingId, retakingId,
-  retakeDialog, retakeTargetSb, retakeDimension, retakeUserNote,
-  shotTypes, shotAngles, shotMovements,
-  NEGATIVE_PROMPT_PRESETS, dramaticFunctions, evalDimensions,
-  RETAKE_UI_SOFT_CAP, RETAKE_COST_CNY_PER_SHOT, RETAKE_DIMENSIONS,
-  applyStylePreset, updateField, toCamel,
-  parseIntention, intentionField, updateIntentionField, analyzeIntention,
-  evalScore, hasEvalScores, evalAverage, evalTone, evaluateStoryboard,
-  eventDensity, eventList, eventCount, eventDensityTone,
-  safetyFlagged, safetyNotes, safetyOriginal,
-  retakeCount, retakeVariable, retakeAtCap, retakeDimLabel, retakeCostCNY,
-  openRetakeDialog, closeRetakeDialog, submitRetake,
-  getStoryboardCharacterIds, getStoryboardCharacterNames,
-  isStoryboardCharacterSelected, toggleStoryboardCharacter,
-  getSceneName, deleteShot,
-} = useStoryboardEdit({
-  ctx: { sbs, chars, scenes },
+  imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
+  fallbackVoiceProfiles,
+  voiceSelectOptions, videoConfigSelectOptions,
+  lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
+  lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
+  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices,
+} = useConfigLoading({
+  ctx: { episode },
+})
+
+// Per-shot TTS: dialogue parsing, ignorability check, single + batch generation
+const {
+  IGNORE_TTS_SPEAKERS, IGNORE_TTS_TEXT,
+  getDialogueSpeakerRaw, getDialogueText, isTTSIgnorable,
+  hasDialogue, hasTTS, getTTSUrl,
+  getTTSSegments, getDialogueSpeaker,
+  genShotTTS, batchShotTTS,
+} = useShotTTS({
+  ctx: { sbs },
   refresh,
 })
 
@@ -1858,31 +1883,6 @@ const {
   },
   saveRaw, saveScr,
   hasDialogue, hasTTS,
-})
-
-// Configs (image/video/audio AI providers) + voice profile loading
-const {
-  imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
-  fallbackVoiceProfiles,
-  voiceSelectOptions, videoConfigSelectOptions,
-  lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
-  lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
-  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices,
-} = useConfigLoading({
-  ctx: { episode },
-})
-
-// Per-shot TTS: dialogue parsing, ignorability check, single + batch generation
-const {
-  IGNORE_TTS_SPEAKERS, IGNORE_TTS_TEXT,
-  getDialogueSpeakerRaw, getDialogueText, isTTSIgnorable,
-  hasDialogue, hasTTS, getTTSUrl,
-  getTTSSegments, getDialogueSpeaker,
-  genShotTTS, batchShotTTS,
-} = useShotTTS({
-  ctx: { sbs },
-  refresh,
-  ttsEligibleCount,
 })
 
 // Script-stage + production agents (rewrite / extract / voice / breakdown / samples / add shot)
