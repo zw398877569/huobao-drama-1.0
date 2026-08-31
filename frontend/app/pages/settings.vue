@@ -396,6 +396,7 @@ import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
 import { aiConfigAPI, agentConfigAPI, skillsAPI } from '~/composables/useApi'
 import { useSettingsAi } from '~/composables/useSettingsAi'
+import { useSettingsSkills } from '~/composables/useSettingsSkills'
 import brandLogo from '~/assets/huobao-logo.png'
 
 const showBrandImage = ref(true)
@@ -443,6 +444,17 @@ const agentDefs = [
   { type: 'grid_prompt_generator', label: '图片提示词生成', icon: '🖼' },
 ]
 
+
+// Skills tab: per-agent skill list + CRUD + editor
+// agentDefs is injected because Skills UI reuses agent type labels/icons from Agents tab.
+const {
+  selectedAgent, allSkills, editingSkill, skillContent, skillSaving, skillSaved,
+  addSkillDialog, newSkillForm,
+  selectedAgentType, selectedAgentLabel, selectedAgentIcon,
+  agentSkillCount, currentSkills,
+  loadAllSkills, selectAgent, startAddSkill, confirmAddSkill,
+  deleteSkill, toggleSkillEdit, saveSkill,
+} = useSettingsSkills(agentDefs)
 const defaultPrompts = {
   script_rewriter: `你是资深短剧编剧，擅长把小说/原文改写成"前 3 秒抓眼球、每 30 秒一个钩子、对话驱动、强冲突"的短剧剧本。10 年经验,作品累计播放量 100 亿+。
 
@@ -1240,97 +1252,7 @@ async function saveAgentCfg(type) {
   }
 }
 
-// ===== Skills =====
-const selectedAgent = ref('script_rewriter')
-const allSkills = ref([])   // { id, name, description }[]
-const editingSkill = ref(null)
-const skillContent = ref('')
-const skillSaving = ref(false)
-const skillSaved = ref(null)
-const addSkillDialog = ref(false)
-const newSkillForm = reactive({ id: '', name: '', description: '' })
-
-const selectedAgentType = computed(() => selectedAgent.value)
-const selectedAgentLabel = computed(() => agentDefs.find(a => a.type === selectedAgent.value)?.label || '')
-const selectedAgentIcon = computed(() => agentDefs.find(a => a.type === selectedAgent.value)?.icon || '')
-
-function agentSkillCount(type) {
-  return allSkills.value.filter(s => s.id === type || s.id.startsWith(type + '/')).length
-}
-
-const currentSkills = computed(() =>
-  allSkills.value.filter(s => s.id === selectedAgent.value || s.id.startsWith(selectedAgent.value + '/'))
-)
-
-async function loadAllSkills() {
-  try { allSkills.value = await skillsAPI.list() }
-  catch (e) { toast.error(e.message) }
-}
-
-async function selectAgent(type) {
-  selectedAgent.value = type
-  editingSkill.value = null
-}
-
-function startAddSkill() {
-  newSkillForm.id = ''
-  newSkillForm.name = ''
-  newSkillForm.description = ''
-  addSkillDialog.value = true
-}
-
-async function confirmAddSkill() {
-  if (!newSkillForm.id) return
-  const skillId = `${selectedAgent.value}/${newSkillForm.id}`
-  try {
-    await skillsAPI.create({ id: skillId, name: newSkillForm.name, description: newSkillForm.description })
-    addSkillDialog.value = false
-    await loadAllSkills()
-    toast.success('Skill 创建成功')
-  } catch (e) {
-    toast.error(e.message)
-  }
-}
-
-async function deleteSkill(id) {
-  if (!confirm(`确定删除 Skill「${id}」？`)) return
-  try {
-    await skillsAPI.del(id)
-    if (editingSkill.value === id) editingSkill.value = null
-    await loadAllSkills()
-    toast.success('已删除')
-  } catch (e) {
-    toast.error(e.message)
-  }
-}
-
-async function toggleSkillEdit(id) {
-  if (editingSkill.value === id) { editingSkill.value = null; return }
-  try {
-    const res = await skillsAPI.get(id)
-    skillContent.value = res.content
-    skillSaved.value = null
-    editingSkill.value = id
-  } catch (e) { toast.error(e.message) }
-}
-
-async function saveSkill(id) {
-  skillSaving.value = true
-  skillSaved.value = null
-  try {
-    await skillsAPI.update(id, skillContent.value)
-    await loadAllSkills()
-    skillSaved.value = id
-    toast.success(`已保存`)
-    setTimeout(() => { if (skillSaved.value === id) skillSaved.value = null }, 3000)
-  } catch (e) {
-    toast.error(e.message)
-  } finally {
-    skillSaving.value = false
-  }
-}
-
-onMounted(() => { loadAgents(); loadAllSkills() })
+onMounted(loadAgents)
 </script>
 
 <style scoped>
