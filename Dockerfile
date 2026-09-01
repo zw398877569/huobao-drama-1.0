@@ -1,18 +1,14 @@
 # ── Build-time mirror configuration ──────────────────────────────────────
-# Default: empty (= use official sources, works from any region).
+# Defaults to Aliyun (China) so plain `docker build` is fast out of the box.
+# Both args accept an empty string to fall back to official sources:
+#   docker build --build-arg APT_MIRROR= --build-arg NPM_REGISTRY= -t huobao-drama .
 #
-# China / Asia build acceleration — pass at build:
-#   docker build \
-#     --build-arg APT_MIRROR=mirrors.aliyun.com \
-#     --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
-#     -t huobao-drama .
-#
-# Other mirrors (any of these can be substituted for APT_MIRROR):
+# Other Debian mirrors (any of these can be substituted for APT_MIRROR):
 #   mirrors.cloud.tencent.com         (Tencent)
 #   mirrors.tuna.tsinghua.edu.cn      (Tsinghua TUNA)
 #   mirrors.ustc.edu.cn              (USTC)
-ARG APT_MIRROR=
-ARG NPM_REGISTRY=
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 # ── Stage 1: Build frontend ──────────────────────────────────
 FROM node:20-slim AS frontend-build
