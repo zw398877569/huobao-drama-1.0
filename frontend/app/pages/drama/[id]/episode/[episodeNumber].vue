@@ -1844,7 +1844,7 @@ const {
   voiceSelectOptions, videoConfigSelectOptions,
   lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
   lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
-  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices,
+  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
 } = useConfigLoading({
   ctx: { episode },
 })

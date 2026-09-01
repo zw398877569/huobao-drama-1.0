@@ -91,6 +91,11 @@ export function useConfigLoading(deps: Deps) {
     }
   }
 
+  // 查 voiceProfiles 找指定 voiceId 的完整 profile(模板用,refactor 时漏掉导致 'is not a function' 报错)
+  function getVoiceProfile(voiceId: string) {
+    return voiceProfiles.value.find(v => v.id === voiceId) || null
+  }
+
   // Re-fetch voices whenever the locked audio config or provider changes
   watch([lockedAudioConfigId, audioConfigs], () => { loadVoices() }, { deep: true })
 
@@ -103,6 +108,6 @@ export function useConfigLoading(deps: Deps) {
     voiceSelectOptions, videoConfigSelectOptions,
     lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
     lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
-    configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices,
+    configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
   }
 }
