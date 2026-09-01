@@ -16,10 +16,11 @@ type Deps = {
   getStoryboardCharacterNames: (s: any) => string[],
   getSceneName: (s: any) => string,
   watchAsyncResult: (check: () => boolean, attempts?: number, delay?: number) => Promise<void>,
+  videoConfigLabel?: string,
 }
 
 export function useImageGeneration(deps: Deps) {
-  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult } = deps
+  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, videoConfigLabel } = deps
 
   const pendingCharImageIds = ref<number[]>([])
   const pendingSceneImageIds = ref<number[]>([])
@@ -140,6 +141,19 @@ export function useImageGeneration(deps: Deps) {
           + `首帧中必须严格保持其脸部特征、发型、年龄、衣着,不要换脸或改变体型。`
         )
       }
+    }
+
+    // H3-aware hint: if downstream video model is H3, nudge the image model to produce
+    // a first/last frame that's compatible with H3's training distribution (single subject,
+    // stable composition, cinematic). Helps avoid the "AI-generated still that H3 can't
+    // smoothly animate from" problem.
+    if (videoConfigLabel && /H3|minimax/i.test(videoConfigLabel)) {
+      const frameRole = frameType === 'first_frame' ? 'first' : 'last'
+      sections.push(
+        '# 下游视频模型: MiniMax H3 — 此图为 ' + frameRole + ' 帧输入；' +
+        '构图需稳定单一主体 + 半身/全身景别 + 自然光影 + 半写实电影感；' +
+        '避免极端运镜、动作模糊、文字水印、多余人物'
+      )
     }
 
     return sections.filter(Boolean).join('；')

@@ -1791,6 +1791,7 @@ const {
   getStoryboardCharacterNames,
   getSceneName,
   watchAsyncResult,
+  videoConfigLabel: lockedVideoConfigLabel.value,
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)
