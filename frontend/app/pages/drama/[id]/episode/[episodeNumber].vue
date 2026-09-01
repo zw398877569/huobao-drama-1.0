@@ -1752,18 +1752,6 @@ const {
   charsVoiced, voiceSampleCount, composedCount, mergeUrl,
   saveRaw, saveScr,
 } = useEpisodeContext()
-// Configs (image/video/audio AI providers) + voice profile loading
-const {
-  imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
-  fallbackVoiceProfiles,
-  voiceSelectOptions, videoConfigSelectOptions,
-  lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
-  lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
-  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
-} = useConfigLoading({
-  ctx: { episode },
-})
-
 
 // Storyboard detail-panel editing: provides getStoryboardCharacterNames + getSceneName
 // for downstream useImageGeneration / useVideoGeneration / useGridTool composables.
@@ -1850,7 +1838,17 @@ const {
   refresh,
 })
 
-
+// Configs (image/video/audio AI providers) + voice profile loading
+const {
+  imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
+  fallbackVoiceProfiles,
+  voiceSelectOptions, videoConfigSelectOptions,
+  lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
+  lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
+  configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
+} = useConfigLoading({
+  ctx: { episode },
+})
 
 // Per-shot TTS: dialogue parsing, ignorability check, single + batch generation
 const {
