@@ -111,6 +111,9 @@ let cache: { key: string; result: string } | null = null
 function buildAgentSkills(agentType: string): string {
   const skillFiles = listSkillFiles()
   const contents: string[] = []
+  const loadedSkills: { id: string; bytes: number, preview: string }[] = []
+
+  console.log(`[skills] buildAgentSkills('${agentType}') SKILLS_DIR=${SKILLS_DIR} found ${skillFiles.length} SKILL.md file(s) total`)
 
   for (const rel of skillFiles) {
     const fullPath = path.join(SKILLS_DIR, rel, 'SKILL.md')
@@ -122,7 +125,23 @@ function buildAgentSkills(agentType: string): string {
       const content = stripFrontmatter(raw)
       if (content) {
         contents.push([`## Skill: ${rel}`, content].join('\n'))
+        loadedSkills.push({
+          id: rel,
+          bytes: content.length,
+          preview: content.replace(/\s+/g, ' ').slice(0, 80),
+        })
       }
+    }
+  }
+
+  // Per-agent skill load log: shows which skills (if any) were injected into system prompt
+  if (loadedSkills.length === 0) {
+    console.log(`[skills]   agent=${agentType} → NO SKILLS LOADED (0 chars appended to prompt)`)
+  } else {
+    const totalBytes = loadedSkills.reduce((s, x) => s + x.bytes, 0)
+    console.log(`[skills]   agent=${agentType} → loaded ${loadedSkills.length} skill(s), ${totalBytes} bytes total:`)
+    for (const s of loadedSkills) {
+      console.log(`[skills]     - ${s.id} (${s.bytes} chars): ${s.preview}…`)
     }
   }
 
@@ -140,7 +159,9 @@ function buildAgentSkills(agentType: string): string {
 export function loadAgentSkills(agentType: string): string {
   // 简单缓存(每次启动扫一次即可)
   const cacheKey = agentType
-  if (cache?.key === cacheKey) return cache.result
+  if (cache?.key === cacheKey) {
+    return cache.result
+  }
   const result = buildAgentSkills(agentType)
   cache = { key: cacheKey, result }
   return result
