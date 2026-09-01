@@ -19,10 +19,11 @@ type Deps = {
   refresh: () => Promise<void>,
   videoConfigs: Ref<any[]>,
   lockedVideoConfigId: ComputedRef<number | null>,
+  lockedAudioProvider: ComputedRef<string>,
 }
 
 export function useEpisodeAgents(deps: Deps) {
-  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId } = deps
+  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId, lockedAudioProvider } = deps
 
   function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, ctx.epId.value, refresh) }
 
@@ -69,6 +70,22 @@ export function useEpisodeAgents(deps: Deps) {
     } catch (e: any) { toast.error(e.message) }
   }
 
+  // 角色配音分配(模板里 <BaseSelect @update:model-value="updateCharVoice(c.id, $event)" /> 调)
+  // 注意:lockedAudioProvider 在 useConfigLoading 里,deps 注入进来
+  function updateCharVoice(charId: number, voiceId: string) {
+    const provider = lockedAudioProvider.value || undefined
+    characterAPI.update(charId, { voice_style: voiceId, voice_provider: provider })
+    const c = ctx.chars.value.find((ch: any) => ch.id === charId)
+    if (c) {
+      c.voice_style = voiceId
+      c.voiceStyle = voiceId
+      c.voice_provider = lockedAudioProvider.value || ''
+      c.voiceProvider = lockedAudioProvider.value || ''
+      c.voice_sample_url = ''
+      c.voiceSampleUrl = ''
+    }
+  }
+
   async function addShot() {
     await storyboardAPI.create({
       episode_id: ctx.epId.value,
@@ -81,6 +98,6 @@ export function useEpisodeAgents(deps: Deps) {
 
   return {
     doRewrite, skipRewrite, doExtract, doVoice,
-    batchGenSamples, doBreakdown, genSample, addShot,
+    batchGenSamples, doBreakdown, genSample, updateCharVoice, addShot,
   }
 }

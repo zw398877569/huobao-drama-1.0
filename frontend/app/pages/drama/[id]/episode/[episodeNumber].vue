@@ -1888,14 +1888,14 @@ const {
 // Script-stage + production agents (rewrite / extract / voice / breakdown / samples / add shot)
 const {
   doRewrite, skipRewrite, doExtract, doVoice,
-  batchGenSamples, doBreakdown, genSample, addShot,
+  batchGenSamples, doBreakdown, genSample, updateCharVoice, addShot,
 } = useEpisodeAgents({
   ctx: { chars, sbs, epId, localRaw, localScript, rawContent, scriptStep, charsVoiced },
   dramaId,
   saveRaw, saveScr,
   runAgent,
   refresh,
-  videoConfigs, lockedVideoConfigId,
+  videoConfigs, lockedVideoConfigId, lockedAudioProvider,
 })
 
 const regeneratingOne = ref(false)
