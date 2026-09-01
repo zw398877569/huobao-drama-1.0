@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Pre-commit hook: enforce SKILL.md size budget.
+#
+# Why: skills/ files are loaded into the agent's system prompt on EVERY
+# chat. A bloated skill causes upstream LLM timeouts — the H3 skill
+# incident (41KB -> 5+min Headers Timeout) is the canonical example
+# (see commit 8dc7293).
+#
+# Rules:
+#   - < 5KB   -> silent OK
+#   - 5–8KB   -> WARN, commit proceeds
+#   - > 8KB   -> BLOCK, commit fails
+#
+# Override (NOT recommended): git commit --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SKILLS_DIR="$REPO_ROOT/skills"
+
+if [ ! -d "$SKILLS_DIR" ]; then
+  exit 0
+fi
+
+WARN_THRESHOLD=5120
+FAIL_THRESHOLD=8192
+
+failed=0
+warned=0
+
+while IFS= read -r f; do
+  size=$(wc -c < "$f")
+  rel=${f#"$REPO_ROOT"/}
+  if [ "$size" -gt "$FAIL_THRESHOLD" ]; then
+    echo "[skill-size-check] BLOCK: $rel is $size bytes (>$FAIL_THRESHOLD)"
+    echo "  -> Move detail to a sibling .md and turn SKILL.md into an index+pointer."
+    echo "  -> See commit 8dc7293 for the 41KB H3 incident."
+    failed=1
+  elif [ "$size" -gt "$WARN_THRESHOLD" ]; then
+    echo "[skill-size-check] WARN: $rel is $size bytes (>$WARN_THRESHOLD) — consider trimming"
+    warned=1
+  fi
+done < <(find "$SKILLS_DIR" -name "SKILL.md" -type f)
+
+if [ "$failed" -eq 1 ]; then
+  echo ""
+  echo "Commit blocked. To override (NOT recommended): git commit --no-verify"
+  exit 1
+fi
+
+if [ "$warned" -eq 1 ]; then
+  echo "[skill-size-check] OK with warnings."
+else
+  echo "[skill-size-check] OK — all SKILL.md files under $WARN_THRESHOLD bytes."
+fi
+exit 0
