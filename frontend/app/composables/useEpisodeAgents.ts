@@ -1,4 +1,4 @@
-import { characterAPI, storyboardAPI } from '~/composables/useApi'
+import { characterAPI, storyboardAPI, agentAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {
@@ -56,10 +56,23 @@ export function useEpisodeAgents(deps: Deps) {
     await refresh()
   }
 
-  function doBreakdown() {
-    const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  async function doBreakdown() {
+    const cfg = videoConfigs.value.find((c: any) => c.id === lockedVideoConfigId.value)
     const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
-    runAgent('storyboard_breaker', `请拆解分镜并生成视频提示词。视频模型：${label}，请根据该模型的特性和时长限制生成合适的视频提示词。`, dramaId, ctx.epId.value, refresh)
+    toast.info(`分镜规划中，视频模型：${label}...`)
+    try {
+      await agentAPI.streamPlanning({ drama_id: dramaId, episode_id: ctx.epId.value }, (event, data) => {
+        if (event === 'status') console.log('[planning]', data)
+        if (event === 'done') {
+          console.log('[planning done]', data)
+          toast.success(`分镜完成：${data.shotCount || '?'} 个镜头`)
+          refresh()
+        }
+        if (event === 'error') toast.error(data.message || '分镜失败')
+      })
+    } catch (e: any) {
+      toast.error(e.message || '分镜失败')
+    }
   }
 
   async function genSample(id: number) {
