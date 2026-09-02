@@ -251,7 +251,7 @@ app.post('/storyboard_breaker/execute', async (c) => {
         episodeId: episode_id,
         dramaId: drama_id,
         shot_plan,
-        replace: replace !== false, // 默认 true，保留已有需显式传 false
+        keepExisting: replace === false,
       })
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
 

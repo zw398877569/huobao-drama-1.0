@@ -532,7 +532,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
 /**
  * 直接调用（不走 LLM）：将 shot_plan 批量生成 prompt 并写入 DB。
  * 供 /agent/storyboard_breaker/execute 路由使用，绕过 agent 推理层。
- * @param replace 是否清除已有 storyboards（默认 true，全量覆盖）
+ * @param keepExisting 是否保留已有 storyboards（默认 true，只追加/更新；设为 false 才全量覆盖）
  */
 export async function runGenerateShotPrompts(params: {
   episodeId: number
@@ -554,15 +554,15 @@ export async function runGenerateShotPrompts(params: {
     atmosphere: string
     intent_function: string
   }>
-  replace?: boolean
+  keepExisting?: boolean
 }): Promise<{ count: number; total_duration: number; density_warnings: number; safety_warnings: number }> {
-  const { episodeId, dramaId, shot_plan, replace = true } = params
+  const { episodeId, dramaId, shot_plan, keepExisting = true } = params
   const ts = now()
   logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
     episodeId,
     dramaId,
     count: shot_plan.length,
-    replace,
+    keepExisting,
   })
 
   // 读取 drama 风格 + 角色 + 场景
@@ -587,7 +587,7 @@ export async function runGenerateShotPrompts(params: {
   const isH3 = /H3|minimax/i.test(lockedVideoLabel)
 
   // ── 处理已有 storyboards ──
-  if (replace) {
+  if (!keepExisting) {
     const existingIds = db.select().from(schema.storyboards)
       .where(eq(schema.storyboards.episodeId, episodeId)).all()
       .map(sb => sb.id)
