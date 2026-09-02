@@ -864,5 +864,15 @@ export function createAgent(type: string, episodeId: number, dramaId: number, op
     default: return null
   }
 
+
+    // DEBUG: dump full agent config (instructions + tools + model) for curl-testing.
+    // Trigger once, then grab the JSON between the markers from docker logs.
+    console.log('=====[DEBUG-AGENT] type=' + type + ' model=' + model + ' toolsCount=' + Object.keys(tools).length + ' toolNames=' + Object.keys(tools).join(','))
+    console.log('-----[DEBUG-AGENT-INSTRUCTIONS]-----')
+    console.log(instructions)
+    console.log('-----[DEBUG-AGENT-INSTRUCTIONS-END]-----')
+    console.log('-----[DEBUG-AGENT-TOOLS-JSON]-----')
+    console.log(JSON.stringify(tools, null, 2))
+    console.log('-----[DEBUG-AGENT-TOOLS-JSON-END]-----')
   return new Agent({ id: type, name, instructions, model, tools })
 }
