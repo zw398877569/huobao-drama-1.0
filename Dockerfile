@@ -3,19 +3,15 @@
 # Both args accept an empty string to fall back to official sources:
 #   docker build --build-arg APT_MIRROR= --build-arg NPM_REGISTRY= -t huobao-drama .
 #
-# Other Debian mirrors (any of these can be substituted for APT_MIRROR):
-#   mirrors.cloud.tencent.com         (Tencent)
-#   mirrors.tuna.tsinghua.edu.cn      (Tsinghua TUNA)
-#   mirrors.ustc.edu.cn              (USTC)
+# The APT_MIRROR is set as the FIRST source; APT automatically falls back to
+# Tencent / TUNA / deb.debian.org if the primary is unreachable. Order:
+#   1. APT_MIRROR       (default: mirrors.aliyun.com) — user-chosen
+#   2. Tencent          (mirrors.cloud.tencent.com) — second CDN
+#   3. TUNA             (mirrors.tuna.tsinghua.edu.cn) — academic, less likely
+#                         to be intercepted by corporate proxies
+#   4. deb.debian.org   — official source, works for users with proxy access
 ARG APT_MIRROR=mirrors.aliyun.com
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-
-# ── Stage 1: Build frontend ──────────────────────────────────
-FROM node:20-slim AS frontend-build
-
-# Re-declare ARGs (Docker ARG scope is per-stage, unless pre-declared)
-ARG NPM_REGISTRY
-ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
 
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -32,7 +28,7 @@ ARG APT_MIRROR
 # Conditional mirror switch: replace official deb.debian.org with user-provided mirror
 # (only runs if APT_MIRROR is non-empty, so default behavior is unchanged)
 RUN if [ -n "$APT_MIRROR" ]; then \
-      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources ; \
+      sed -i "s|deb.debian.org|$APT_MIRROR https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian https://deb.debian.org/debian|g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ \
@@ -54,7 +50,7 @@ ARG APT_MIRROR
 # ffmpeg (runtime) + tsx (runs TS directly)
 # Same conditional mirror switch — saves 5-10 min on China builds by avoiding deb.debian.org
 RUN if [ -n "$APT_MIRROR" ]; then \
-      sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources ; \
+      sed -i "s|deb.debian.org|$APT_MIRROR https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian https://deb.debian.org/debian|g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
