@@ -107,6 +107,58 @@ export const agentAPI = {
   // 重新生成本镜头(单镜头增量,不覆盖其他镜头)
   regenerateStoryboard: (storyboardId: number, body: { drama_id: number; episode_id: number }) =>
     api.post(`/agent/storyboard_breaker/storyboard/${storyboardId}`, body),
+  // 两阶段分镜拆解 — SSE 流式
+  streamPlanning: (body: { drama_id: number; episode_id: number }, onEvent: (event: string, data: any) => void) =>
+    new Promise<void>((resolve, reject) => {
+      const ctrl = new AbortController()
+      const url = `${BASE}/agent/storyboard_breaker/planning`
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      }).then(async (resp) => {
+        if (!resp.ok) {
+          const text = await resp.text()
+          reject(new Error(text || `HTTP ${resp.status}`))
+          return
+        }
+        const reader = resp.body?.getReader()
+        if (!reader) { reject(new Error('No body')); return }
+        const decoder = new TextDecoder()
+        let buffer = ''
+        const read = async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
+              const lines = buffer.split('\n')
+              buffer = lines.pop() || ''
+              let event = '', data = ''
+              for (const line of lines) {
+                if (line.startsWith('event:')) event = line.slice(6).trim()
+                else if (line.startsWith('data:')) data = line.slice(5).trim()
+                else if (line === '') {
+                  if (event && data) {
+                    try { onEvent(event, JSON.parse(data)) } catch {}
+                    event = ''; data = ''
+                  }
+                }
+              }
+            }
+            // flush remaining
+            if (event && data) { try { onEvent(event, JSON.parse(data)) } catch {} }
+            resolve()
+          } catch (e: any) {
+            if (e.name !== 'AbortError') reject(e)
+          }
+        }
+        void read()
+      }).catch(reject)
+      // expose abort for cancellation
+      ;(resp as any)._ctrl = ctrl
+    }),
 }
 
 export const aiConfigAPI = {

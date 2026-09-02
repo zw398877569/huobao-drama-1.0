@@ -2,6 +2,7 @@
  * Agent 聊天路由 — 非流式版本
  */
 import { Hono } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -173,6 +174,107 @@ app.get('/:type/debug', async (c) => {
   const agentType = c.req.param('type')
   if (!validAgentTypes.includes(agentType)) return badRequest(c, 'Invalid agent type')
   return success(c, { agent_type: agentType, valid: true })
+})
+
+// ─── 两阶段分镜拆解 ────────────────────────────────────────────────────────────
+
+// POST /agent/storyboard_breaker/planning — 阶段 1: 结构规划
+app.post('/storyboard_breaker/planning', async (c) => {
+  const body = await c.req.json()
+  const { drama_id, episode_id } = body
+  if (!episode_id || !drama_id) {
+    return badRequest(c, 'drama_id and episode_id are required')
+  }
+
+  logTaskStart('Agent', 'storyboard_breaker-planning', { dramaId: drama_id, episodeId: episode_id })
+
+  const agent = createAgent('storyboard_planner', episode_id, drama_id)
+  if (!agent) return badRequest(c, 'storyboard_planner agent not found')
+
+  return streamSSE(c, async (stream) => {
+    try {
+      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running' }) })
+
+      const startTime = performance.now()
+      const result = await agent.generate(
+        [{ role: 'user', content: '请规划所有镜头的 shot_plan，然后调 generate_shot_prompts 保存。' }],
+        { maxSteps: 15 },
+      )
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+
+      const toolCalls = result.toolCalls || []
+      const toolResults: any[] = result.toolResults || []
+      const planningResult = toolResults.find((tr: any) => normalizeToolName(tr) === 'generate_shot_prompts')
+
+      logTaskSuccess('Agent', 'storyboard_breaker-planning', { elapsedSeconds: elapsed })
+      await stream.writeSSE({
+        event: 'done',
+        data: JSON.stringify({
+          phase: 'planning',
+          status: 'done',
+          shotCount: planningResult?.result?.count || 0,
+          totalDuration: planningResult?.result?.total_duration || 0,
+          densityWarnings: planningResult?.result?.density_warnings || 0,
+          safetyWarnings: planningResult?.result?.safety_warnings || 0,
+        }),
+      })
+    } catch (err: any) {
+      logTaskError('Agent', 'storyboard_breaker-planning', { error: err.message })
+      await stream.writeSSE({
+        event: 'error',
+        data: JSON.stringify({ message: err.message }),
+      })
+    } finally {
+      await stream.close()
+    }
+  })
+})
+
+// POST /agent/storyboard_breaker/execute — 阶段 2: 代码侧批量写入
+// (目前阶段 1 已内联 save，此路由为未来独立执行阶段预留)
+app.post('/storyboard_breaker/execute', async (c) => {
+  const body = await c.req.json()
+  const { drama_id, episode_id, shot_plan } = body
+  if (!episode_id || !drama_id || !shot_plan) {
+    return badRequest(c, 'drama_id, episode_id, and shot_plan are required')
+  }
+
+  logTaskStart('Agent', 'storyboard_breaker-execute', { dramaId: drama_id, episodeId: episode_id, shotCount: shot_plan.length })
+
+  const agent = createAgent('storyboard_planner', episode_id, drama_id)
+  if (!agent) return badRequest(c, 'storyboard_planner agent not found')
+
+  return streamSSE(c, async (stream) => {
+    try {
+      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'execute', status: 'running' }) })
+
+      const startTime = performance.now()
+      const result = await agent.generate(
+        [{ role: 'user', content: JSON.stringify({ shot_plan }) }],
+        { maxSteps: 5 },
+      )
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+
+      const toolResults: any[] = result.toolResults || []
+      const saveResult = toolResults.find((tr: any) => normalizeToolName(tr) === 'generate_shot_prompts')
+
+      logTaskSuccess('Agent', 'storyboard_breaker-execute', { elapsedSeconds: elapsed })
+      await stream.writeSSE({
+        event: 'done',
+        data: JSON.stringify({
+          phase: 'execute',
+          status: 'done',
+          shotCount: saveResult?.result?.count || shot_plan.length,
+          totalDuration: saveResult?.result?.total_duration || 0,
+        }),
+      })
+    } catch (err: any) {
+      logTaskError('Agent', 'storyboard_breaker-execute', { error: err.message })
+      await stream.writeSSE({ event: 'error', data: JSON.stringify({ message: err.message }) })
+    } finally {
+      await stream.close()
+    }
+  })
 })
 
 export default app

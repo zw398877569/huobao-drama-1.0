@@ -5,7 +5,7 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, schema } from '../../db/index'
-import { eq } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 import { now } from '../../utils/response'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
 import { getPresetByStyle } from '../../services/negative-prompt-presets'
@@ -500,5 +500,157 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
     },
   })
 
-  return { readStoryboardContext, saveStoryboards, updateStoryboard, generateGridPrompt }
+  // 供 storyboard_planner agent 调用：接收结构 plan，生成 17 字段并批量写入 DB
+  const generateShotPrompts = createTool({
+    id: 'generate_shot_prompts',
+    description: '接收规划好的 shot_plan（结构字段），为每个镜头生成完整 17 字段 image_prompt / video_prompt / bgm_prompt / sound_effect / negative_prompt 并批量保存。',
+    inputSchema: z.object({
+      shot_plan: z.array(z.object({
+        shot_number: z.number(),
+        scene_id: z.number(),
+        character_ids: z.array(z.number()),
+        shot_type: z.string(),
+        angle: z.string(),
+        movement: z.string(),
+        location: z.string(),
+        time: z.string(),
+        duration: z.number(),
+        action: z.string(),
+        dialogue: z.string().optional(),
+        description: z.string(),
+        result: z.string(),
+        atmosphere: z.string(),
+        intent_function: z.string(),
+      })),
+    }),
+    execute: async ({ shot_plan }) => {
+      const ts = now()
+      logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
+        episodeId,
+        dramaId,
+        count: shot_plan.length,
+      })
+      // 读取 drama 风格 + 角色 + 场景（用于生成 prompt）
+      const [drama] = db.select({ style: schema.dramas.style })
+        .from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
+      const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
+
+      // 读角色/场景 lookup
+      const chars = db.select().from(schema.characters)
+        .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
+      const scenes = db.select().from(schema.scenes)
+        .where(and(eq(schema.scenes.dramaId, dramaId), isNull(schema.scenes.deletedAt))).all()
+      const charMap = new Map(chars.map(c => [c.id, c]))
+      const sceneMap = new Map(scenes.map(s => [s.id, s]))
+
+      // 清理已有 storyboards
+      const existingIds = db.select().from(schema.storyboards)
+        .where(eq(schema.storyboards.episodeId, episodeId)).all()
+        .map(sb => sb.id)
+      for (const id of existingIds) {
+        db.delete(schema.storyboardCharacters)
+          .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
+      }
+      db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
+
+      let totalDuration = 0
+      const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
+      const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
+
+      for (const sp of shot_plan) {
+        validateStoryboardBindings(episodeId, sp.scene_id, sp.character_ids)
+        const scene = sceneMap.get(sp.scene_id)
+        const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
+
+        // 生成 image_prompt: 角色外观 + 场景光影 + 构图 + 风格
+        const charDesc = charRefs.map(c => `${c.name}外貌:${c.appearance || '标准短剧演员脸'}`).join('；')
+        const sceneLight = scene?.prompt ? `场景:${scene.location}${scene.time}，${scene.prompt}` : `地点:${sp.location}，时间:${sp.time}`
+        const imagePrompt = `${charDesc}。${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，no text, no watermark`
+
+        // 生成 video_prompt: 时间戳分段 + 角色/场景标记 + 对白嵌入
+        const durationSec = sp.duration || 10
+        const segments = Math.ceil(durationSec / 3)
+        const segs = Array.from({ length: segments }, (_, i) => {
+          const start = i * 3
+          const end = Math.min((i + 1) * 3, durationSec)
+          return `<n>${start}-${end}秒`
+        }).join('/')
+
+        const dialogueText = sp.dialogue || ''
+        const videoPrompt = `${sp.action}。${segs}${dialogueText ? `。${dialogueText}` : ''}，${sp.result ? '收尾于：' + sp.result : ''}。延续上一镜末帧构图。`
+
+        const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
+        const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
+        const densityResult = validateEventDensity(cleanedVideo)
+        const safetyResult = checkPromptSafety(cleanedImage, 'image')
+
+        const res = db.insert(schema.storyboards).values({
+          episodeId,
+          storyboardNumber: sp.shot_number,
+          title: `镜头#${sp.shot_number}`,
+          shotType: sp.shot_type,
+          angle: sp.angle,
+          movement: sp.movement,
+          location: sp.location,
+          time: sp.time,
+          action: sp.action,
+          dialogue: sp.dialogue,
+          description: sp.description,
+          result: sp.result,
+          atmosphere: sp.atmosphere,
+          imagePrompt: safetyResult.cleaned,
+          videoPrompt: cleanedVideo,
+          bgmPrompt: '',
+          soundEffect: '',
+          sceneId: sp.scene_id,
+          duration: sp.duration || 10,
+          negativePrompt: autoNegativePrompt,
+          eventDensity: densityResult.density,
+          eventList: densityResult.events.length ? JSON.stringify(densityResult.events) : '',
+          promptOriginal: safetyResult.flagged ? imagePrompt : '',
+          safetyFlagged: safetyResult.flagged ? 1 : 0,
+          safetyNotes: safetyResult.notes.length ? JSON.stringify(safetyResult.notes) : '',
+          createdAt: ts, updatedAt: ts,
+        }).run()
+        syncStoryboardCharacters(Number(res.lastInsertRowid), sp.character_ids || [])
+        totalDuration += sp.duration || 10
+        if (densityResult.suggestion) {
+          densityWarnings.push({
+            shot_number: sp.shot_number,
+            density: densityResult.density,
+            suggestion: densityResult.suggestion,
+            events: densityResult.events,
+          })
+        }
+        if (safetyResult.flagged) {
+          safetyWarnings.push({
+            shot_number: sp.shot_number,
+            flagged: true,
+            notes: safetyResult.notes,
+          })
+        }
+      }
+
+      db.update(schema.episodes)
+        .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
+        .where(eq(schema.episodes.id, episodeId)).run()
+
+      logTaskSuccess('StoryboardTool', 'generate-shot-prompts-complete', {
+        episodeId,
+        count: shot_plan.length,
+        totalDuration,
+        densityWarnings: densityWarnings.length,
+        safetyWarnings: safetyWarnings.length,
+      })
+      return {
+        message: `Saved ${shot_plan.length} storyboards`,
+        count: shot_plan.length,
+        total_duration: totalDuration,
+        density_warnings: densityWarnings.length,
+        safety_warnings: safetyWarnings.length,
+      }
+    },
+  })
+
+  return { readStoryboardContext, saveStoryboards, updateStoryboard, generateGridPrompt, generateShotPrompts }
 }
