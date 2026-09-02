@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
+import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -230,43 +231,34 @@ app.post('/storyboard_breaker/planning', async (c) => {
   })
 })
 
-// POST /agent/storyboard_breaker/execute — 阶段 2: 代码侧批量写入
-// (目前阶段 1 已内联 save，此路由为未来独立执行阶段预留)
+// POST /agent/storyboard_breaker/execute — 阶段 2: 直接写入（不经过 LLM）
+// shot_plan 由前端/用户提供，直接调代码侧函数生成 17 字段并保存
 app.post('/storyboard_breaker/execute', async (c) => {
   const body = await c.req.json()
-  const { drama_id, episode_id, shot_plan } = body
+  const { drama_id, episode_id, shot_plan, replace } = body
   if (!episode_id || !drama_id || !shot_plan) {
     return badRequest(c, 'drama_id, episode_id, and shot_plan are required')
   }
 
   logTaskStart('Agent', 'storyboard_breaker-execute', { dramaId: drama_id, episodeId: episode_id, shotCount: shot_plan.length })
 
-  const agent = createAgent('storyboard_planner', episode_id, drama_id)
-  if (!agent) return badRequest(c, 'storyboard_planner agent not found')
-
   return streamSSE(c, async (stream) => {
     try {
       await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'execute', status: 'running' }) })
 
       const startTime = performance.now()
-      const result = await agent.generate(
-        [{ role: 'user', content: JSON.stringify({ shot_plan }) }],
-        { maxSteps: 5 },
-      )
+      const result = await runGenerateShotPrompts({
+        episodeId: episode_id,
+        dramaId: drama_id,
+        shot_plan,
+        replace: replace !== false, // 默认 true，保留已有需显式传 false
+      })
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
 
-      const toolResults: any[] = result.toolResults || []
-      const saveResult = toolResults.find((tr: any) => normalizeToolName(tr) === 'generate_shot_prompts')
-
-      logTaskSuccess('Agent', 'storyboard_breaker-execute', { elapsedSeconds: elapsed })
+      logTaskSuccess('Agent', 'storyboard_breaker-execute', { elapsedSeconds: elapsed, ...result })
       await stream.writeSSE({
         event: 'done',
-        data: JSON.stringify({
-          phase: 'execute',
-          status: 'done',
-          shotCount: saveResult?.result?.count || shot_plan.length,
-          totalDuration: saveResult?.result?.total_duration || 0,
-        }),
+        data: JSON.stringify({ phase: 'execute', status: 'done', ...result }),
       })
     } catch (err: any) {
       logTaskError('Agent', 'storyboard_breaker-execute', { error: err.message })

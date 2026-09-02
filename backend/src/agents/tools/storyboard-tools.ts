@@ -523,177 +523,193 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         intent_function: z.string(),
       })),
     }),
-    execute: async ({ shot_plan }) => {
-      const ts = now()
-      logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
-        episodeId,
-        dramaId,
-        count: shot_plan.length,
-      })
-      // 读取 drama 风格 + 角色 + 场景（用于生成 prompt）
-      const [drama] = db.select({ style: schema.dramas.style })
-        .from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
-      const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
-
-      // 读角色/场景 lookup
-      const chars = db.select().from(schema.characters)
-        .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
-      const scenes = db.select().from(schema.scenes)
-        .where(and(eq(schema.scenes.dramaId, dramaId), isNull(schema.scenes.deletedAt))).all()
-      const charMap = new Map(chars.map(c => [c.id, c]))
-      const sceneMap = new Map(scenes.map(s => [s.id, s]))
-
-      // ── H3 感知：读视频服务配置，判断是否 H3/minimax ──────────────────────
-      const videoConfigs = db.select({ label: schema.aiServiceConfigs.name, provider: schema.aiServiceConfigs.provider })
-        .from(schema.aiServiceConfigs)
-        .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
-        .orderBy(schema.aiServiceConfigs.priority)
-        .all()
-      const lockedVideoLabel = videoConfigs[0]?.label || ''
-      const isH3 = /H3|minimax/i.test(lockedVideoLabel)
-      logTaskProgress('StoryboardTool', 'h3-detect', { isH3, videoLabel: lockedVideoLabel })
-
-      // 清理已有 storyboards
-      const existingIds = db.select().from(schema.storyboards)
-        .where(eq(schema.storyboards.episodeId, episodeId)).all()
-        .map(sb => sb.id)
-      for (const id of existingIds) {
-        db.delete(schema.storyboardCharacters)
-          .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
-      }
-      db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
-
-      let totalDuration = 0
-      const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
-      const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
-
-      for (const sp of shot_plan) {
-        validateStoryboardBindings(episodeId, sp.scene_id, sp.character_ids)
-        const scene = sceneMap.get(sp.scene_id)
-        const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
-
-        // ── Fix #2: 角色外观兜底 — 优先级 description > personality > gender+age ──
-        const charDesc = charRefs.map(c => {
-          const look = c.appearance ||
-            c.description ||
-            c.personality ||
-            (() => {
-              // 推断性别 + 年龄段
-              const gender = (c.gender || '').toLowerCase()
-              const ageGroup = (c.age || '').toLowerCase()
-              if (gender.includes('男') || gender.includes('male')) return `${ageGroup || '成年'}男性`
-              if (gender.includes('女') || gender.includes('female')) return `${ageGroup || '成年'}女性`
-              return '人物'
-            })()
-          return `${c.name}外貌:${look}`
-        }).join('；')
-
-        // ── Fix #3: 场景参考图注入 ──
-        const sceneImgRef = scene?.imageUrl ? `参考图:场景[${scene.location} · ${scene.imageUrl}]，` : ''
-
-        // ── Fix #1: H3-aware image prompt hint ──
-        const h3ImageHint = isH3
-          ? '下游视频模型:H3 — 此图为分镜首/尾帧参考；构图需稳定单一主体+半身/全身景别+自然光影+半写实电影感;避免极端运镜、动作模糊、文字水印、多余人物。'
-          : ''
-
-        const sceneLight = scene?.prompt
-          ? `场景:${scene.location}${scene.time}，${scene.prompt}`
-          : `地点:${sp.location}，时间:${sp.time}`
-        const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
-
-        // ── Fix #4: dialogue 转义 + H3 期望的 <d> 标签格式 ──
-        const escapeXml = (s: string) =>
-          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-        const safeDialogue = escapeXml(sp.dialogue || '')
-        const dialogueTag = safeDialogue ? `<d>${safeDialogue}</d>` : ''
-
-        // 生成 video_prompt: 时间戳分段 + 角色/场景标记 + 对白嵌入
-        const durationSec = sp.duration || 10
-        const segments = Math.ceil(durationSec / 3)
-        // H3 格式: <n>0-3秒</n><n>3-6秒</n> ...
-        const segs = Array.from({ length: segments }, (_, i) => {
-          const start = i * 3
-          const end = Math.min((i + 1) * 3, durationSec)
-          return `<n>${start}-${end}秒</n>`
-        }).join('')
-
-        const dialogueSection = dialogueTag
-          ? `\n[multimodal_description]\n${sp.action}${segs}${sp.result ? `\n收尾:${sp.result}` : ''}\n${dialogueTag}`
-          : `${sp.action}${segs}${sp.result ? `。收尾于：${sp.result}` : ''}`
-        const videoPrompt = `${dialogueSection}。延续上一镜末帧构图。`
-
-        const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
-        const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
-        const densityResult = validateEventDensity(cleanedVideo)
-        const safetyResult = checkPromptSafety(cleanedImage, 'image')
-
-        const res = db.insert(schema.storyboards).values({
-          episodeId,
-          storyboardNumber: sp.shot_number,
-          title: `镜头#${sp.shot_number}`,
-          shotType: sp.shot_type,
-          angle: sp.angle,
-          movement: sp.movement,
-          location: sp.location,
-          time: sp.time,
-          action: sp.action,
-          dialogue: sp.dialogue,
-          description: sp.description,
-          result: sp.result,
-          atmosphere: sp.atmosphere,
-          imagePrompt: safetyResult.cleaned,
-          videoPrompt: cleanedVideo,
-          bgmPrompt: '',
-          soundEffect: '',
-          sceneId: sp.scene_id,
-          duration: sp.duration || 10,
-          negativePrompt: autoNegativePrompt,
-          eventDensity: densityResult.density,
-          eventList: densityResult.events.length ? JSON.stringify(densityResult.events) : '',
-          promptOriginal: safetyResult.flagged ? imagePrompt : '',
-          safetyFlagged: safetyResult.flagged ? 1 : 0,
-          safetyNotes: safetyResult.notes.length ? JSON.stringify(safetyResult.notes) : '',
-          createdAt: ts, updatedAt: ts,
-        }).run()
-        syncStoryboardCharacters(Number(res.lastInsertRowid), sp.character_ids || [])
-        totalDuration += sp.duration || 10
-        if (densityResult.suggestion) {
-          densityWarnings.push({
-            shot_number: sp.shot_number,
-            density: densityResult.density,
-            suggestion: densityResult.suggestion,
-            events: densityResult.events,
-          })
-        }
-        if (safetyResult.flagged) {
-          safetyWarnings.push({
-            shot_number: sp.shot_number,
-            flagged: true,
-            notes: safetyResult.notes,
-          })
-        }
-      }
-
-      db.update(schema.episodes)
-        .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
-        .where(eq(schema.episodes.id, episodeId)).run()
-
-      logTaskSuccess('StoryboardTool', 'generate-shot-prompts-complete', {
-        episodeId,
-        count: shot_plan.length,
-        totalDuration,
-        densityWarnings: densityWarnings.length,
-        safetyWarnings: safetyWarnings.length,
-      })
-      return {
-        message: `Saved ${shot_plan.length} storyboards`,
-        count: shot_plan.length,
-        total_duration: totalDuration,
-        density_warnings: densityWarnings.length,
-        safety_warnings: safetyWarnings.length,
-      }
-    },
+    execute: async ({ shot_plan }) => runGenerateShotPrompts({ episodeId, dramaId, shot_plan }),
   })
 
   return { readStoryboardContext, saveStoryboards, updateStoryboard, generateGridPrompt, generateShotPrompts }
+}
+
+/**
+ * 直接调用（不走 LLM）：将 shot_plan 批量生成 prompt 并写入 DB。
+ * 供 /agent/storyboard_breaker/execute 路由使用，绕过 agent 推理层。
+ * @param replace 是否清除已有 storyboards（默认 true，全量覆盖）
+ */
+export async function runGenerateShotPrompts(params: {
+  episodeId: number
+  dramaId: number
+  shot_plan: Array<{
+    shot_number: number
+    scene_id: number
+    character_ids: number[]
+    shot_type: string
+    angle: string
+    movement: string
+    location: string
+    time: string
+    duration: number
+    action: string
+    dialogue?: string
+    description: string
+    result: string
+    atmosphere: string
+    intent_function: string
+  }>
+  replace?: boolean
+}): Promise<{ count: number; total_duration: number; density_warnings: number; safety_warnings: number }> {
+  const { episodeId, dramaId, shot_plan, replace = true } = params
+  const ts = now()
+  logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
+    episodeId,
+    dramaId,
+    count: shot_plan.length,
+    replace,
+  })
+
+  // 读取 drama 风格 + 角色 + 场景
+  const [drama] = db.select({ style: schema.dramas.style })
+    .from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
+  const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
+
+  const chars = db.select().from(schema.characters)
+    .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
+  const scenes = db.select().from(schema.scenes)
+    .where(and(eq(schema.scenes.dramaId, dramaId), isNull(schema.scenes.deletedAt))).all()
+  const charMap = new Map(chars.map(c => [c.id, c]))
+  const sceneMap = new Map(scenes.map(s => [s.id, s]))
+
+  // ── H3 感知 ──
+  const videoConfigs = db.select({ label: schema.aiServiceConfigs.name, provider: schema.aiServiceConfigs.provider })
+    .from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
+    .orderBy(schema.aiServiceConfigs.priority)
+    .all()
+  const lockedVideoLabel = videoConfigs[0]?.label || ''
+  const isH3 = /H3|minimax/i.test(lockedVideoLabel)
+
+  // ── 处理已有 storyboards ──
+  if (replace) {
+    const existingIds = db.select().from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, episodeId)).all()
+      .map(sb => sb.id)
+    for (const id of existingIds) {
+      db.delete(schema.storyboardCharacters)
+        .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
+    }
+    db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
+  }
+
+  let totalDuration = 0
+  const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
+  const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
+
+  for (const sp of shot_plan) {
+    validateStoryboardBindings(episodeId, sp.scene_id, sp.character_ids)
+    const scene = sceneMap.get(sp.scene_id)
+    const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
+
+    // 角色外观兜底
+    const charDesc = charRefs.map(c => {
+      const look = c.appearance ||
+        c.description ||
+        c.personality ||
+        (() => {
+          const roleLower = (c.role || c.name || '').toLowerCase()
+          if (roleLower.includes('男') || roleLower.includes('man') || roleLower.includes('male')) return '男性'
+          if (roleLower.includes('女') || roleLower.includes('woman') || roleLower.includes('female')) return '女性'
+          return '人物'
+        })()
+      return `${c.name}外貌:${look}`
+    }).join('；')
+
+    // 场景参考图
+    const sceneImgRef = scene?.imageUrl ? `参考图:场景[${scene.location} · ${scene.imageUrl}]，` : ''
+    // H3 感知 hint
+    const h3ImageHint = isH3
+      ? '下游视频模型:H3 — 此图为分镜首/尾帧参考；构图需稳定单一主体+半身/全身景别+自然光影+半写实电影感;避免极端运镜、动作模糊、文字水印、多余人物。'
+      : ''
+    const sceneLight = scene?.prompt
+      ? `场景:${scene.location}${scene.time}，${scene.prompt}`
+      : `地点:${sp.location}，时间:${sp.time}`
+    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
+
+    // 对白转义 + H3 格式
+    const escapeXml = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const safeDialogue = escapeXml(sp.dialogue || '')
+    const dialogueTag = safeDialogue ? `<d>${safeDialogue}</d>` : ''
+
+    const durationSec = sp.duration || 10
+    const segments = Math.ceil(durationSec / 3)
+    const segs = Array.from({ length: segments }, (_, i) => {
+      const start = i * 3
+      const end = Math.min((i + 1) * 3, durationSec)
+      return `<n>${start}-${end}秒</n>`
+    }).join('')
+
+    const dialogueSection = dialogueTag
+      ? `\n[multimodal_description]\n${sp.action}${segs}${sp.result ? `\n收尾:${sp.result}` : ''}\n${dialogueTag}`
+      : `${sp.action}${segs}${sp.result ? `。收尾于：${sp.result}` : ''}`
+    const videoPrompt = `${dialogueSection}。延续上一镜末帧构图。`
+
+    const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
+    const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
+    const densityResult = validateEventDensity(cleanedVideo)
+    const safetyResult = checkPromptSafety(cleanedImage, 'image')
+
+    const res = db.insert(schema.storyboards).values({
+      episodeId,
+      storyboardNumber: sp.shot_number,
+      title: `镜头#${sp.shot_number}`,
+      shotType: sp.shot_type,
+      angle: sp.angle,
+      movement: sp.movement,
+      location: sp.location,
+      time: sp.time,
+      action: sp.action,
+      dialogue: sp.dialogue,
+      description: sp.description,
+      result: sp.result,
+      atmosphere: sp.atmosphere,
+      imagePrompt: safetyResult.cleaned,
+      videoPrompt: cleanedVideo,
+      bgmPrompt: '',
+      soundEffect: '',
+      sceneId: sp.scene_id,
+      duration: sp.duration || 10,
+      negativePrompt: autoNegativePrompt,
+      eventDensity: densityResult.density,
+      eventList: densityResult.events.length ? JSON.stringify(densityResult.events) : '',
+      promptOriginal: safetyResult.flagged ? imagePrompt : '',
+      safetyFlagged: safetyResult.flagged ? 1 : 0,
+      safetyNotes: safetyResult.notes.length ? JSON.stringify(safetyResult.notes) : '',
+      createdAt: ts, updatedAt: ts,
+    }).run()
+    syncStoryboardCharacters(Number(res.lastInsertRowid), sp.character_ids || [])
+    totalDuration += sp.duration || 10
+    if (densityResult.suggestion) {
+      densityWarnings.push({
+        shot_number: sp.shot_number,
+        density: densityResult.density,
+        suggestion: densityResult.suggestion,
+        events: densityResult.events,
+      })
+    }
+    if (safetyResult.flagged) {
+      safetyWarnings.push({
+        shot_number: sp.shot_number,
+        flagged: true,
+        notes: safetyResult.notes,
+      })
+    }
+  }
+
+  db.update(schema.episodes)
+    .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
+    .where(eq(schema.episodes.id, episodeId)).run()
+
+  logTaskSuccess('StoryboardTool', 'generate-shot-prompts-complete', {
+    episodeId, count: shot_plan.length, totalDuration,
+    densityWarnings: densityWarnings.length, safetyWarnings: safetyWarnings.length,
+  })
+  return { count: shot_plan.length, total_duration: totalDuration, density_warnings: densityWarnings.length, safety_warnings: safetyWarnings.length }
 }
