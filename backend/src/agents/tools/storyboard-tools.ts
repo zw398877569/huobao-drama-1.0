@@ -543,6 +543,16 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       const charMap = new Map(chars.map(c => [c.id, c]))
       const sceneMap = new Map(scenes.map(s => [s.id, s]))
 
+      // ── H3 感知：读视频服务配置，判断是否 H3/minimax ──────────────────────
+      const videoConfigs = db.select({ label: schema.aiServiceConfigs.name, provider: schema.aiServiceConfigs.provider })
+        .from(schema.aiServiceConfigs)
+        .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
+        .orderBy(schema.aiServiceConfigs.priority)
+        .all()
+      const lockedVideoLabel = videoConfigs[0]?.label || ''
+      const isH3 = /H3|minimax/i.test(lockedVideoLabel)
+      logTaskProgress('StoryboardTool', 'h3-detect', { isH3, videoLabel: lockedVideoLabel })
+
       // 清理已有 storyboards
       const existingIds = db.select().from(schema.storyboards)
         .where(eq(schema.storyboards.episodeId, episodeId)).all()
@@ -562,22 +572,55 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         const scene = sceneMap.get(sp.scene_id)
         const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
 
-        // 生成 image_prompt: 角色外观 + 场景光影 + 构图 + 风格
-        const charDesc = charRefs.map(c => `${c.name}外貌:${c.appearance || '标准短剧演员脸'}`).join('；')
-        const sceneLight = scene?.prompt ? `场景:${scene.location}${scene.time}，${scene.prompt}` : `地点:${sp.location}，时间:${sp.time}`
-        const imagePrompt = `${charDesc}。${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，no text, no watermark`
+        // ── Fix #2: 角色外观兜底 — 优先级 description > personality > gender+age ──
+        const charDesc = charRefs.map(c => {
+          const look = c.appearance ||
+            c.description ||
+            c.personality ||
+            (() => {
+              // 推断性别 + 年龄段
+              const gender = (c.gender || '').toLowerCase()
+              const ageGroup = (c.age || '').toLowerCase()
+              if (gender.includes('男') || gender.includes('male')) return `${ageGroup || '成年'}男性`
+              if (gender.includes('女') || gender.includes('female')) return `${ageGroup || '成年'}女性`
+              return '人物'
+            })()
+          return `${c.name}外貌:${look}`
+        }).join('；')
+
+        // ── Fix #3: 场景参考图注入 ──
+        const sceneImgRef = scene?.imageUrl ? `参考图:场景[${scene.location} · ${scene.imageUrl}]，` : ''
+
+        // ── Fix #1: H3-aware image prompt hint ──
+        const h3ImageHint = isH3
+          ? '下游视频模型:H3 — 此图为分镜首/尾帧参考；构图需稳定单一主体+半身/全身景别+自然光影+半写实电影感;避免极端运镜、动作模糊、文字水印、多余人物。'
+          : ''
+
+        const sceneLight = scene?.prompt
+          ? `场景:${scene.location}${scene.time}，${scene.prompt}`
+          : `地点:${sp.location}，时间:${sp.time}`
+        const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
+
+        // ── Fix #4: dialogue 转义 + H3 期望的 <d> 标签格式 ──
+        const escapeXml = (s: string) =>
+          s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+        const safeDialogue = escapeXml(sp.dialogue || '')
+        const dialogueTag = safeDialogue ? `<d>${safeDialogue}</d>` : ''
 
         // 生成 video_prompt: 时间戳分段 + 角色/场景标记 + 对白嵌入
         const durationSec = sp.duration || 10
         const segments = Math.ceil(durationSec / 3)
+        // H3 格式: <n>0-3秒</n><n>3-6秒</n> ...
         const segs = Array.from({ length: segments }, (_, i) => {
           const start = i * 3
           const end = Math.min((i + 1) * 3, durationSec)
-          return `<n>${start}-${end}秒`
-        }).join('/')
+          return `<n>${start}-${end}秒</n>`
+        }).join('')
 
-        const dialogueText = sp.dialogue || ''
-        const videoPrompt = `${sp.action}。${segs}${dialogueText ? `。${dialogueText}` : ''}，${sp.result ? '收尾于：' + sp.result : ''}。延续上一镜末帧构图。`
+        const dialogueSection = dialogueTag
+          ? `\n[multimodal_description]\n${sp.action}${segs}${sp.result ? `\n收尾:${sp.result}` : ''}\n${dialogueTag}`
+          : `${sp.action}${segs}${sp.result ? `。收尾于：${sp.result}` : ''}`
+        const videoPrompt = `${dialogueSection}。延续上一镜末帧构图。`
 
         const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
         const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
