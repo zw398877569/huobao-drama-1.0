@@ -9,7 +9,7 @@
 #   2. Tencent          (mirrors.cloud.tencent.com) — second CDN
 #   3. TUNA             (mirrors.tuna.tsinghua.edu.cn) — academic, less likely
 #                         to be intercepted by corporate proxies
-#   4. deb.debian.org   — official source, works for users with proxy access
+#   4. TUNA again (last-resort, in case CDN failover is partial)
 ARG APT_MIRROR=mirrors.aliyun.com
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
@@ -28,7 +28,7 @@ ARG APT_MIRROR
 # Conditional mirror switch: replace official deb.debian.org with user-provided mirror
 # (only runs if APT_MIRROR is non-empty, so default behavior is unchanged)
 RUN if [ -n "$APT_MIRROR" ]; then \
-      sed -i "s|deb.debian.org|$APT_MIRROR https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian https://deb.debian.org/debian|g" /etc/apt/sources.list.d/debian.sources ; \
+      sed -i "s#https://deb.debian.org/debian#$APT_MIRROR/debian https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian#g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ \
@@ -50,7 +50,7 @@ ARG APT_MIRROR
 # ffmpeg (runtime) + tsx (runs TS directly)
 # Same conditional mirror switch — saves 5-10 min on China builds by avoiding deb.debian.org
 RUN if [ -n "$APT_MIRROR" ]; then \
-      sed -i "s|deb.debian.org|$APT_MIRROR https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian https://deb.debian.org/debian|g" /etc/apt/sources.list.d/debian.sources ; \
+      sed -i "s#https://deb.debian.org/debian#$APT_MIRROR/debian https://mirrors.cloud.tencent.com/debian https://mirrors.tuna.tsinghua.edu.cn/debian#g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
