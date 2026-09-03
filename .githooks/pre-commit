@@ -3,6 +3,7 @@
 #   1. SKILL.md size budget (5KB warn / 8KB block) — prevent agent timeout
 #   2. Composable TDZ scan (if episodeNumber.vue changed) — prevent runtime ReferenceError
 #   3. Template orphan scan (if episodeNumber.vue changed) — prevent 'X is not a function'
+#   4. Dockerfile structure lint (if Dockerfile changed) — prevent orphan WORKDIR/COPY/RUN
 #
 # Override (NOT recommended): git commit --no-verify
 
@@ -52,6 +53,16 @@ if git diff --cached --name-only | grep -q "frontend/app/pages/drama/\[id\]/epis
   if [ -f "$REPO_ROOT/scripts/scan-template-orphans.js" ]; then
     echo "[orphan-check] Running template orphan scan..."
     if ! node "$REPO_ROOT/scripts/scan-template-orphans.js" 2>&1; then
+      FAILED=1
+    fi
+  fi
+fi
+
+# ── 4. Dockerfile structure lint (only if file was changed) ─
+if git diff --cached --name-only | grep -q "^Dockerfile$"; then
+  if [ -f "$REPO_ROOT/scripts/check-dockerfile-structure.js" ]; then
+    echo "[dockerfile-lint] Checking Dockerfile structure..."
+    if ! node "$REPO_ROOT/scripts/check-dockerfile-structure.js" 2>&1; then
       FAILED=1
     fi
   fi
