@@ -81,7 +81,7 @@ app.post('/:id/generate-image', async (c) => {
     'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
     'consistent character design across all views, clean light gradient background',
     'high quality, detailed illustration, professional character art',
-  ].filter(Boolean).join(', ')'
+  ].filter(Boolean).join(', ')
   const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
