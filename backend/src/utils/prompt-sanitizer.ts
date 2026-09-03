@@ -236,7 +236,11 @@ function extractPromptFromLLM(raw) {
       if (cn < 8) return false
       return cn / p.length >= 0.3
     })
-  if (paragraphs.length === 0) return null
+  if (paragraphs.length === 0) {
+    // 模型没有输出中文段落(可能是只分析了英文/只给了思考过程), 退回所有段落拼接兜底
+    const all = text.split(/\n+/).map(p => p.trim()).filter(Boolean).join('，')
+    return all || null
+  }
   // 取最长那段(模型真正给出的改写通常是最长的中文段)
   text = paragraphs.reduce((a, b) => b.length > a.length ? b : a, '')
 
@@ -301,6 +305,8 @@ async function sanitizeImagePromptLLM(rawPrompt) {
           { role: 'system', content: SYSTEM_INSTRUCTION },
           { role: 'user', content: `原文 prompt:\n<<<${rawPrompt}>>>` },
         ],
+        // MiniMax-M3 等推理模型默认输出  thinking 块, 禁用以避免污染改写结果
+        extra_body: { reasoning: { enabled: false } },
       }),
       signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     })
