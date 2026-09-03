@@ -6,6 +6,7 @@ import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { getStylePreset } from '../services/negative-prompt-presets.js'
 
 const app = new Hono()
 
@@ -72,11 +73,15 @@ app.post('/:id/generate-image', async (c) => {
 
   const charDetail = char.appearance || char.description || ''
   const personality = char.personality || ''
+  const [drama] = db.select({ style: schema.dramas.style })
+    .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
+  const stylePreset = getStylePreset(drama?.style || undefined)
   const rawPrompt = [
     char.name,
     charDetail,
     personality ? 'personality: ' + personality : '',
-    'character reference sheet, anime-style illustration, official character design',
+    stylePreset.positiveCharacterTokens,
+    'character reference sheet, official character design',
     'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
     'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
     'consistent character design across all views, clean light gradient background',
@@ -106,17 +111,21 @@ app.post('/batch-generate-images', async (c) => {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
     const charDetail = char.appearance || char.description || ''
-  const personality = char.personality || ''
-  const rawPrompt = [
-    char.name,
-    charDetail,
-    personality ? 'personality: ' + personality : '',
-    'character reference sheet, anime-style illustration, official character design',
-    'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
-    'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
-    'consistent character design across all views, clean light gradient background',
-    'high quality, detailed illustration, professional character art',
-  ].filter(Boolean).join(', ')
+    const personality = char.personality || ''
+    const [drama] = db.select({ style: schema.dramas.style })
+      .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
+    const stylePreset = getStylePreset(drama?.style || undefined)
+    const rawPrompt = [
+      char.name,
+      charDetail,
+      personality ? 'personality: ' + personality : '',
+      stylePreset.positiveCharacterTokens,
+      'character reference sheet, official character design',
+      'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
+      'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
+      'consistent character design across all views, clean light gradient background',
+      'high quality, detailed illustration, professional character art',
+    ].filter(Boolean).join(', ')
     const prompt = await sanitizeImagePrompt(rawPrompt)
     try {
       const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })

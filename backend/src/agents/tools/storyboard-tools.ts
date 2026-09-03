@@ -8,7 +8,7 @@ import { db, schema } from '../../db/index'
 import { eq, and, isNull } from 'drizzle-orm'
 import { now } from '../../utils/response'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
-import { getPresetByStyle } from '../../services/negative-prompt-presets'
+import { getPresetByStyle, getStylePreset } from '../../services/negative-prompt-presets'
 // Import scene intention analysis function and templates
 import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
@@ -68,6 +68,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
     .from(schema.dramas)
     .where(eq(schema.dramas.id, dramaId)).all()
   const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
+  const stylePreset = getStylePreset(drama?.style)
 
   const readStoryboardContext = createTool({
     id: 'read_storyboard_context',
@@ -452,11 +453,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if (mode === 'multi_ref') {
         const sb = shots[0]
         const payload = {
-          grid_prompt: `电影级高质量参考图，${sb.description}，专业摄影，电影质感，4K分辨率，${rows}x${cols} 宫格统一风格参考图`,
+          grid_prompt: `${stylePreset.positiveShotTokens}，${sb.description}，专业摄影，4K分辨率，${rows}x${cols} 宫格统一风格参考图`,
           cell_prompts: shots.map(s => ({
             shot_number: s.shot_number,
             frame_type: 'reference',
-            prompt: `电影级高质量参考图，${s.description}，专业摄影，电影质感，4K分辨率，统一风格`,
+            prompt: `${stylePreset.positiveShotTokens}，${s.description}，专业摄影，4K分辨率，统一风格`,
           })),
         }
         logTaskSuccess('StoryboardTool', 'grid-prompt-complete', { episodeId, cells: payload.cell_prompts.length, mode })
@@ -469,16 +470,16 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           cellPrompts.push({
             shot_number: s.shot_number,
             frame_type: 'first_frame',
-            prompt: `电影级高质量首帧，${s.description}，${s.shot_type || ''}，专业摄影，${rows}x${cols} 宫格风格统一`,
+            prompt: `${stylePreset.positiveShotTokens}，${s.description}，${s.shot_type || ''}，专业摄影，${rows}x${cols} 宫格风格统一`,
           })
           cellPrompts.push({
             shot_number: s.shot_number,
             frame_type: 'last_frame',
-            prompt: `电影级高质量尾帧，${s.description}，${s.shot_type || ''}，专业摄影，${rows}x${cols} 宫格风格统一`,
+            prompt: `${stylePreset.positiveShotTokens}，${s.description}，${s.shot_type || ''}，专业摄影，${rows}x${cols} 宫格风格统一`,
           })
         }
         const payload = {
-          grid_prompt: `${shots.length}个镜头首尾帧拼图，${shots.map(s => s.description).join(' | ')}，电影级画面，专业摄影，${rows}行${cols}列风格统一`,
+          grid_prompt: `${shots.length}个镜头首尾帧拼图，${shots.map(s => s.description).join(' | ')}，${stylePreset.positiveShotTokens}，${rows}行${cols}列风格统一`,
           cell_prompts: cellPrompts,
         }
         logTaskSuccess('StoryboardTool', 'grid-prompt-complete', { episodeId, cells: payload.cell_prompts.length, mode })
@@ -570,6 +571,7 @@ export async function runGenerateShotPrompts(params: {
   const [drama] = db.select({ style: schema.dramas.style })
     .from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
   const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
+  const stylePreset = getStylePreset(drama?.style)
 
   const chars = db.select().from(schema.characters)
     .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
@@ -631,7 +633,7 @@ export async function runGenerateShotPrompts(params: {
     const sceneLight = scene?.prompt
       ? `场景:${scene.location}${scene.time}，${scene.prompt}`
       : `地点:${sp.location}，时间:${sp.time}`
-    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。电影级画面，写实风格，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
+    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
 
     // 对白转义 + H3 格式
     const escapeXml = (s: string) =>

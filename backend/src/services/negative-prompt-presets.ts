@@ -20,6 +20,89 @@ export interface NegativePromptPreset {
 }
 
 /**
+ * 风格预设 — 统一管理正向提示词 token
+ *
+ * slug / label 对应前端 6 个选项。
+ * positiveCharacterTokens 替换角色图 "anime-style illustration"。
+ * positiveShotTokens 替换分镜图 "电影级画面，写实风格"。
+ * negativePresetId 复用负面提示词预设。
+ * keywords 用于 style 字符串匹配（含 bug 修复：cinematic 加入自己的关键词）。
+ */
+export interface StylePreset {
+  slug: string
+  label: string
+  positiveCharacterTokens: string
+  positiveShotTokens: string
+  negativePresetId: string
+  keywords: string[]
+}
+
+export const STYLE_PRESETS: StylePreset[] = [
+  {
+    slug: 'realistic',
+    label: '写实',
+    positiveCharacterTokens: 'photorealistic character portrait, natural skin texture, candid photography, realistic proportions',
+    positiveShotTokens: 'photorealistic cinematography, natural lighting, realistic film still',
+    negativePresetId: 'realistic',
+    keywords: ['realistic', '写实', '真人', 'photorealistic'],
+  },
+  {
+    slug: 'cinematic',
+    label: '电影感',
+    positiveCharacterTokens: 'cinematic character portrait, film still aesthetic, dramatic lighting, shallow depth of field',
+    positiveShotTokens: 'cinematic film still, anamorphic lens, shallow DOF, film grain, teal-orange color grade',
+    negativePresetId: 'realistic',
+    keywords: ['cinematic', '电影感', 'film', 'cinematography'],
+  },
+  {
+    slug: 'anime',
+    label: '动漫',
+    positiveCharacterTokens: 'anime key visual, cel shading, vibrant color, official anime art style',
+    positiveShotTokens: 'anime scene illustration, cel-shaded, vibrant color palette, anime key visual style',
+    negativePresetId: 'anime',
+    keywords: ['anime', '动漫', '二次元', '漫画', 'manga', 'cartoon'],
+  },
+  {
+    slug: 'ghibli',
+    label: '吉卜力',
+    positiveCharacterTokens: 'Studio Ghibli style, watercolor texture, soft pastel colors, Hayao Miyazaki art style',
+    positiveShotTokens: 'Studio Ghibli background art, watercolor texture, soft pastel, dreamy atmosphere',
+    negativePresetId: 'generic',
+    keywords: ['ghibli', '吉卜力', '宫崎骏', 'studio ghibli'],
+  },
+  {
+    slug: 'comic',
+    label: '美式漫画',
+    positiveCharacterTokens: 'American comic book art, ink linework, halftone shading, superhero comic aesthetic',
+    positiveShotTokens: 'comic book panel, bold ink lines, halftone shading, dynamic comic composition',
+    negativePresetId: 'generic',
+    keywords: ['comic', '漫画', '美式', 'superhero', 'comic book'],
+  },
+  {
+    slug: 'watercolor',
+    label: '水彩',
+    positiveCharacterTokens: 'watercolor illustration, soft washes, paper texture, hand-painted watercolor style',
+    positiveShotTokens: 'watercolor painting style, soft washes, paper texture, hand-painted illustration',
+    negativePresetId: 'ink',
+    keywords: ['watercolor', '水彩', 'hand-painted', 'painting'],
+  },
+]
+
+/**
+ * 根据 drama.style 字符串匹配风格预设
+ */
+export function getStylePreset(style?: string | null): StylePreset {
+  if (!style) return STYLE_PRESETS[0] // default to realistic
+  const lower = style.toLowerCase()
+  for (const preset of STYLE_PRESETS) {
+    if (preset.keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
+      return preset
+    }
+  }
+  return STYLE_PRESETS[0] // fallback to realistic
+}
+
+/**
  * 预设库。当前覆盖 5 个主流风格场景。
  * 新增风格：在数组末尾追加即可，keywords 数组任意一项命中即生效。
  */
@@ -48,9 +131,30 @@ export const NEGATIVE_PROMPT_PRESETS: NegativePromptPreset[] = [
   {
     id: 'cinematic',
     label: '电影感',
-    keywords: ['film', '电影感', 'movie', 'epic', '大片', '商业片'],
+    keywords: ['cinematic', 'film', '电影感', 'movie', 'epic', '大片', '商业片'],
     prompt:
       'cartoon, anime, drawing, flat lighting, overexposed, underexposed, blurry, watermark, text, low quality, amateur',
+  },
+  {
+    id: 'ghibli',
+    label: '吉卜力',
+    keywords: ['ghibli', '吉卜力', '宫崎骏', 'studio ghibli'],
+    prompt:
+      'photorealistic, sharp photo, harsh lighting, neon colors, cyberpunk, modern, 3d render, blurry, watermark, text',
+  },
+  {
+    id: 'comic',
+    label: '美式漫画',
+    keywords: ['comic', '美式', 'superhero', 'comic book'],
+    prompt:
+      'photorealistic, photo, photograph, realistic skin, 3d render, blurry, watermark, text, low quality',
+  },
+  {
+    id: 'watercolor',
+    label: '水彩',
+    keywords: ['watercolor', '水彩', 'hand-painted', 'painting'],
+    prompt:
+      'photorealistic, photo, 3d render, digital art, neon, vibrant colors, sharp edges, blurry, watermark, text',
   },
   {
     id: 'generic',
