@@ -1899,6 +1899,8 @@ const {
   runAgent,
   refresh,
   videoConfigs, lockedVideoConfigId, lockedAudioProvider,
+  running,
+  runningType,
 })
 
 const regeneratingOne = ref(false)

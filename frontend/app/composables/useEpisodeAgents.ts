@@ -20,10 +20,12 @@ type Deps = {
   videoConfigs: Ref<any[]>,
   lockedVideoConfigId: ComputedRef<number | null>,
   lockedAudioProvider: ComputedRef<string>,
+  running: Ref<boolean>,
+  runningType: Ref<string | null>,
 }
 
 export function useEpisodeAgents(deps: Deps) {
-  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId, lockedAudioProvider } = deps
+  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId, lockedAudioProvider, running, runningType } = deps
 
   function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, ctx.epId.value, refresh) }
 
@@ -59,6 +61,8 @@ export function useEpisodeAgents(deps: Deps) {
   async function doBreakdown() {
     const cfg = videoConfigs.value.find((c: any) => c.id === lockedVideoConfigId.value)
     const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
+    running.value = true
+    runningType.value = 'storyboard_breaker'
     let currentTip = ''
     try {
       await agentAPI.streamPlanning({ drama_id: dramaId, episode_id: ctx.epId.value }, (event, data) => {
@@ -76,6 +80,9 @@ export function useEpisodeAgents(deps: Deps) {
       })
     } catch (e: any) {
       toast.error(e.message || '分镜失败')
+    } finally {
+      running.value = false
+      runningType.value = null
     }
   }
 
