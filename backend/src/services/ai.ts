@@ -139,7 +139,7 @@ export async function translatePromptToEnglish(prompt: string): Promise<string> 
     max_tokens: 800,
   }
 
-  const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+  const resp = await fetch(`${baseUrl}chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
