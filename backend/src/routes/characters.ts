@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
@@ -106,15 +106,24 @@ app.post('/batch-generate-images', async (c) => {
   if (!body.episode_id) return badRequest(c, 'episode_id is required')
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
+  // 预查询所有相关 drama 的 style — 避免 N+1 查询(批量生图时多角色通常同属一个 drama)
+  const matchedChars = db.select({ id: schema.characters.id, dramaId: schema.characters.dramaId })
+    .from(schema.characters)
+    .where(inArray(schema.characters.id, ids.length ? ids : [0])).all()
+  const uniqueDramaIds = Array.from(new Set(matchedChars.map(c => c.dramaId)))
+  const dramaStyleMap = new Map<number, ReturnType<typeof getStylePreset>>()
+  for (const did of uniqueDramaIds) {
+    const [drama] = db.select({ style: schema.dramas.style })
+      .from(schema.dramas).where(eq(schema.dramas.id, did)).all()
+    dramaStyleMap.set(did, getStylePreset(drama?.style || undefined))
+  }
   const results: number[] = []
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
     const charDetail = char.appearance || char.description || ''
     const personality = char.personality || ''
-    const [drama] = db.select({ style: schema.dramas.style })
-      .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
-    const stylePreset = getStylePreset(drama?.style || undefined)
+    const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const rawPrompt = [
       char.name,
       charDetail,

@@ -25,15 +25,21 @@ export interface NegativePromptPreset {
  * slug / label 对应前端 6 个选项。
  * positiveCharacterTokens 替换角色图 "anime-style illustration"。
  * positiveShotTokens 替换分镜图 "电影级画面，写实风格"。
- * negativePresetId 复用负面提示词预设。
  * keywords 用于 style 字符串匹配（含 bug 修复：cinematic 加入自己的关键词）。
+ *
+ * ⚠️ token 选取约束：不能含 SLOP_RULES 里的词（cinematic / dramatic lighting /
+ *    beautiful / high quality 等）—— 故事板 prompt 在入库前会过
+ *    applyQualityChecklist(image),会把这些词剥成空串。character prompt 目前
+ *    不过 quality checklist,但为了未来加 whitelist 也不被剥,统一遵循此约束。
+ *
+ * 注意: negative prompt 仍由 getPresetByStyle(NEGATIVE_PROMPT_PRESETS) 算,
+ * 不通过本表查 —— 本表只管 positive side,避免与 negative preset 维护两份 keywords。
  */
 export interface StylePreset {
   slug: string
   label: string
   positiveCharacterTokens: string
   positiveShotTokens: string
-  negativePresetId: string
   keywords: string[]
 }
 
@@ -43,15 +49,14 @@ export const STYLE_PRESETS: StylePreset[] = [
     label: '写实',
     positiveCharacterTokens: 'photorealistic character portrait, natural skin texture, candid photography, realistic proportions',
     positiveShotTokens: 'photorealistic cinematography, natural lighting, realistic film still',
-    negativePresetId: 'realistic',
     keywords: ['realistic', '写实', '真人', 'photorealistic'],
   },
   {
     slug: 'cinematic',
     label: '电影感',
-    positiveCharacterTokens: 'cinematic character portrait, film still aesthetic, dramatic lighting, shallow depth of field',
-    positiveShotTokens: 'cinematic film still, anamorphic lens, shallow DOF, film grain, teal-orange color grade',
-    negativePresetId: 'realistic',
+    // 不用 'cinematic' / 'dramatic lighting' —— 会被 applyQualityChecklist 剥成空串
+    positiveCharacterTokens: 'film still character portrait, anamorphic look, atmospheric practical lighting, shallow depth of field',
+    positiveShotTokens: 'film still aesthetic, anamorphic lens, shallow DOF, film grain, teal-orange color grade',
     keywords: ['cinematic', '电影感', 'film', 'cinematography'],
   },
   {
@@ -59,7 +64,6 @@ export const STYLE_PRESETS: StylePreset[] = [
     label: '动漫',
     positiveCharacterTokens: 'anime key visual, cel shading, vibrant color, official anime art style',
     positiveShotTokens: 'anime scene illustration, cel-shaded, vibrant color palette, anime key visual style',
-    negativePresetId: 'anime',
     keywords: ['anime', '动漫', '二次元', '漫画', 'manga', 'cartoon'],
   },
   {
@@ -67,7 +71,6 @@ export const STYLE_PRESETS: StylePreset[] = [
     label: '吉卜力',
     positiveCharacterTokens: 'Studio Ghibli style, watercolor texture, soft pastel colors, Hayao Miyazaki art style',
     positiveShotTokens: 'Studio Ghibli background art, watercolor texture, soft pastel, dreamy atmosphere',
-    negativePresetId: 'generic',
     keywords: ['ghibli', '吉卜力', '宫崎骏', 'studio ghibli'],
   },
   {
@@ -75,7 +78,6 @@ export const STYLE_PRESETS: StylePreset[] = [
     label: '美式漫画',
     positiveCharacterTokens: 'American comic book art, ink linework, halftone shading, superhero comic aesthetic',
     positiveShotTokens: 'comic book panel, bold ink lines, halftone shading, dynamic comic composition',
-    negativePresetId: 'generic',
     keywords: ['comic', '漫画', '美式', 'superhero', 'comic book'],
   },
   {
@@ -83,7 +85,6 @@ export const STYLE_PRESETS: StylePreset[] = [
     label: '水彩',
     positiveCharacterTokens: 'watercolor illustration, soft washes, paper texture, hand-painted watercolor style',
     positiveShotTokens: 'watercolor painting style, soft washes, paper texture, hand-painted illustration',
-    negativePresetId: 'ink',
     keywords: ['watercolor', '水彩', 'hand-painted', 'painting'],
   },
 ]
