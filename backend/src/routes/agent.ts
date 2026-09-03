@@ -7,6 +7,8 @@ import { createAgent, validAgentTypes } from '../agents/index.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { db, schema } from '../db/index.js'
+import { eq } from 'drizzle-orm'
 
 const app = new Hono()
 
@@ -194,7 +196,20 @@ app.post('/storyboard_breaker/planning', async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running', tip: '正在读取剧本和场景数据...' }) })
+      // Clear existing storyboards first to avoid appending to old data
+      const existingIds = db.select().from(schema.storyboards)
+        .where(eq(schema.storyboards.episodeId, episode_id)).all()
+        .map(sb => sb.id)
+      for (const id of existingIds) {
+        db.delete(schema.storyboardCharacters)
+          .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
+      }
+      db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episode_id)).run()
+      logTaskProgress('Agent', 'storyboard_breaker-planning', {
+        dramaId: drama_id, episodeId: episode_id, clearedCount: existingIds.length,
+      })
+
+      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running', tip: '已清空旧分镜，正在读取剧本和场景数据...' }) })
 
       const startTime = performance.now()
       // Heartbeat: emit progress every 8s while LLM is running
