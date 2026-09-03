@@ -161,9 +161,11 @@ export function useImageGeneration(deps: Deps) {
   }
 
   async function genCharImg(id: number) {
+    let genId: number | null = null
     try {
       if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
-      await characterAPI.generateImage(id, ctx.epId.value)
+      const resp = await characterAPI.generateImage(id, ctx.epId.value) as any
+      genId = resp?.image_generation_id || null
       toast.success('角色图片生成中')
       await refresh()
       await watchAsyncResult(() => {
@@ -172,6 +174,18 @@ export function useImageGeneration(deps: Deps) {
         if (done) {
           pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
           return true
+        }
+        // Check if generation failed
+        if (genId) {
+          try {
+            const gen = imageAPI.get(genId) as Promise<any>
+            gen.then((g: any) => {
+              if (g?.status === 'failed') {
+                pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+                toast.error(g?.error_msg || '图片生成失败')
+              }
+            }).catch(() => {})
+          } catch {}
         }
         return false
       })
@@ -196,13 +210,23 @@ export function useImageGeneration(deps: Deps) {
       return
     }
     pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
-    characterAPI.batchImages(ids, ctx.epId.value).then(async () => {
+    characterAPI.batchImages(ids, ctx.epId.value).then(async (resp: any) => {
       toast.success('角色图片批量生成中')
       await refresh()
+      const genIds = resp?.ids || []
       await watchAsyncResult(() => ids.every(id => {
         const char = ctx.chars.value.find(c => c.id === id)
         const done = !!(char?.image_url || char?.imageUrl)
         if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+        // Check if any generation failed
+        const idx = ids.indexOf(id)
+        if (idx >= 0 && genIds[idx]) {
+          imageAPI.get(genIds[idx]).then((g: any) => {
+            if (g?.status === 'failed') {
+              pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+            }
+          }).catch(() => {})
+        }
         return done
       }))
     }).catch((e: any) => {

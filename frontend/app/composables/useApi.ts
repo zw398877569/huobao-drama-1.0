@@ -74,6 +74,7 @@ export const sceneAPI = {
 }
 
 export const imageAPI = {
+  get: (id: number) => api.get(`/images/${id}`),
   generate: (d: any) => api.post('/images', d),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
