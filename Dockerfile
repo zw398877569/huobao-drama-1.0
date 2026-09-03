@@ -13,6 +13,13 @@
 ARG APT_MIRROR=mirrors.aliyun.com
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
+# ── Stage 1: Build frontend ──────────────────────────────────
+FROM node:20-slim AS frontend-build
+
+# Re-declare ARGs (Docker ARG scope is per-stage, unless pre-declared)
+ARG NPM_REGISTRY
+ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
+
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
