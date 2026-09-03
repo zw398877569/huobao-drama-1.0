@@ -194,13 +194,20 @@ app.post('/storyboard_breaker/planning', async (c) => {
 
   return streamSSE(c, async (stream) => {
     try {
-      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running' }) })
+      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running', tip: '正在读取剧本和场景数据...' }) })
 
       const startTime = performance.now()
+      // Heartbeat: emit progress every 8s while LLM is running
+      const heartbeat = setInterval(async () => {
+        await stream.writeSSE({ event: 'progress', data: JSON.stringify({ tip: 'AI 正在规划分镜结构，请稍候...' }) })
+      }, 8000)
+
       const result = await agent.generate(
         [{ role: 'user', content: '请规划所有镜头的 shot_plan，然后调 generate_shot_prompts 保存。' }],
         { maxSteps: 15 },
       )
+      clearInterval(heartbeat)
+
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
 
       const toolCalls = result.toolCalls || []
@@ -217,6 +224,7 @@ app.post('/storyboard_breaker/planning', async (c) => {
           totalDuration: planningResult?.result?.total_duration || 0,
           densityWarnings: planningResult?.result?.density_warnings || 0,
           safetyWarnings: planningResult?.result?.safety_warnings || 0,
+          elapsed,
         }),
       })
     } catch (err: any) {
@@ -252,13 +260,16 @@ app.post('/storyboard_breaker/execute', async (c) => {
         dramaId: drama_id,
         shot_plan,
         keepExisting: replace === false,
+        onProgress: ({ shot, total }) => {
+          void stream.writeSSE({ event: 'progress', data: JSON.stringify({ shot, total, tip: `正在生成镜头 #${shot}/${total}` }) })
+        },
       })
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
 
       logTaskSuccess('Agent', 'storyboard_breaker-execute', { elapsedSeconds: elapsed, ...result })
       await stream.writeSSE({
         event: 'done',
-        data: JSON.stringify({ phase: 'execute', status: 'done', ...result }),
+        data: JSON.stringify({ phase: 'execute', status: 'done', ...result, elapsed }),
       })
     } catch (err: any) {
       logTaskError('Agent', 'storyboard_breaker-execute', { error: err.message })

@@ -555,8 +555,9 @@ export async function runGenerateShotPrompts(params: {
     intent_function: string
   }>
   keepExisting?: boolean
+  onProgress?: (progress: { shot: number; total: number; status: string }) => void
 }): Promise<{ count: number; total_duration: number; density_warnings: number; safety_warnings: number }> {
-  const { episodeId, dramaId, shot_plan, keepExisting = true } = params
+  const { episodeId, dramaId, shot_plan, keepExisting = true, onProgress } = params
   const ts = now()
   logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
     episodeId,
@@ -685,6 +686,7 @@ export async function runGenerateShotPrompts(params: {
       createdAt: ts, updatedAt: ts,
     }).run()
     syncStoryboardCharacters(Number(res.lastInsertRowid), sp.character_ids || [])
+    onProgress?.({ shot: sp.shot_number, total: shot_plan.length, status: 'writing' })
     totalDuration += sp.duration || 10
     if (densityResult.suggestion) {
       densityWarnings.push({

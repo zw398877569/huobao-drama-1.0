@@ -59,16 +59,20 @@ export function useEpisodeAgents(deps: Deps) {
   async function doBreakdown() {
     const cfg = videoConfigs.value.find((c: any) => c.id === lockedVideoConfigId.value)
     const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
-    toast.info(`分镜规划中，视频模型：${label}...`)
+    let currentTip = ''
     try {
       await agentAPI.streamPlanning({ drama_id: dramaId, episode_id: ctx.epId.value }, (event, data) => {
-        if (event === 'status') console.log('[planning]', data)
-        if (event === 'done') {
-          console.log('[planning done]', data)
-          toast.success(`分镜完成：${data.shotCount || '?'} 个镜头`)
+        if (event === 'status') {
+          toast.info(`分镜规划中，视频模型：${label}...`)
+        } else if (event === 'progress') {
+          currentTip = data.tip || ''
+          toast.info(currentTip)
+        } else if (event === 'done') {
+          toast.success(`分镜完成：${data.shotCount || '?'} 个镜头，耗时 ${data.elapsed || '?'}s`)
           refresh()
+        } else if (event === 'error') {
+          toast.error(data.message || '分镜失败')
         }
-        if (event === 'error') toast.error(data.message || '分镜失败')
       })
     } catch (e: any) {
       toast.error(e.message || '分镜失败')
