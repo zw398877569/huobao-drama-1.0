@@ -1,3 +1,4 @@
+import { toast } from 'vue-sonner'
 import { characterAPI, sceneAPI, imageAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
