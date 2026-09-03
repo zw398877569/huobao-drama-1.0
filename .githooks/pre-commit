@@ -4,6 +4,7 @@
 #   2. Composable TDZ scan (if episodeNumber.vue changed) — prevent runtime ReferenceError
 #   3. Template orphan scan (if episodeNumber.vue changed) — prevent 'X is not a function'
 #   4. Dockerfile structure lint (if Dockerfile changed) — prevent orphan WORKDIR/COPY/RUN
+#   5. Trailing-quote scan (if any .ts/.vue changed) — prevent 'Unterminated string literal'
 #
 # Override (NOT recommended): git commit --no-verify
 
@@ -63,6 +64,17 @@ if git diff --cached --name-only | grep -q "^Dockerfile$"; then
   if [ -f "$REPO_ROOT/scripts/check-dockerfile-structure.js" ]; then
     echo "[dockerfile-lint] Checking Dockerfile structure..."
     if ! node "$REPO_ROOT/scripts/check-dockerfile-structure.js" 2>&1; then
+      FAILED=1
+    fi
+  fi
+fi
+
+# ── 5. Trailing-quote scan (if any .ts/.vue changed) ─
+CHANGED_CODE=$(git diff --cached --name-only | grep -E '\.(ts|vue|tsx|js)$' | grep -v '^scripts/' || true)
+if [ -n "$CHANGED_CODE" ]; then
+  if [ -f "$REPO_ROOT/scripts/scan-trailing-quote.js" ]; then
+    echo "[trailing-quote-check] Scanning for .join('...')' typos..."
+    if ! node "$REPO_ROOT/scripts/scan-trailing-quote.js" 2>&1; then
       FAILED=1
     fi
   fi
