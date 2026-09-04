@@ -151,22 +151,15 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-
-const STYLE_LABELS = {
-  realistic: '写实',
-  cinematic: '电影感',
-  anime: '动漫',
-  ghibli: '吉卜力',
-  comic: '美式漫画',
-  watercolor: '水彩',
-  ink: '水墨'
-}
-import { aiConfigAPI, dramaAPI, episodeAPI } from '~/composables/useApi'
+import { useStylePresets } from '~/composables/useStylePresets'
 
 const route = useRoute()
 const drama = ref(null)
 
-const styleLabel = computed(() => STYLE_LABELS[drama.value?.style] || drama.value?.style || '')
+// 风格 label 来自后端, 单一来源
+const { styleLabel, load: loadStylePresets } = useStylePresets()
+onMounted(() => { loadStylePresets() })
+
 const dramaId = Number(route.params.id)
 const addDialog = ref(false)
 const creatingEpisode = ref(false)

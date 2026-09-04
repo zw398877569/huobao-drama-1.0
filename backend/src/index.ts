@@ -21,6 +21,7 @@ import compose from './routes/compose.js'
 import merge from './routes/merge.js'
 import grid from './routes/grid.js'
 import skills from './routes/skills.js'
+import stylePresets from './routes/stylePresets.js'
 import webhooks from './routes/webhooks.js'
 import aiVoices from './routes/aiVoices.js'
 import aiVoicesAsync from './routes/aiVoicesAsync.js'
@@ -60,6 +61,7 @@ api.route('/compose', compose)
 api.route('/merge', merge)
 api.route('/grid', grid)
 api.route('/skills', skills)
+api.route('/style-presets', stylePresets)
 api.route('/ai-voices', aiVoices)
 api.route('/ai-voices-async', aiVoicesAsync)
 

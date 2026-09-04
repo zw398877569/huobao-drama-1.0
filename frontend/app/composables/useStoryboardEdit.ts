@@ -1,4 +1,5 @@
 import { storyboardAPI } from '~/composables/useApi'
+import { useStylePresets } from '~/composables/useStylePresets'
 import type { Ref } from 'vue'
 
 type Deps = {
@@ -36,14 +37,11 @@ export function useStoryboardEdit(deps: Deps) {
   const shotAngles = ['平视', '仰视', '俯视', '侧拍', '背拍', '斜侧', '主观视角', '过肩']
   const shotMovements = ['固定', '推镜', '拉镜', '摇镜', '移镜', '跟拍', '升降', '手持', '环绕']
 
-  // 反向提示词预设（与 backend/src/services/negative-prompt-presets.ts 保持一致）
-  const NEGATIVE_PROMPT_PRESETS = [
-    { id: 'anime', label: '动漫', prompt: 'realistic, photo, photograph, 3d render, live action, blurry, watermark, text, deformed, ugly, low quality, extra fingers, disfigured, bad anatomy' },
-    { id: 'realistic', label: '真人电影', prompt: 'cartoon, anime, drawing, illustration, 3d render, blurry, watermark, text, deformed face, extra fingers, ugly, low quality, bad anatomy' },
-    { id: 'ink', label: '水墨', prompt: 'neon, vibrant colors, modern, cartoon, anime, 3d, photo, blurry, watermark, text, low quality' },
-    { id: 'cinematic', label: '电影感', prompt: 'cartoon, anime, drawing, flat lighting, overexposed, underexposed, blurry, watermark, text, low quality, amateur' },
-    { id: 'generic', label: '通用', prompt: 'blurry, watermark, text, low quality, deformed, ugly, extra fingers, disfigured, bad anatomy, jpeg artifacts' },
-  ]
+  // 反向提示词预设 — 来自后端 /api/v1/style-presets, 不在前端硬编码
+  // 之前 5 条漏了 ghibli/comic/watercolor, 现在全 7 条都能用
+  const { negativePresets, load: loadStylePresets } = useStylePresets()
+  onMounted(() => { loadStylePresets() })
+  const NEGATIVE_PROMPT_PRESETS = computed(() => negativePresets.value)
 
   // ── Scene Intention (导演意图) helpers ────────────────────────────
   const dramaticFunctions = ['揭露', '对峙', '反转', '铺垫', '高潮', '余韵', '悬念', '情感爆发']
@@ -57,7 +55,7 @@ export function useStoryboardEdit(deps: Deps) {
   ]
 
   function applyStylePreset(sb: any, presetId: string) {
-    const preset = NEGATIVE_PROMPT_PRESETS.find(p => p.id === presetId)
+    const preset = NEGATIVE_PROMPT_PRESETS.value.find(p => p.id === presetId)
     if (!preset) return
     updateField(sb, 'negative_prompt', preset.prompt)
   }

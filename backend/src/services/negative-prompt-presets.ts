@@ -38,6 +38,8 @@ export interface NegativePromptPreset {
 export interface StylePreset {
   slug: string
   label: string
+  /** 前端 dropdown 的副标题 — 适合哪些类型的剧 (e.g. "都市写实 / 职场情感 / 家庭伦理") */
+  hint?: string
   positiveCharacterTokens: string
   positiveShotTokens: string
   keywords: string[]
@@ -47,6 +49,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     slug: 'realistic',
     label: '写实',
+    hint: '都市写实 / 职场情感 / 家庭伦理',
     positiveCharacterTokens: 'photorealistic character portrait, natural skin texture, candid photography, realistic proportions',
     positiveShotTokens: 'photorealistic cinematography, natural lighting, realistic film still',
     keywords: ['realistic', '写实', '真人', 'photorealistic'],
@@ -54,6 +57,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     slug: 'cinematic',
     label: '电影感',
+    hint: '电影感 / 悬疑 / 犯罪 / 谍战',
     // 不用 'cinematic' / 'dramatic lighting' —— 会被 applyQualityChecklist 剥成空串
     positiveCharacterTokens: 'film still character portrait, anamorphic look, atmospheric practical lighting, shallow depth of field',
     positiveShotTokens: 'film still aesthetic, anamorphic lens, shallow DOF, film grain, teal-orange color grade',
@@ -62,13 +66,23 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     slug: 'anime',
     label: '动漫',
+    hint: '日系热血 / 校园 / 奇幻 / 轻改',
     positiveCharacterTokens: 'anime key visual, cel shading, vibrant color, official anime art style',
     positiveShotTokens: 'anime scene illustration, cel-shaded, vibrant color palette, anime key visual style',
     keywords: ['anime', '动漫', '二次元', '漫画', 'manga', 'cartoon'],
   },
   {
+    slug: 'ink',
+    label: '水墨',
+    hint: '国风 / 仙侠 / 江湖 / 古装',
+    positiveCharacterTokens: 'traditional Chinese ink painting, brush stroke aesthetic, monochrome with selective color wash, xieyi freehand style',
+    positiveShotTokens: 'ink wash background, traditional Chinese painting composition, soft brush stroke texture, generous negative space',
+    keywords: ['ink', '水墨', '国画', '写意', 'xieyi', 'chinese painting'],
+  },
+  {
     slug: 'ghibli',
     label: '吉卜力',
+    hint: '吉卜力 / 治愈 / 童话 / 自然',
     positiveCharacterTokens: 'Studio Ghibli style, watercolor texture, soft pastel colors, Hayao Miyazaki art style',
     positiveShotTokens: 'Studio Ghibli background art, watercolor texture, soft pastel, dreamy atmosphere',
     keywords: ['ghibli', '吉卜力', '宫崎骏', 'studio ghibli'],
@@ -76,6 +90,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     slug: 'comic',
     label: '美式漫画',
+    hint: '欧美图像小说 / 超级英雄 / 暗黑',
     positiveCharacterTokens: 'American comic book art, ink linework, halftone shading, superhero comic aesthetic',
     positiveShotTokens: 'comic book panel, bold ink lines, halftone shading, dynamic comic composition',
     keywords: ['comic', '漫画', '美式', 'superhero', 'comic book'],
@@ -83,6 +98,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     slug: 'watercolor',
     label: '水彩',
+    hint: '水彩插画 / 文艺 / 民国 / 江南',
     positiveCharacterTokens: 'watercolor illustration, soft washes, paper texture, hand-painted watercolor style',
     positiveShotTokens: 'watercolor painting style, soft washes, paper texture, hand-painted illustration',
     keywords: ['watercolor', '水彩', 'hand-painted', 'painting'],
@@ -117,7 +133,7 @@ export const NEGATIVE_PROMPT_PRESETS: NegativePromptPreset[] = [
   },
   {
     id: 'realistic',
-    label: '真人电影',
+    label: '写实',
     keywords: ['realistic', '真人', '电影', 'cinematic', 'live action', '写实'],
     prompt:
       'cartoon, anime, drawing, illustration, 3d render, blurry, watermark, text, deformed face, extra fingers, ugly, low quality, bad anatomy',

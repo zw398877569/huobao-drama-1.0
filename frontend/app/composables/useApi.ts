@@ -191,3 +191,8 @@ export const voicesAPI = {
   list: (provider?: string) => api.get(`/ai-voices${provider ? `?provider=${provider}` : ''}`),
   sync: () => api.post('/ai-voices/sync', {}),
 }
+
+export const stylePresetAPI = {
+  // 返回 { stylePresets: [...], negativePresets: [...] } — 后端路由 /api/v1/style-presets
+  list: () => api.get('/style-presets'),
+}
