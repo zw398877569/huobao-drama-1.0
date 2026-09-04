@@ -268,12 +268,7 @@ export function useEpisodePipeline(deps: Deps) {
     ]
   })
 
-  // Helper used by computed above — defined last to avoid TDZ
-  function isNarratorCharacter(char: any) {
-    const text = `${char?.name || ''} ${char?.role || ''}`.toLowerCase()
-    return text.includes('旁白') || text.includes('narrator') || text.includes('画外音')
-  }
-
+  // isNarratorCharacter 已抽到 utils/character.ts (Nuxt 3 auto-import)
   const visualChars = computed(() => ctx.chars.value.filter(c => !isNarratorCharacter(c)))
 
   return {

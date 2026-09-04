@@ -257,14 +257,9 @@ export function useImageGeneration(deps: Deps) {
   }
 
   function batchCharImages() {
-    // 旁白判定内联 (与 useEpisodePipeline.isNarratorCharacter 同源;
-    // 抽到 utils 的事等后续 #4 一起做,本 PR 保持改动聚焦)
+    // isNarratorCharacter 抽到 utils/character.ts (Nuxt 3 auto-import)
     const ids = ctx.chars.value
-      .filter(c => {
-        const t = `${c?.name || ''} ${c?.role || ''}`.toLowerCase()
-        const isNarrator = t.includes('旁白') || t.includes('narrator') || t.includes('画外音')
-        return !isNarrator && !(c.image_url || c.imageUrl)
-      })
+      .filter(c => !isNarratorCharacter(c) && !(c.image_url || c.imageUrl))
       .map(c => c.id)
     if (!ids.length) {
       toast.info('所有角色图片已生成')
