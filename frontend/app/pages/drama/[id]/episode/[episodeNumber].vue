@@ -1803,6 +1803,7 @@ const {
   getStoryboardCharacterNames,
   getSceneName,
   watchAsyncResult,
+  sleep,
   videoConfigLabel: lockedVideoConfigLabel.value,
 })
 

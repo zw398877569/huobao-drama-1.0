@@ -17,11 +17,12 @@ type Deps = {
   getStoryboardCharacterNames: (s: any) => string[],
   getSceneName: (s: any) => string,
   watchAsyncResult: (check: () => boolean, attempts?: number, delay?: number) => Promise<void>,
+  sleep: (ms: number) => Promise<void>,
   videoConfigLabel?: string,
 }
 
 export function useImageGeneration(deps: Deps) {
-  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, videoConfigLabel } = deps
+  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel } = deps
 
   const pendingCharImageIds = ref<number[]>([])
   const pendingSceneImageIds = ref<number[]>([])
@@ -160,6 +161,71 @@ export function useImageGeneration(deps: Deps) {
     return sections.filter(Boolean).join('；')
   }
 
+  // ── 轮询 helper ─────────────────────────────────────────────
+  // 早期实现把 imageAPI.get(genId) 写在 watchAsyncResult 的 check() 里,
+  // 每个 tick (2s) 都发一次 GET — 单个角色 4 分钟会发 ~60 次多余请求。
+  // 改成显式 for + sleep(8s) + 串行查: 单角色最多 30 次 × 8s = 4 分钟。
+  // 批量场景: 每个 tick 一次 Promise.all(genIds) 而不是 N 次串行,所有角色
+  // 共用 30 次 tick 周期,而不是 N×30 次。
+  async function pollImageGeneration(genId: number, charId: number) {
+    for (let i = 0; i < 30; i++) {
+      await sleep(8000)
+      try {
+        const res = await imageAPI.get(genId)
+        // 状态字段: 后端 DB 写 'completed',某些 adapter 早期写过 'succeeded'
+        if (res?.status === 'completed' || res?.status === 'succeeded') {
+          await refresh()
+          pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+          return
+        }
+        if (res?.status === 'failed') {
+          pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+          toast.error(res?.error_msg || res?.errorMsg || '图片生成失败')
+          return
+        }
+      } catch {}
+    }
+    // 超时
+    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+    toast.error('图片生成超时')
+  }
+
+  // 批量轮询: 每个 tick 一次 Promise.all,所有 genId 共享一个 8s 周期
+  async function pollBatchImageGeneration(genIds: (number | null)[], charIds: number[]) {
+    for (let i = 0; i < 30; i++) {
+      await sleep(8000)
+      try {
+        const results = await Promise.all(
+          genIds.map(gid => gid ? imageAPI.get(gid).catch(() => null) : Promise.resolve(null))
+        )
+        let allDone = true
+        let anyFailed = false
+        for (let j = 0; j < results.length; j++) {
+          const res = results[j]
+          const charId = charIds[j]
+          if (res?.status === 'completed' || res?.status === 'succeeded') {
+            pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+          } else if (res?.status === 'failed') {
+            pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+            anyFailed = true
+          } else {
+            allDone = false
+          }
+        }
+        if (anyFailed) toast.error('部分图片生成失败')
+        if (allDone) {
+          await refresh()
+          return
+        }
+        // 部分还在跑 — refresh 让 UI 显示已完成的角色
+        await refresh()
+      } catch {}
+    }
+    // 超时: 清理所有未完成的
+    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !charIds.includes(item))
+    toast.error('部分图片生成超时')
+  }
+
   async function genCharImg(id: number) {
     let genId: number | null = null
     try {
@@ -168,27 +234,22 @@ export function useImageGeneration(deps: Deps) {
       genId = resp?.image_generation_id || null
       toast.success('角色图片生成中')
       await refresh()
-      await watchAsyncResult(() => {
-        const char = ctx.chars.value.find(c => c.id === id)
-        const done = !!(char?.image_url || char?.imageUrl)
-        if (done) {
-          pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-          return true
-        }
-        // Check if generation failed
-        if (genId) {
-          try {
-            const gen = imageAPI.get(genId) as Promise<any>
-            gen.then((g: any) => {
-              if (g?.status === 'failed') {
-                pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-                toast.error(g?.error_msg || '图片生成失败')
-              }
-            }).catch(() => {})
-          } catch {}
-        }
-        return false
-      })
+      // 早期实现: watchAsyncResult 内每 2s 调 imageAPI.get(genId) — 60 次多余请求
+      // 新实现: 显式 for + sleep(8s) + 单次 imageAPI.get — 最多 30 次
+      if (genId) {
+        await pollImageGeneration(genId, id)
+      } else {
+        // 拿不到 genId(极端情况) — 退回 watchAsyncResult 模式
+        await watchAsyncResult(() => {
+          const char = ctx.chars.value.find(c => c.id === id)
+          const done = !!(char?.image_url || char?.imageUrl)
+          if (done) {
+            pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+            return true
+          }
+          return false
+        })
+      }
     } catch (e: any) {
       pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       toast.error(e.message)
@@ -196,15 +257,15 @@ export function useImageGeneration(deps: Deps) {
   }
 
   function batchCharImages() {
-    // visualChars (排除旁白) 由页面提供:需要 chars + isNarratorCharacter
-    // 这里只读 ctx.chars,过滤交给调用方 OR 重新在此过滤(用相同规则)
-    // 为保持行为一致,直接在调用方过滤
-    const allChars = ctx.chars.value
-    const narrator = (c: any) => {
-      const text = `${c?.name || ''} ${c?.role || ''}`.toLowerCase()
-      return text.includes('旁白') || text.includes('narrator') || text.includes('画外音')
-    }
-    const ids = allChars.filter(c => !narrator(c) && !(c.image_url || c.imageUrl)).map(c => c.id)
+    // 旁白判定内联 (与 useEpisodePipeline.isNarratorCharacter 同源;
+    // 抽到 utils 的事等后续 #4 一起做,本 PR 保持改动聚焦)
+    const ids = ctx.chars.value
+      .filter(c => {
+        const t = `${c?.name || ''} ${c?.role || ''}`.toLowerCase()
+        const isNarrator = t.includes('旁白') || t.includes('narrator') || t.includes('画外音')
+        return !isNarrator && !(c.image_url || c.imageUrl)
+      })
+      .map(c => c.id)
     if (!ids.length) {
       toast.info('所有角色图片已生成')
       return
@@ -213,22 +274,21 @@ export function useImageGeneration(deps: Deps) {
     characterAPI.batchImages(ids, ctx.epId.value).then(async (resp: any) => {
       toast.success('角色图片批量生成中')
       await refresh()
-      const genIds = resp?.ids || []
-      await watchAsyncResult(() => ids.every(id => {
-        const char = ctx.chars.value.find(c => c.id === id)
-        const done = !!(char?.image_url || char?.imageUrl)
-        if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-        // Check if any generation failed
-        const idx = ids.indexOf(id)
-        if (idx >= 0 && genIds[idx]) {
-          imageAPI.get(genIds[idx]).then((g: any) => {
-            if (g?.status === 'failed') {
-              pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-            }
-          }).catch(() => {})
-        }
-        return done
-      }))
+      const genIds: (number | null)[] = resp?.ids || []
+      // 早期实现: watchAsyncResult 内每 2s 给每个 genId 各发一次 imageAPI.get
+      //          — 5 角色 × 60 tick = 300 次请求
+      // 新实现: 共享一个 8s 周期,Promise.all(genIds) 一次拿全状态
+      if (genIds.some(Boolean)) {
+        await pollBatchImageGeneration(genIds, ids)
+      } else {
+        // 极端情况: 拿不到任何 genId,退回 watchAsyncResult
+        await watchAsyncResult(() => ids.every(id => {
+          const char = ctx.chars.value.find(c => c.id === id)
+          const done = !!(char?.image_url || char?.imageUrl)
+          if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
+          return done
+        }))
+      }
     }).catch((e: any) => {
       pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !ids.includes(item))
       toast.error(e.message)
