@@ -275,14 +275,17 @@ async function processImageGeneration(id: number, config: AIConfig) {
 
 // 统一失败回写：当 image_generation 标记 failed 时，同步回写关联主表(status=failed)，
 // 让前端 watchAsyncResult 能正确识别终态并停止轮询。
+// 注意：scenes 有 status 但无 errorMsg，characters 两列都没有，storyboards 有 status 无 errorMsg。
 function markRelatedTablesFailed(record: any, errorMsg: string) {
   const ts = now()
-  const failSet = { status: 'failed', errorMsg, updatedAt: ts }
   if (record?.sceneId) {
-    db.update(schema.scenes).set(failSet).where(eq(schema.scenes.id, record.sceneId)).run()
+    // scenes 有 status，无 errorMsg
+    db.update(schema.scenes).set({ status: 'failed', updatedAt: ts })
+      .where(eq(schema.scenes.id, record.sceneId)).run()
     logTaskProgress('ImageTask', 'failed-backfill-scene', { sceneId: record.sceneId })
   }
   if (record?.storyboardId) {
+    // storyboards 有 status，无 errorMsg
     const sbUpdate: Record<string, any> = { status: 'failed', updatedAt: ts }
     if (record.frameType === 'first_frame') sbUpdate.firstFrameImage = null
     else if (record.frameType === 'last_frame') sbUpdate.lastFrameImage = null
@@ -290,9 +293,10 @@ function markRelatedTablesFailed(record: any, errorMsg: string) {
     db.update(schema.storyboards).set(sbUpdate).where(eq(schema.storyboards.id, record.storyboardId)).run()
     logTaskProgress('ImageTask', 'failed-backfill-storyboard', { storyboardId: record.storyboardId })
   }
+  // characters 表没有 status / errorMsg 列，跳过。
+  // 角色图片失败时前端靠 imageAPI.get(genId) 的 pollImageGeneration 检测，不走 watchAsyncResult。
   if (record?.characterId) {
-    db.update(schema.characters).set(failSet).where(eq(schema.characters.id, record.characterId)).run()
-    logTaskProgress('ImageTask', 'failed-backfill-character', { characterId: record.characterId })
+    logTaskProgress('ImageTask', 'skip-backfill-character', { characterId: record.characterId, reason: 'characters table has no status/errorMsg columns' })
   }
 }
 
