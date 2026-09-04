@@ -8,7 +8,7 @@
  */
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { getTextConfig } from './ai.js'
+import { getTextConfig, getTextChatCompletionsUrl } from './ai.js'
 import { readImageAsCompressedDataUrl } from '../utils/storage.js'
 import { now } from '../utils/response.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -163,7 +163,7 @@ export async function evaluateStoryboard(storyboardId: number): Promise<EvalScor
   }
 
   const config = await getTextConfig()
-  const baseUrl = `${config.baseUrl}/v1/chat/completions`
+  const baseUrl = getTextChatCompletionsUrl(config)
 
   const resp = await fetch(baseUrl, {
     method: 'POST',

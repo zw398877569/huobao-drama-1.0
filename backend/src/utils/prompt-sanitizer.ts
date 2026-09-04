@@ -13,7 +13,7 @@
  *
  * 整个函数永不抛出,任何异常都会被吞掉并降级到下一档,确保生图流程不被打断。
  */
-import { getActiveConfig } from '../services/ai.js'
+import { getActiveConfig, getTextChatCompletionsUrl } from '../services/ai.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { logTaskError, logTaskProgress, logTaskWarn } from './task-logger.js'
 import { DEFAULT_IMAGE_SAFETY_SUFFIX } from '../services/image-generation.js'
@@ -260,14 +260,6 @@ function containsResidualPolicyRisk(text) {
   return /(?:杀气|血色|尸体|鲜血|搏杀|拼杀|厮杀|燃烧|燃起|残阳如血|残阳如丹|血色夕阳|杀机|邪气|萧杀|肃杀|比武|过招|剑身|剑刃|刀锋|长剑|短剑|刀光|剑光|兵器|武功|高手|对决|致命一击|残忍.{0,2}对待|凄厉|哀嚎|死亡.{0,2}威胁|白骨|死寂|残月|武林|匕首|长枪|大刀|弯刀|暗器|飞镖|枪口|子弹|刀刃|斧钺|长矛|战斧|火海|爆炸|炸弹|手雷|导弹|炮火|炮击|毁灭|屠戮|屠杀|剿灭|吞噬|绞杀|刺杀|暗杀|狙杀|血雾|血雨|血潮|血浪|血花|喷涌|涌出|迸溅|流淌|滴落|渗出|皮开肉绽|骨断筋折|心脏破裂|大动脉|万箭齐发|箭雨|漫天箭矢|血洗|屠城|灭门|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|化作飞灰|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|滚滚黑烟|灼热|炽热|高温|滚滚热浪|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|灼热|炽热|高温|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|灼热|炽热|高温|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋)/.test(text)
 }
 
-function getTextProviderBaseUrlPath(provider) {
-  const p = (provider || '').toLowerCase()
-  if (p === 'openai' || p === 'openrouter' || p === 'chatfire') return '/v1'
-  if (p === 'volcengine') return '/api/v3'
-  if (p === 'ali') return '/api/v1'
-  return ''
-}
-
 async function sanitizeImagePromptLLM(rawPrompt) {
   const config = getActiveConfig('text')
   if (!config) {
@@ -279,11 +271,7 @@ async function sanitizeImagePromptLLM(rawPrompt) {
     return null
   }
 
-  const url = joinProviderUrl(
-    config.baseUrl,
-    getTextProviderBaseUrlPath(config.provider),
-    '/chat/completions',
-  )
+  const url = getTextChatCompletionsUrl(config)
   logTaskProgress('PromptSanitizer', 'llm-rewrite-start', {
     provider: config.provider,
     model: config.model,

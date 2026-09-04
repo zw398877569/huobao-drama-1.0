@@ -15,22 +15,35 @@ export interface AIConfig {
   model: string
 }
 
+/**
+ * 不同 LLM provider 的 base path 前缀。
+ * 与 prompt-sanitizer.ts 旧版 getTextProviderBaseUrlPath 同源, 提到此处统一。
+ * (两个版本之前略有重复, 现在只有这一处定义)
+ *
+ * 注意: minimax 也在 /v1 端点上 (OpenAI 兼容), 跟 openai/openrouter/chatfire 同组
+ */
+function textProviderPath(provider: string): string {
+  const p = provider.toLowerCase()
+  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'minimax') return '/v1'
+  if (p === 'volcengine') return '/api/v3'
+  if (p === 'ali') return '/api/v1'
+  return ''
+}
+
+/**
+ * 返回带 provider 路径前缀的 base URL (无末尾 path 部分)
+ * — 用于 Vercel AI SDK 这类需要自己拼 path 的库 (agents/index.ts:864)
+ */
 export function getTextProviderBaseUrl(config: AIConfig) {
-  const provider = config.provider.toLowerCase()
+  return joinProviderUrl(config.baseUrl, textProviderPath(config.provider), '')
+}
 
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire') {
-    return joinProviderUrl(config.baseUrl, '/v1', '')
-  }
-
-  if (provider === 'volcengine') {
-    return joinProviderUrl(config.baseUrl, '/api/v3', '')
-  }
-
-  if (provider === 'ali') {
-    return joinProviderUrl(config.baseUrl, '/api/v1', '')
-  }
-
-  return config.baseUrl
+/**
+ * 返回完整的 chat completions URL — 多数 LLM provider 都用同一端点
+ * — 替代之前 5 处手工拼接 (4 种写法), 见 PR commit message
+ */
+export function getTextChatCompletionsUrl(config: AIConfig): string {
+  return joinProviderUrl(config.baseUrl, textProviderPath(config.provider), '/chat/completions')
 }
 
 export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
@@ -121,7 +134,7 @@ export async function translatePromptToEnglish(prompt: string): Promise<string> 
     return prompt
   }
 
-  const baseUrl = getTextProviderBaseUrl(config)
+  const url = getTextChatCompletionsUrl(config)
   const payload = {
     model: config.model || 'agnes-2.0-flash',
     messages: [
@@ -139,7 +152,7 @@ export async function translatePromptToEnglish(prompt: string): Promise<string> 
     max_tokens: 800,
   }
 
-  const resp = await fetch(`${baseUrl}chat/completions`, {
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

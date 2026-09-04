@@ -1,7 +1,7 @@
 import { db, schema } from '../db/index'
 import { eq, and, or } from 'drizzle-orm'
 import { logTaskProgress, logTaskSuccess } from '../utils/task-logger'
-import { getTextConfig } from '../services/ai'
+import { getTextConfig, getTextChatCompletionsUrl } from '../services/ai'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey, type IntentionResult } from './director-intent-templates'
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
@@ -40,7 +40,7 @@ export async function analyzeSceneIntentionInternal(
 ): Promise<IntentionResult> {
   try {
     const config = await getTextConfig();
-    const baseUrl = `${config.baseUrl}/v1/chat/completions`;
+    const baseUrl = getTextChatCompletionsUrl(config);
 
     // Enhanced prompt with template reference and structured output requirements
     const scenePrompt = `=== 场景信息 ===
