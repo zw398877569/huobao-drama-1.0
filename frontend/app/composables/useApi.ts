@@ -130,13 +130,14 @@ export const agentAPI = {
         let buffer = ''
         const read = async () => {
           try {
+            // event/data 提到 for 外, 让 SSE 末尾没换行的最后一条事件也能 flush
+            let event = '', data = ''
             while (true) {
               const { done, value } = await reader.read()
               if (done) break
               buffer += decoder.decode(value, { stream: true })
               const lines = buffer.split('\n')
               buffer = lines.pop() || ''
-              let event = '', data = ''
               for (const line of lines) {
                 if (line.startsWith('event:')) event = line.slice(6).trim()
                 else if (line.startsWith('data:')) data = line.slice(5).trim()
@@ -148,7 +149,7 @@ export const agentAPI = {
                 }
               }
             }
-            // flush remaining
+            // flush remaining (SSE 流末尾没空行终止的最后一条事件)
             if (event && data) { try { onEvent(event, JSON.parse(data)) } catch {} }
             resolve()
           } catch (e: any) {
@@ -156,9 +157,9 @@ export const agentAPI = {
           }
         }
         void read()
+        // expose abort for cancellation — 必须在 .then() 回调里才有 resp
+        ;(resp as any)._ctrl = ctrl
       }).catch(reject)
-      // expose abort for cancellation
-      ;(resp as any)._ctrl = ctrl
     }),
 }
 

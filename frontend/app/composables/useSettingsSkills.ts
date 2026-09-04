@@ -63,7 +63,7 @@ export function useSettingsSkills(agentDefs: AgentDef[]) {
   async function deleteSkill(id: string) {
     if (!confirm(`确定删除 Skill「${id}」？`)) return
     try {
-      await skillsAPI.delete(id)
+      await skillsAPI.del(id)
       if (editingSkill.value === id) editingSkill.value = null
       await loadAllSkills()
       toast.success('已删除')
