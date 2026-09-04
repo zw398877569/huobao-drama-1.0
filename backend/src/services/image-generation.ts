@@ -351,6 +351,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   }
 
   for (let i = 0; i < 80; i++) {
+    await new Promise(r => setTimeout(r, getPollIntervalMs(i + 1)))
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
       const failMsg = 'Timeout: Polling exceeded 10 minutes'
@@ -360,18 +361,6 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         .run()
       const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
       markRelatedTablesFailed(rows[0], failMsg)
-      return
-    }
-    await new Promise(r => setTimeout(r, getPollIntervalMs(i + 1)))
-    if (Date.now() - startedAt >= maxDurationMs) {
-      logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      const failMsg = 'Timeout: Polling exceeded 10 minutes'
-      db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
-      const rows2 = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
-      markRelatedTablesFailed(rows2[0], failMsg)
       return
     }
     try {
@@ -441,7 +430,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         return
       }
     } catch (err: any) {
-      if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
+      if (Date.now() - startedAt >= maxDurationMs) {
         logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: err.message })
         const failMsg = `Timeout: ${err.message}`
         db.update(schema.imageGenerations)
