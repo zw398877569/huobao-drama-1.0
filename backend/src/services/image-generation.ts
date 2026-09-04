@@ -263,10 +263,36 @@ async function processImageGeneration(id: number, config: AIConfig) {
     }
   } catch (err: any) {
     logTaskError('ImageTask', 'process', { id, provider: config.provider, error: err.message })
+    const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+    const record = rows[0]
     db.update(schema.imageGenerations)
       .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
       .where(eq(schema.imageGenerations.id, id))
       .run()
+    markRelatedTablesFailed(record, err.message)
+  }
+}
+
+// 统一失败回写：当 image_generation 标记 failed 时，同步回写关联主表(status=failed)，
+// 让前端 watchAsyncResult 能正确识别终态并停止轮询。
+function markRelatedTablesFailed(record: any, errorMsg: string) {
+  const ts = now()
+  const failSet = { status: 'failed', errorMsg, updatedAt: ts }
+  if (record?.sceneId) {
+    db.update(schema.scenes).set(failSet).where(eq(schema.scenes.id, record.sceneId)).run()
+    logTaskProgress('ImageTask', 'failed-backfill-scene', { sceneId: record.sceneId })
+  }
+  if (record?.storyboardId) {
+    const sbUpdate: Record<string, any> = { status: 'failed', updatedAt: ts }
+    if (record.frameType === 'first_frame') sbUpdate.firstFrameImage = null
+    else if (record.frameType === 'last_frame') sbUpdate.lastFrameImage = null
+    else sbUpdate.composedImage = null
+    db.update(schema.storyboards).set(sbUpdate).where(eq(schema.storyboards.id, record.storyboardId)).run()
+    logTaskProgress('ImageTask', 'failed-backfill-storyboard', { storyboardId: record.storyboardId })
+  }
+  if (record?.characterId) {
+    db.update(schema.characters).set(failSet).where(eq(schema.characters.id, record.characterId)).run()
+    logTaskProgress('ImageTask', 'failed-backfill-character', { characterId: record.characterId })
   }
 }
 
@@ -323,19 +349,25 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   for (let i = 0; i < 80; i++) {
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
+      const failMsg = 'Timeout: Polling exceeded 10 minutes'
       db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
+        .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
         .where(eq(schema.imageGenerations.id, id))
         .run()
+      const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+      markRelatedTablesFailed(rows[0], failMsg)
       return
     }
     await new Promise(r => setTimeout(r, getPollIntervalMs(i + 1)))
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
+      const failMsg = 'Timeout: Polling exceeded 10 minutes'
       db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
+        .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
         .where(eq(schema.imageGenerations.id, id))
         .run()
+      const rows2 = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+      markRelatedTablesFailed(rows2[0], failMsg)
       return
     }
     try {
@@ -395,21 +427,25 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
       if (pollResp.status === 'failed') {
         const errorMsg = pollResp.error || 'Generation failed'
         logTaskError('ImageTask', 'poll-failed', { id, taskId, error: errorMsg })
-        // 上游明确失败:直接标记 failed + return,避免被 catch 块当网络错误重试
-        // (否则会一直 poll-retry 到 10 分钟上限,浪费上游 API 配额)
+        // 上游明确失败:直接标记 failed + 回写主表,避免被 catch 块当网络错误重试
         db.update(schema.imageGenerations)
           .set({ status: 'failed', errorMsg, updatedAt: now() })
           .where(eq(schema.imageGenerations.id, id))
           .run()
+        const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+        markRelatedTablesFailed(rows[0], errorMsg)
         return
       }
     } catch (err: any) {
       if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
         logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: err.message })
+        const failMsg = `Timeout: ${err.message}`
         db.update(schema.imageGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
+          .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
           .where(eq(schema.imageGenerations.id, id))
           .run()
+        const rows3 = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+        markRelatedTablesFailed(rows3[0], failMsg)
         return
       }
       logTaskWarn('ImageTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })

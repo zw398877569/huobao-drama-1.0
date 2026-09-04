@@ -73,8 +73,11 @@ export function useVideoGeneration(deps: Deps) {
     if (!generationId) {
       await watchAsyncResult(() => {
         const target = ctx.sbs.value.find(s => s.id === storyboardId)
-        const done = !!(target?.video_url || target?.videoUrl)
+        // 成功: 有视频; 失败: status=failed — 两种终态都退出轮询
+        const isFailed = target?.status === 'failed'
+        const done = !!(target?.video_url || target?.videoUrl) || isFailed
         if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
         return done
       }, 60, 4000)
       return
@@ -119,8 +122,11 @@ export function useVideoGeneration(deps: Deps) {
       pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
       void watchAsyncResult(() => pendingIds.every(id => {
         const target = ctx.sbs.value.find(s => s.id === id)
-        const done = !!(target?.video_url || target?.videoUrl)
+        // 成功: 有视频; 失败: status=failed — 两种终态都算完成
+        const isFailed = target?.status === 'failed'
+        const done = !!(target?.video_url || target?.videoUrl) || isFailed
         if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
+        if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
         return done
       }), 80, 4000)
     }

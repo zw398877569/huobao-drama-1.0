@@ -237,11 +237,25 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     }
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
+    const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
     db.update(schema.videoGenerations)
       .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
+    markRelatedTablesFailed(rows[0], err.message)
   }
+}
+
+// 统一失败回写：当 video_generation 标记 failed 时，同步回写关联 storyboard 表，
+// 让前端 watchAsyncResult 能正确识别终态并停止轮询。
+function markRelatedTablesFailed(vRecord: any, errorMsg: string) {
+  if (!vRecord?.storyboardId) return
+  const ts = now()
+  db.update(schema.storyboards)
+    .set({ status: 'failed', updatedAt: ts })
+    .where(eq(schema.storyboards.id, vRecord.storyboardId))
+    .run()
+  logTaskProgress('VideoTask', 'failed-backfill-storyboard', { storyboardId: vRecord.storyboardId })
 }
 
 async function normalizeVideoReferenceUrl(vRecordId: number, value: string | null | undefined): Promise<string | null> {
@@ -431,10 +445,13 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         return
       }
       if (pollResp.status === 'failed') {
-        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Video generation failed' })
+        const errorMsg = pollResp.error || 'Video generation failed'
+        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errorMsg })
         db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: pollResp.error || 'Video generation failed', updatedAt: now() })
+          .set({ status: 'failed', errorMsg, updatedAt: now() })
           .where(eq(schema.videoGenerations.id, id)).run()
+        const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+        markRelatedTablesFailed(rows[0], errorMsg)
         return
       }
       // 仍 processing,继续下一轮
@@ -443,18 +460,24 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
       logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
       if (consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
         logTaskError('VideoTask', 'poll-giveup-exception', { id, taskId, consecutiveFails, error: err.message })
+        const failMsg = `Poll gave up after ${consecutiveFails} consecutive exceptions: ${err.message}`
         db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: `Poll gave up after ${consecutiveFails} consecutive exceptions: ${err.message}`, updatedAt: now() })
+          .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
           .where(eq(schema.videoGenerations.id, id)).run()
+        const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+        markRelatedTablesFailed(rows[0], failMsg)
         return
       }
     }
   }
   // 用尽 MAX_POLLS
   logTaskError('VideoTask', 'poll-timeout', { id, taskId, maxPolls: MAX_POLLS })
+  const failMsg = `Poll timeout after ${MAX_POLLS} attempts`
   db.update(schema.videoGenerations)
-    .set({ status: 'failed', errorMsg: `Poll timeout after ${MAX_POLLS} attempts`, updatedAt: now() })
+    .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
     .where(eq(schema.videoGenerations.id, id)).run()
+  const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+  markRelatedTablesFailed(rows[0], failMsg)
 }
 
 async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {

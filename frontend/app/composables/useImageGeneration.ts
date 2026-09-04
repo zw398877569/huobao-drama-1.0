@@ -307,9 +307,12 @@ export function useImageGeneration(deps: Deps) {
       await refresh()
       await watchAsyncResult(() => {
         const scene = ctx.scenes.value.find(s => s.id === id)
+        // 成功: 有图片; 失败: 明确标记 failed — 两种终态都要退出轮询
+        const isFailed = scene?.status === 'failed'
         const done = !!(scene?.image_url || scene?.imageUrl)
-        if (done) {
+        if (done || isFailed) {
           pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
+          if (isFailed) toast.error(scene?.error_msg || scene?.errorMsg || '场景图片生成失败')
           return true
         }
         return false
@@ -331,7 +334,9 @@ export function useImageGeneration(deps: Deps) {
     toast.success('场景图片批量生成中')
     void watchAsyncResult(() => ids.every(id => {
       const scene = ctx.scenes.value.find(s => s.id === id)
-      const done = !!(scene?.image_url || scene?.imageUrl)
+      // 成功: 有图片; 失败: 明确标记 failed — 两种终态都算完成
+      const isFailed = scene?.status === 'failed'
+      const done = !!(scene?.image_url || scene?.imageUrl) || isFailed
       if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
       return done
     }), 36)
@@ -355,8 +360,13 @@ export function useImageGeneration(deps: Deps) {
       await refresh()
       await watchAsyncResult(() => {
         const target = ctx.sbs.value.find(s => s.id === sb.id)
-        const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
-        if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
+        // 成功: 有首/尾帧; 失败: storyboard.status=failed — 两种终态都退出轮询
+        const isFailed = target?.status === 'failed'
+        const done = (frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)) || isFailed
+        if (done) {
+          pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
+          if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '首尾帧生成失败')
+        }
         return done
       })
     } catch (e: any) {
