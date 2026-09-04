@@ -1789,6 +1789,14 @@ const {
   refresh,
 })
 
+// Drama 风格正向 token — 来自 useStylePresets 解析, 注入 buildShotImagePrompt
+// 跟后端 9 宫格 (runGenerateShotPrompts) 同步, 保证同部剧 9 宫格 vs 首尾帧风格一致
+const { stylePresets: stylesForShot, load: loadStylesForShot } = useStylePresets()
+const positiveShotTokens = computed(() =>
+  stylesForShot.value.find(s => s.slug === drama.value?.style)?.positiveShotTokens || ''
+)
+onMounted(() => { loadStylesForShot() })
+
 // Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
 const {
   pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
@@ -1805,6 +1813,7 @@ const {
   watchAsyncResult,
   sleep,
   videoConfigLabel: lockedVideoConfigLabel.value,
+  positiveShotTokens,
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)

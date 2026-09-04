@@ -19,10 +19,12 @@ type Deps = {
   watchAsyncResult: (check: () => boolean, attempts?: number, delay?: number) => Promise<void>,
   sleep: (ms: number) => Promise<void>,
   videoConfigLabel?: string,
+  /** Drama 风格的正向 token (来自 useStylePresets 解析 drama.style) — 注入 buildShotImagePrompt */
+  positiveShotTokens?: Ref<string>,
 }
 
 export function useImageGeneration(deps: Deps) {
-  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel } = deps
+  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel, positiveShotTokens } = deps
 
   const pendingCharImageIds = ref<number[]>([])
   const pendingSceneImageIds = ref<number[]>([])
@@ -156,6 +158,13 @@ export function useImageGeneration(deps: Deps) {
         '构图需稳定单一主体 + 半身/全身景别 + 自然光影 + 半写实电影感；' +
         '避免极端运镜、动作模糊、文字水印、多余人物'
       )
+    }
+
+    // Drama 风格正向 token (来自 useStylePresets 解析 drama.style)
+    // — 跟后端 9 宫格 (runGenerateShotPrompts) 注入的 positiveShotTokens 同步,
+    //   保证同一部剧的 9 宫格预览和首尾帧视觉一致
+    if (positiveShotTokens?.value) {
+      sections.push('# 风格: ' + positiveShotTokens.value)
     }
 
     return sections.filter(Boolean).join('；')
