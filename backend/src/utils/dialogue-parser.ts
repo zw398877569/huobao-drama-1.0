@@ -79,3 +79,68 @@ export function parseDialogueSegments(dialogue?: string | null): ParsedDialogue 
   }
   return { segments, ignorable: false }
 }
+
+/**
+ * 自动补回 dialogue 缺失的 speaker 前缀。
+ *
+ * commit 08c3dba (两阶段 storyboard_breaker 重构) 引入的回归:
+ *   planner 的 instructions 没要求 dialogue 必须带 "角色:台词" 前缀,
+ *   LLM 经常输出无前缀纯文本 → 下游 parseDialogueSegments 当旁白处理。
+ *
+ * 修复策略:episode.script_content (AI 改写那层) 有完整 "角色:(状态)台词" 格式,
+ *   是 dialogue speaker 信息的源头。用 script_content 反查,自动给没前缀的
+ *   dialogue 行补回前缀。
+ *
+ * 规则:
+ *   - 已有前缀的行 → 不动
+ *   - 无前缀的行 → 在 script_content 找匹配行,提取 speaker 补回
+ *   - 找不到匹配(行长度 < 4 或纯文本无对应) → 保持原样,下游 fallback 走 narrator
+ */
+export function autoFillSpeakerFromScript(dialogue: string | null | undefined, scriptContent: string | null | undefined): string {
+  if (!dialogue || !scriptContent) return dialogue || ''
+
+  // 抽状态括号, 只比较纯文本
+  const normalizeText = (s: string) => s.replace(/[（(].+?[)）]/g, '').trim()
+  const hasSpeaker = (line: string) => /^([^:：]{1,40}?)\s*[：:]/.test(line.trim())
+
+  // 把 script_content 解析成 [{ speaker, text }] 索引
+  const scriptLines = scriptContent
+    .replace(/\\n/g, '\n')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean)
+    .map(l => {
+      const m = l.match(/^([^:：]{1,40}?)\s*[：:]\s*(.+)$/)
+      if (!m) return null
+      return { speaker: m[1].trim(), text: normalizeText(m[2]) }
+    })
+    .filter((x): x is { speaker: string; text: string } => !!x)
+
+  if (!scriptLines.length) return dialogue
+
+  // 逐行处理 dialogue (支持换行 / \\n / ; 三种分隔)
+  const dialogueLines = dialogue
+    .replace(/\\n/g, '\n')
+    .split(/\r?\n|;/)
+    .map(l => l.trim())
+    .filter(Boolean)
+
+  const fixed = dialogueLines.map(line => {
+    if (hasSpeaker(line)) return line  // 已有前缀 → 不动
+    const lineText = normalizeText(line)
+    if (lineText.length < 4) return line  // 太短(嗯/好)→ 不补,避免误匹配
+
+    // 找脚本里包含该文本(反过来也算)的行
+    const matched = scriptLines.find(sl => {
+      if (sl.text.includes(lineText)) return true  // 精确摘取
+      if (lineText.includes(sl.text) && sl.text.length >= lineText.length * 0.5) return true  // 含原文 + 比例合理
+      return false
+    })
+
+    if (matched) return `${matched.speaker}: ${line}`
+    return line  // 找不到 → 保持原样,下游 fallback 走 narrator
+  })
+
+  return fixed.join('\n')
+}
+

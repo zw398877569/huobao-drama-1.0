@@ -14,6 +14,7 @@ import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
 import { validateEventDensity } from '../../services/prompt-validation'
 import { checkPromptSafety } from '../../services/prompt-safety'
+import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
@@ -360,6 +361,10 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
     execute: async ({ storyboard_id, ...fields }) => {
       const [storyboard] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboard_id)).all()
       if (!storyboard) return { error: `Storyboard ${storyboard_id} not found` }
+      // 单镜头增量时同样兜底: dialogue 缺前缀用 script_content 补回
+      const [epRow] = db.select({ scriptContent: schema.episodes.scriptContent })
+        .from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+      const scriptContent = epRow?.scriptContent || ''
       logTaskProgress('StoryboardTool', 'update-begin', {
         episodeId,
         storyboardId: storyboard_id,
@@ -410,7 +415,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('bgm_prompt' in fields) updates.bgmPrompt = fields.bgm_prompt
       if ('sound_effect' in fields) updates.soundEffect = fields.sound_effect
       if ('description' in fields) updates.description = fields.description
-      if ('dialogue' in fields) updates.dialogue = fields.dialogue
+      if ('dialogue' in fields) updates.dialogue = autoFillSpeakerFromScript(fields.dialogue, scriptContent)
       if ('scene_id' in fields) updates.sceneId = fields.scene_id
       if ('duration' in fields) updates.duration = fields.duration
       db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, storyboard_id)).run()
@@ -572,6 +577,11 @@ export async function runGenerateShotPrompts(params: {
     .from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
   const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
   const stylePreset = getStylePreset(drama?.style)
+  // 取 episode.script_content 当 dialogue speaker 反查源
+  // commit 08c3dba 引入回归: planner 不带 speaker 前缀, 用这里兜底
+  const [episodeRow] = db.select({ scriptContent: schema.episodes.scriptContent })
+    .from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  const scriptContent = episodeRow?.scriptContent || ''
 
   const chars = db.select().from(schema.characters)
     .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
@@ -669,7 +679,7 @@ export async function runGenerateShotPrompts(params: {
       location: sp.location,
       time: sp.time,
       action: sp.action,
-      dialogue: sp.dialogue,
+      dialogue: autoFillSpeakerFromScript(sp.dialogue, scriptContent),
       description: sp.description,
       result: sp.result,
       atmosphere: sp.atmosphere,
