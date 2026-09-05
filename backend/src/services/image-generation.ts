@@ -342,6 +342,9 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   const adapter = getImageAdapter(config.provider)
   const startedAt = Date.now()
   const maxDurationMs = 600_000
+  // 预查询记录一次,3 处失败分支共用。markRelatedTablesFailed 只需 sceneId/storyboardId/characterId/frameType
+  // (这些字段 update 前后不变),所以查一次够了
+  const [imageRecord] = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
   // 指数退避轮询: 3s → 6s → 10s → 20s(封顶)。图片生成通常 5-30s 出图,
   // 起步快一点确认任务已被上游接受,后段拉长减轻 grsai/nano-banana 压力。
   const POLL_INTERVALS_MS = [3_000, 6_000, 10_000, 20_000]
@@ -359,8 +362,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
         .where(eq(schema.imageGenerations.id, id))
         .run()
-      const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
-      markRelatedTablesFailed(rows[0], failMsg)
+      markRelatedTablesFailed(imageRecord, failMsg)
       return
     }
     try {
@@ -425,8 +427,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
           .set({ status: 'failed', errorMsg, updatedAt: now() })
           .where(eq(schema.imageGenerations.id, id))
           .run()
-        const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
-        markRelatedTablesFailed(rows[0], errorMsg)
+        markRelatedTablesFailed(imageRecord, errorMsg)
         return
       }
     } catch (err: any) {
@@ -437,8 +438,7 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
           .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
           .where(eq(schema.imageGenerations.id, id))
           .run()
-        const rows3 = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
-        markRelatedTablesFailed(rows3[0], failMsg)
+        markRelatedTablesFailed(imageRecord, failMsg)
         return
       }
       logTaskWarn('ImageTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })

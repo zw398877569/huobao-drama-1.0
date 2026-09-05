@@ -332,14 +332,23 @@ export function useImageGeneration(deps: Deps) {
     pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
     ids.forEach(id => { sceneAPI.generateImage(id, ctx.epId.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
     toast.success('场景图片批量生成中')
-    void watchAsyncResult(() => ids.every(id => {
-      const scene = ctx.scenes.value.find(s => s.id === id)
-      // 成功: 有图片; 失败: 明确标记 failed — 两种终态都算完成
-      const isFailed = scene?.status === 'failed'
-      const done = !!(scene?.image_url || scene?.imageUrl) || isFailed
-      if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-      return done
-    }), 36)
+    // 轮询等到全部场景都到终态(image_url 有 OR status=failed),然后统计失败数 toast
+    void watchAsyncResult(() => {
+      const scenes = ids.map(id => ctx.scenes.value.find(s => s.id === id))
+      const allDone = scenes.every(s =>
+        !!(s?.image_url || s?.imageUrl) || s?.status === 'failed'
+      )
+      if (!allDone) return false
+      // 全部到终态 — 清理 pending + 提示
+      pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => !ids.includes(item))
+      const failedCount = scenes.filter(s => s?.status === 'failed').length
+      if (failedCount > 0) {
+        toast.error(`${failedCount} 个场景图片生成失败`)
+      } else {
+        toast.success('所有场景图片生成完成')
+      }
+      return true
+    }, 36)
   }
 
   async function genShotFrame(sb: any, frameType: string) {

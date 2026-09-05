@@ -237,25 +237,27 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     }
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
-    const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+    // processVideoGeneration 没有 storyboardId 入参，从 DB 查一次
+    const [vRecord] = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
     db.update(schema.videoGenerations)
       .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
-    markRelatedTablesFailed(rows[0], err.message)
+    markStoryboardFailed(vRecord?.storyboardId, err.message)
   }
 }
 
 // 统一失败回写：当 video_generation 标记 failed 时，同步回写关联 storyboard 表，
 // 让前端 watchAsyncResult 能正确识别终态并停止轮询。
-function markRelatedTablesFailed(vRecord: any, errorMsg: string) {
-  if (!vRecord?.storyboardId) return
+// video_generations 只关联 storyboard（无 scene/character 关联），所以直接传 storyboardId。
+function markStoryboardFailed(storyboardId: number | null | undefined, errorMsg: string) {
+  if (!storyboardId) return
   const ts = now()
   db.update(schema.storyboards)
     .set({ status: 'failed', updatedAt: ts })
-    .where(eq(schema.storyboards.id, vRecord.storyboardId))
+    .where(eq(schema.storyboards.id, storyboardId))
     .run()
-  logTaskProgress('VideoTask', 'failed-backfill-storyboard', { storyboardId: vRecord.storyboardId })
+  logTaskProgress('VideoTask', 'failed-backfill-storyboard', { storyboardId })
 }
 
 async function normalizeVideoReferenceUrl(vRecordId: number, value: string | null | undefined): Promise<string | null> {
@@ -450,8 +452,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         db.update(schema.videoGenerations)
           .set({ status: 'failed', errorMsg, updatedAt: now() })
           .where(eq(schema.videoGenerations.id, id)).run()
-        const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
-        markRelatedTablesFailed(rows[0], errorMsg)
+        markStoryboardFailed(storyboardId, errorMsg)
         return
       }
       // 仍 processing,继续下一轮
@@ -464,8 +465,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         db.update(schema.videoGenerations)
           .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
           .where(eq(schema.videoGenerations.id, id)).run()
-        const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
-        markRelatedTablesFailed(rows[0], failMsg)
+        markStoryboardFailed(storyboardId, failMsg)
         return
       }
     }
@@ -476,8 +476,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
   db.update(schema.videoGenerations)
     .set({ status: 'failed', errorMsg: failMsg, updatedAt: now() })
     .where(eq(schema.videoGenerations.id, id)).run()
-  const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
-  markRelatedTablesFailed(rows[0], failMsg)
+  markStoryboardFailed(storyboardId, failMsg)
 }
 
 async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
