@@ -76,10 +76,11 @@ export const sceneAPI = {
 export const imageAPI = {
   get: (id: number) => api.get(`/images/${id}`),
   generate: (d: any) => api.post('/images', d),
-  list: (params?: { drama_id?: number; storyboard_id?: number }) => {
+  list: (params?: { drama_id?: number; storyboard_id?: number; episode_id?: number }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
     if (params?.storyboard_id) query.set('storyboard_id', String(params.storyboard_id))
+    if (params?.episode_id) query.set('episode_id', String(params.episode_id))
     return api.get(`/images${query.size ? `?${query.toString()}` : ''}`)
   },
 }
