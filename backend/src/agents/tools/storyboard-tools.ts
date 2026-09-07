@@ -419,7 +419,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('scene_id' in fields) updates.sceneId = fields.scene_id
       if ('duration' in fields) updates.duration = fields.duration
       db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, storyboard_id)).run()
-      if ('character_ids' in fields) syncStoryboardCharacters(storyboard_id, fields.character_ids || [])
+      if ('character_ids' in fields && fields.character_ids?.length) syncStoryboardCharacters(storyboard_id, fields.character_ids || [])
       logTaskSuccess('StoryboardTool', 'update-complete', {
         episodeId,
         storyboardId: storyboard_id,
