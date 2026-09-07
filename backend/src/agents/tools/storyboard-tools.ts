@@ -661,6 +661,7 @@ export async function runGenerateShotPrompts(params: {
       return `<n>${start}-${end}秒</n>`
     }).join('')
 
+    const dialogueTag = buildDialogueTag(sp.dialogue)
     const dialogueSection = dialogueTag
       ? `\n[multimodal_description]\n${sp.action}${segs}${sp.result ? `\n收尾:${sp.result}` : ''}\n${dialogueTag}`
       : `${sp.action}${segs}${sp.result ? `。收尾于：${sp.result}` : ''}`
