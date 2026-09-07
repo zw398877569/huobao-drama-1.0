@@ -645,11 +645,13 @@ export async function runGenerateShotPrompts(params: {
       : `地点:${sp.location}，时间:${sp.time}`
     const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
 
-    // 对白转义 + H3 格式
+    // 对白转义 + H3 格式(提到循环外,避免每次迭代重新定义)
     const escapeXml = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-    const safeDialogue = escapeXml(sp.dialogue || '')
-    const dialogueTag = safeDialogue ? `<d>${safeDialogue}</d>` : ''
+    const buildDialogueTag = (dialogue: string) => {
+      const safe = escapeXml(dialogue || '')
+      return safe ? `<d>${safe}</d>` : ''
+    }
 
     const durationSec = sp.duration || 10
     const segments = Math.ceil(durationSec / 3)

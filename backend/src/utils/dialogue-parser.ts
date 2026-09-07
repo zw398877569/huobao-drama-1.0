@@ -32,8 +32,14 @@ const NARRATOR_SPEAKERS = /^(旁白|画外音|narrator)$/i
 const IGNORABLE_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound\s*effect|bgm|背景音|背景音乐|ambient)$/i
 const IGNORABLE_PLAIN = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
 
-function stripParenNoise(s: string): string {
+/** 抽掉状态括号, 只比较纯文本 */
+export function stripParenNoise(s: string): string {
   return s.replace(/[（(].+?[)）]/g, '').trim()
+}
+
+/** 判断一行是否已有 "角色名:" 前缀 */
+export function hasSpeakerPrefix(line: string): boolean {
+  return /^([^:：]{1,40}?)\s*[：:]/.test(line.trim())
 }
 
 /**
@@ -99,10 +105,6 @@ export function parseDialogueSegments(dialogue?: string | null): ParsedDialogue 
 export function autoFillSpeakerFromScript(dialogue: string | null | undefined, scriptContent: string | null | undefined): string {
   if (!dialogue || !scriptContent) return dialogue || ''
 
-  // 抽状态括号, 只比较纯文本
-  const normalizeText = (s: string) => s.replace(/[（(].+?[)）]/g, '').trim()
-  const hasSpeaker = (line: string) => /^([^:：]{1,40}?)\s*[：:]/.test(line.trim())
-
   // 把 script_content 解析成 [{ speaker, text }] 索引
   const scriptLines = scriptContent
     .replace(/\\n/g, '\n')
@@ -112,7 +114,7 @@ export function autoFillSpeakerFromScript(dialogue: string | null | undefined, s
     .map(l => {
       const m = l.match(/^([^:：]{1,40}?)\s*[：:]\s*(.+)$/)
       if (!m) return null
-      return { speaker: m[1].trim(), text: normalizeText(m[2]) }
+      return { speaker: m[1].trim(), text: stripParenNoise(m[2]) }
     })
     .filter((x): x is { speaker: string; text: string } => !!x)
 
@@ -126,8 +128,8 @@ export function autoFillSpeakerFromScript(dialogue: string | null | undefined, s
     .filter(Boolean)
 
   const fixed = dialogueLines.map(line => {
-    if (hasSpeaker(line)) return line  // 已有前缀 → 不动
-    const lineText = normalizeText(line)
+    if (hasSpeakerPrefix(line)) return line  // 已有前缀 → 不动
+    const lineText = stripParenNoise(line)
     if (lineText.length < 4) return line  // 太短(嗯/好)→ 不补,避免误匹配
 
     // 找脚本里包含该文本(反过来也算)的行

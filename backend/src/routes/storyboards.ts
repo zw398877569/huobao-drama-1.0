@@ -10,6 +10,7 @@ import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuc
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
 import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
+import { autoFillSpeakerFromScript } from '../utils/dialogue-parser.js'
 
 const app = new Hono()
 
@@ -138,6 +139,14 @@ app.put('/:id', async (c) => {
   if ('dialogue' in body) {
     updates.ttsAudioUrl = null
     updates.subtitleUrl = null
+    // 兜底补 speaker 前缀,避免无前缀纯文本被 parseDialogueSegments 当旁白处理
+    if (storyboard.episodeId) {
+      const [ep] = db.select({ scriptContent: schema.episodes.scriptContent })
+        .from(schema.episodes).where(eq(schema.episodes.id, storyboard.episodeId)).all()
+      updates.dialogue = autoFillSpeakerFromScript(body.dialogue, ep?.scriptContent)
+    } else {
+      updates.dialogue = body.dialogue
+    }
   }
 
   validateStoryboardBindings(
