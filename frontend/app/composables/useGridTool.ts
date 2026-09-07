@@ -406,7 +406,7 @@ export function useGridTool(deps: Deps) {
 
   async function loadLatestGridImage() {
     try {
-      const rows = await imageAPI.list({ drama_id: deps.ctx.dramaId })
+      const rows = await imageAPI.list({ drama_id: deps.ctx.dramaId, episode_id: ctx.epId.value })
       const list = Array.isArray(rows) ? rows : []
       const grids = list
         .filter((row) => row?.status === 'completed' && String(row?.frame_type || row?.frameType || '').startsWith('grid_') && (row?.local_path || row?.localPath))

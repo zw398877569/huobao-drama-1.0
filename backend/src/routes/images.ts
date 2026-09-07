@@ -64,15 +64,24 @@ app.get('/:id', async (c) => {
   return success(c, row || null)
 })
 
-// GET /images — List by storyboard_id or drama_id
+// GET /images — List by storyboard_id, drama_id, or episode_id
 app.get('/', async (c) => {
   const storyboardId = c.req.query('storyboard_id')
   const dramaId = c.req.query('drama_id')
+  const episodeId = c.req.query('episode_id')
 
   let rows = db.select().from(schema.imageGenerations).all()
 
   if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
   if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
+  // episode_id: 通过 storyboards 表关联过滤，避免跨集宫格历史混在一起
+  if (episodeId) {
+    const episodeStoryboardIds = db.select({ id: schema.storyboards.id })
+      .from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, Number(episodeId)))
+      .map(r => r.id)
+    rows = rows.filter(r => r.dramaId === Number(dramaId) && (episodeStoryboardIds.includes(r.storyboardId) || !r.storyboardId))
+  }
 
   return success(c, rows)
 })
