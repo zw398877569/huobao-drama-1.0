@@ -141,9 +141,16 @@ export async function translatePromptToEnglish(prompt: string): Promise<string> 
       {
         role: 'system',
         content: (
-          'Translate the user\'s image/video generation prompt into fluent English. '
-          + 'Preserve all concrete visual details, style words, camera motion, lighting, '
-          + 'composition constraints, and negative instructions. Return only the English prompt.'
+          'You are translating a video generation prompt for an AI video model. '
+          + 'Preserve the three H3 sections exactly with their English headers: '
+          + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
+          + 'Keep XML-style tags intact: <n>0-3s</n> timecodes, <location>X</location>, '
+          + '<role>X</role>, <voice>X</voice>. '
+          + 'IMPORTANT: Dialogue inside 开口:\'...\' or <d>...</d> tags must stay in the '
+          + 'ORIGINAL language — do NOT translate the spoken words. Translate only the '
+          + 'surrounding action/description. Also strip speaker name prefix (e.g. "年轻人:" '
+          + 'before the line should be removed, keep only the spoken words). '
+          + 'Output ONLY the English translation, no commentary.'
         ),
       },
       { role: 'user', content: prompt },

@@ -417,7 +417,7 @@
               <template v-if="!sbs.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
-              <button class="btn btn-sm" :disabled="rn || !selectedSb || regeneratingOne" @click="regeneratingOne = true; (async () => { if (!selectedSb) { regeneratingOne = false; return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${selectedSb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(selectedSb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
+              <button class="btn btn-sm" :disabled="rn || !selectedSb?.id || regeneratingOne" @click="regeneratingOne = true; (async () => { const sb = selectedSb?.id ? selectedSb : (sbs[sbs.length - 1] || sbs[0]); if (!sb?.id) { regeneratingOne = false; toast.error('没有可重生成的镜头'); return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${sb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(sb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
                 <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
                 重新生成本镜头
