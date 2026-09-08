@@ -17,6 +17,44 @@ import { checkPromptSafety } from '../../services/prompt-safety'
 import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
 
+// H3 三段式 video_prompt 的 5D 字段映射(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS P4)
+// planner 输出中文 / 自由文本,这里统一映射到 H3 英文 enum
+const H3_SHOT_TYPE_MAP: Record<string, string> = {
+  远景: 'WS', 全景: 'WS', WS: 'WS',
+  中全景: 'MLS', MLS: 'MLS',
+  中景: 'MS', MS: 'MS',
+  近景: 'CU', CU: 'CU',
+  特写: 'ECU', ECU: 'ECU', 大特写: 'ECU',
+}
+const H3_MOVEMENT_MAP: Record<string, string> = {
+  固定: 'static', static: 'static', 静止: 'static',
+  推镜: 'slow dolly in', 推: 'slow dolly in', 'dolly in': 'slow dolly in', 推进: 'slow dolly in',
+  拉镜: 'dolly out', 拉: 'dolly out', 'dolly out': 'dolly out', 后拉: 'dolly out',
+  左移: 'pan left', 'pan left': 'pan left', 左摇: 'pan left',
+  右移: 'pan right', 'pan right': 'pan right', 右摇: 'pan right',
+  手持: 'handheld', handheld: 'handheld',
+  仰拍: 'tilt up', 'tilt up': 'tilt up', 上摇: 'tilt up',
+  俯拍: 'tilt down', 'tilt down': 'tilt down', 下摇: 'tilt down',
+}
+const H3_ANGLE_MAP: Record<string, string> = {
+  平视: 'eye-level', 'eye-level': 'eye-level', 水平: 'eye-level',
+  仰视: 'low angle', 'low angle': 'low angle',
+  俯视: 'high angle', 'high angle': 'high angle',
+  荷兰角: 'dutch tilt', 'dutch tilt': 'dutch tilt',
+  过肩: 'over-shoulder', 'over-shoulder': 'over-shoulder',
+  主观: 'POV', POV: 'POV',
+}
+// 焦距 / 景深 planner 未输出,按景别给常用默认值(H3 P4)
+const H3_FOCAL_BY_SHOT: Record<string, string> = {
+  WS: '24mm(广角)', MLS: '35mm(标准)',
+  MS: '50mm(中焦)', CU: '85mm(肖像)', ECU: '85mm(肖像)',
+}
+const H3_DEPTH_BY_SHOT: Record<string, string> = {
+  WS: 'deep f/8', MLS: 'standard f/4', MS: 'standard f/4',
+  CU: 'shallow f/1.8', ECU: 'shallow f/1.8',
+}
+
+
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
     .where(eq(schema.storyboardCharacters.storyboardId, storyboardId))
@@ -559,6 +597,9 @@ export async function runGenerateShotPrompts(params: {
     result: string
     atmosphere: string
     intent_function: string
+    // 修:planner 之前不输出这两字段,音效/配乐段只能 'none' 兜底 — 现在 planner 直出,code 侧优先用
+    sound_effect?: string
+    bgm_prompt?: string
   }>
   keepExisting?: boolean
   onProgress?: (progress: { shot: number; total: number; status: string }) => void
@@ -645,27 +686,38 @@ export async function runGenerateShotPrompts(params: {
       : `地点:${sp.location}，时间:${sp.time}`
     const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
 
-    // 对白转义 + H3 格式 — 把 escapeXml 包成 buildDialogueTag,helper 化便于复用 (在循环内,shot_plan 一般 10-50 条,函数对象分配开销可忽略)
+    // H3 三段式 video_prompt 构造(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS):
+    //   1) Integrated multimodal description + 5D(景别/焦距/运镜/景深/视角) + 时间戳 <n>X-Ys</n>(s 缩写)
+    //   2) Overall soundscape — 无 diegetic 音效时显式 'none'
+    //   3) Non-diegetic music — 缺省用 atmosphere 兜底,无则 'none'
     const escapeXml = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-    const buildDialogueTag = (dialogue: string) => {
-      const safe = escapeXml(dialogue || '')
-      return safe ? `<d>${safe}</d>` : ''
-    }
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+    const shotTypeEn = H3_SHOT_TYPE_MAP[sp.shot_type] || 'MS'
+    const movementEn = H3_MOVEMENT_MAP[sp.movement] || 'static'
+    const angleEn = H3_ANGLE_MAP[sp.angle] || 'eye-level'
+    const focal = H3_FOCAL_BY_SHOT[shotTypeEn] || '50mm(中焦)'
+    const depth = H3_DEPTH_BY_SHOT[shotTypeEn] || 'standard f/4'
 
     const durationSec = sp.duration || 10
     const segments = Math.ceil(durationSec / 3)
     const segs = Array.from({ length: segments }, (_, i) => {
       const start = i * 3
       const end = Math.min((i + 1) * 3, durationSec)
-      return `<n>${start}-${end}秒</n>`
+      return `<n>${start}-${end}s</n>`  // 修 commit 1f1b944 P1: 秒 → s 缩写
     }).join('')
 
-    const dialogueTag = buildDialogueTag(sp.dialogue)
-    const dialogueSection = dialogueTag
-      ? `\n[multimodal_description]\n${sp.action}${segs}${sp.result ? `\n收尾:${sp.result}` : ''}\n${dialogueTag}`
-      : `${sp.action}${segs}${sp.result ? `。收尾于：${sp.result}` : ''}`
-    const videoPrompt = `${dialogueSection}。延续上一镜末帧构图。`
+    const dialogueInline = sp.dialogue ? ` 开口:'${escapeXml(sp.dialogue)}'` : ''
+    const resultInline = sp.result ? ` Ends with ${sp.result}.` : ''
+    const integrated = `延续上一镜末帧构图. ${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
+    // H3 P2:planner 直出 sound_effect / bgm_prompt 优先,空才用 atmosphere 兜底,再空才落 'none'
+    const soundscape = sp.sound_effect?.trim() || 'none'
+    const music = sp.bgm_prompt?.trim() || (sp.atmosphere ? `${sp.atmosphere} 情绪铺垫` : 'none')
+
+    const videoPrompt =
+      `Integrated multimodal description:\n${integrated}\n\n` +
+      `Overall soundscape:\n${soundscape}\n\n` +
+      `Non-diegetic music:\n${music}`
 
     const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
     const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
@@ -688,8 +740,8 @@ export async function runGenerateShotPrompts(params: {
       atmosphere: sp.atmosphere,
       imagePrompt: safetyResult.cleaned,
       videoPrompt: cleanedVideo,
-      bgmPrompt: '',
-      soundEffect: '',
+      bgmPrompt: music,
+      soundEffect: soundscape,
       sceneId: sp.scene_id,
       duration: sp.duration || 10,
       negativePrompt: autoNegativePrompt,
