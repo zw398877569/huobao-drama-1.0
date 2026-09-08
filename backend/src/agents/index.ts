@@ -871,9 +871,11 @@ shot_plan 字段说明
   result (string) — 收尾状态(下一镜的起点)
   atmosphere (string) — 氛围/光影
   intent_function (string) — 剧情功能(揭露/对峙/反转/铺垫/高潮/余韵/悬念/情感爆发)
+  sound_effect (string) — 该镜 diegetic 音效 + 环境底噪(物体碰撞/脚步声/环境音/静默等),无音效显式写 "none",禁止留空
+  bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 情绪铺垫),无配乐显式写 "none",禁止留空
 
-注意：不要生成 image_prompt / video_prompt / bgm_prompt / sound_effect / negative_prompt
-这些由 code 侧 generate_shot_prompts 自动生成。`,
+注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成。
+sound_effect / bgm_prompt 由 planner 直出,code 侧只兜底(空时落 "none" 或基于 atmosphere 推断)。`,
   },
 }
 
