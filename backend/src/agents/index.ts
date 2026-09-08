@@ -410,25 +410,53 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     必须用英文(中文会被后端翻译层兜底,但英文直出更稳)
     避免抽象形容词(cinematic / dramatic / beautiful / epic / stunning / masterpiece 等),用具体描写代替
 
-  video_prompt(动态):
-    时间戳分段:0-3秒/3-6秒/6-9秒 ... 用 <n> 分隔
-    标记场景: <location>地点</location>
-    标记角色: <role>角色名</role>
-    标记画外音/旁白: <voice>角色名/旁白</voice>(本镜说话者直接嵌对白,无需 <voice>)
+  video_prompt(动态) — H3 三段式结构(必填,缺一段视为不合格):
+    必须按以下顺序包含三段,段标题英文原文:
+
+    Integrated multimodal description:
+      时间戳分段:每段用 <n>起秒-止秒s</n> 闭合,例如 <n>0-3s</n><n>3-6s</n>
+      (秒数用整数 + 字母 s 缩写,不写"秒"汉字,不写冒号,标签必须闭合)
+      标记场景: <location>地点</location>
+      标记角色: <role>角色名</role>
+      标记画外音/旁白: <voice>角色名/旁白</voice>(本镜说话者直接嵌对白,无需 <voice>)
+      参考图标签:有首帧/尾帧参考图时用 [Picture 1] / [Picture 2] / [Picture 3] 引用,
+        首句必须明确 "opening frame matches [Picture 1]"
+      镜头维度(每镜五维各选一项,直接写进描述):
+        景别: ECU / CU / MS / MLS / WS
+        焦距: 24mm(广角) / 35mm(标准) / 50mm(中焦) / 85mm(肖像)
+        运镜: static / slow dolly in / dolly out / pan left / pan right / handheld / tilt up / tilt down
+        景深: shallow f/1.8(浅景深,人物突出) / standard f/4(标准) / deep f/8(全景深)
+        视角: eye-level / low angle / high angle / dutch tilt / over-shoulder / POV
+
+    Overall soundscape:
+      该镜的环境音 + 关键 diegetic 音效(门铃、脚步、撞击等),不重复音乐
+      无音效必须显式写 "none"(禁止留空)
+
+    Non-diegetic music:
+      该镜的配乐描述(乐器 + 情绪 + 起止时间)
+      无配乐必须显式写 "none"
 
     对白嵌入(关键!容易漏):
-      - dialogue 字段的每一句对白都必须按时间顺序嵌入到 video_prompt 的对应时间段,不能省略
+      - dialogue 字段的每一句对白都必须按时间顺序嵌入到 Integrated multimodal description 的对应时间段,不能省略
       - 每段(<n> 分隔)同时包含动作 + 视觉 + 对白(格式:"<角色动作>，开口:'<对白>'")
       - 时间分配按"动作起势 → 对白 → 收尾动作"三段式
       - 旁白(如"旁白:三年前...")用 <voice>旁白</voice> 标记
       - 例:对话字段有 3 句 → video_prompt 至少 3 个时间段各塞 1 句对白
 
     单镜头:不要在 prompt 内跨机位/跨场景切换
-    首帧延续:开头写"延续 [上一镜末尾状态]"
+    首帧延续:若有参考图,开头写 "opening frame matches [Picture 1]; continues from previous shot's tail composition"
+            若无参考图,开头写"延续 [上一镜末尾状态]"
     末帧收尾:本镜末尾明确 result 字段,告诉模型动作在哪里收住
 
-  示例:
-  "延续上一镜老陈低头倒酒的姿势。0-3秒:<location>无名酒馆吧台</location>,近景,<role>老陈</role>50岁灰白短发围裙,琥珀色液体缓缓注入酒杯,暖黄色侧光。<n>3-6秒:特写,酒液在杯中晃动的反光,老陈眼神从酒面抬起。<n>6-9秒:固定机位,老陈把酒杯推向镜头方向,手指离开杯壁。"
+  示例(完整 H3 三段式):
+  Integrated multimodal description:
+    opening frame matches [Picture 1]; continues from previous shot's tail composition of <role>老陈</role>低头倒酒. <n>0-3s</n><location>无名酒馆吧台</location>, MS 35mm, eye-level, static, standard f/4. 老陈50岁灰白短发、褪色围裙,琥珀色液体从老式酒壶缓缓注入酒杯,暖黄色侧光勾勒出酒瓶架玻璃光泽. <n>3-6s</n> CU 50mm, shallow f/1.8, slow dolly in. 酒液在杯中晃动的反光映在老陈眼底,他的视线从酒面抬起、嘴角轻微牵动. <n>6-9s</n> MLS, static, deep f/8. 老陈把酒杯推向镜头方向,手指离开杯壁,袖口卷起露出小臂旧疤. Ends with 老陈手悬于杯壁、视线定格于门口方向.
+
+  Overall soundscape:
+    酒馆环境底噪:吧台空调低频嗡鸣(~60Hz)、远处水龙头滴水声. diegetic 音效:0秒处琥珀液体注入玻璃杯的清脆水声(单次,2秒自然衰减)、酒杯在木台面上轻轻滑动的摩擦声.
+
+  Non-diegetic music:
+    0s 起,大提琴 D2 单音缓慢揉弦,9s 内渐强至 mp 后渐弱收尾. 不加打击乐,不抢 diegetic 音效. 情绪铺垫:沉稳、隐秘、等待.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 八、声音设计(配音 + 配乐 + 音效 区分填)

@@ -79,6 +79,7 @@ app.get('/', async (c) => {
     const episodeStoryboardIds = db.select({ id: schema.storyboards.id })
       .from(schema.storyboards)
       .where(eq(schema.storyboards.episodeId, Number(episodeId)))
+      .all()
       .map(r => r.id)
     rows = rows.filter(r => r.dramaId === Number(dramaId) && (episodeStoryboardIds.includes(r.storyboardId) || !r.storyboardId))
   }
