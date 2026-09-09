@@ -30,9 +30,24 @@ export function useShotTTS(deps: Deps) {
     return dialogue ? dialogue.replace(/^.+?[:：]\s*/, '').trim() : ''
   }
 
+  // Strip leading / trailing full-width and half-width parens plus
+  // surrounding whitespace from the dialogue body. Shot plans sometimes
+  // write values like "旁白：（无对白）" or "旁白:(无对白)" and the raw
+  // text would not match IGNORE_TTS_TEXT, leaking an empty narrator
+  // card into the dubbing list with a 生成配音 button enabled.
+  function normalizeDialogueBody(text: string) {
+    return (text || '')
+      .replace(/^[\s\uFF08(]+|[\s\uFF09)]+$/g, '')
+      .trim()
+  }
+
+  function getDialogueBodyNormalized(sb: any) {
+    return normalizeDialogueBody(getDialogueText(sb))
+  }
+
   function isTTSIgnorable(sb: any) {
     const speaker = getDialogueSpeakerRaw(sb)
-    const text = getDialogueText(sb)
+    const text = getDialogueBodyNormalized(sb)
     if (!sb?.dialogue?.trim()) return true
     if (speaker && IGNORE_TTS_SPEAKERS.test(speaker)) return true
     if (!text) return true
@@ -88,7 +103,7 @@ export function useShotTTS(deps: Deps) {
 
   return {
     IGNORE_TTS_SPEAKERS, IGNORE_TTS_TEXT,
-    getDialogueSpeakerRaw, getDialogueText, isTTSIgnorable,
+    getDialogueSpeakerRaw, getDialogueText, getDialogueBodyNormalized, isTTSIgnorable,
     hasDialogue, hasTTS, getTTSUrl,
     getTTSSegments, getDialogueSpeaker,
     genShotTTS, batchShotTTS,

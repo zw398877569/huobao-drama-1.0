@@ -3410,7 +3410,7 @@ onMounted(() => { refresh() })
 .prod-tab.active .prod-tab-badge { background: var(--accent-bg); color: var(--accent-text); }
 
 /* Production content */
-.prod-content { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+.prod-content { max-height: 50vh; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
