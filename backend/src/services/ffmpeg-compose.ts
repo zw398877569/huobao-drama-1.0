@@ -84,7 +84,7 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
     // 2. 生成字幕文件（SRT）
     if (sb.dialogue && sb.dialogue.trim()) {
       const srtDir = path.join(STORAGE_ROOT, 'subtitles')
-      fs.mkdirSync(srtDir, { recursive: true })
+      fs.mkdirSync(srtDir, {recursive: true })
       const srtFilename = `${uuid()}.srt`
       subtitlePath = path.join(srtDir, srtFilename)
 
@@ -100,7 +100,7 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
 
     // 3. FFmpeg 合成
     const outputDir = path.join(STORAGE_ROOT, 'composed')
-    fs.mkdirSync(outputDir, { recursive: true })
+    fs.mkdirSync(outputDir, {recursive: true })
     const outputFilename = `${uuid()}.mp4`
     const outputPath = path.join(outputDir, outputFilename)
 
@@ -134,7 +134,10 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']
 
       if (audioPath) {
-        outputOptions.push('-map', '0:v', '-map', '1:a', '-c:a', 'aac', '-shortest')
+        // 显式 strip 输入 0 的音频流, 防止 H3 视频自带的 BGM/环境音 (来自
+        // "Non-diegetic music" 段) 混进成品。ffmpeg `-map` 在多流场景下偶发
+        // 会把未映射的 audio 默认带上, 这里用负向 `-map -0:a` 兜底。
+        outputOptions.push('-map', '0:v', '-map', '1:a', '-map', '-0:a', '-c:a', 'aac', '-shortest')
       } else {
         outputOptions.push('-an')
       }
