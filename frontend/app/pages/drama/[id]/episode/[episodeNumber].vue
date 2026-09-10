@@ -894,18 +894,6 @@
                 <span class="step-name">制作工作台</span>
               </div>
             </div>
-            <div class="prod-tabs">
-              <button
-                v-for="t in prodTabDefs"
-                :key="t.id"
-                :class="['prod-tab', { active: prodTab === t.id }]"
-                @click="prodTab = t.id"
-              >
-                <component :is="t.icon" :size="11" />
-                {{ t.label }}
-                <span v-if="t.badge" class="prod-tab-badge">{{ t.badge }}</span>
-              </button>
-            </div>
           </div>
 
           <!-- Sub: Characters -->
@@ -2456,7 +2444,7 @@ onMounted(() => { refresh() })
   padding: 11px 14px; border-bottom: 1px solid rgba(27, 41, 64, 0.08);
   background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.42)); flex-shrink: 0;
 }
-.prod-toolbar { background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.42)); }
+.prod-toolbar { padding-top: 8px; padding-bottom: 8px; background: linear-gradient(180deg, rgba(255,255,255,0.8), rgba(255,255,255,0.42)); }
 .toolbar-left { display: flex; align-items: center; gap: 8px; flex: 1; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .step-indicator { display: flex; align-items: center; gap: 8px; }
@@ -3410,7 +3398,7 @@ onMounted(() => { refresh() })
 .prod-tab.active .prod-tab-badge { background: var(--accent-bg); color: var(--accent-text); }
 
 /* Production content */
-.prod-content { max-height: 38vh; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+.prod-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 360px); }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
