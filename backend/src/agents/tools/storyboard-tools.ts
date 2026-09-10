@@ -710,9 +710,15 @@ export async function runGenerateShotPrompts(params: {
     const dialogueInline = sp.dialogue ? ` 开口:'${escapeXml(sp.dialogue)}'` : ''
     const resultInline = sp.result ? ` Ends with ${sp.result}.` : ''
     const integrated = `延续上一镜末帧构图. ${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
-    // H3 P2:planner 直出 sound_effect / bgm_prompt 优先,空才用 atmosphere 兜底,再空才落 'none'
-    const soundscape = sp.sound_effect?.trim() || 'none'
-    const music = sp.bgm_prompt?.trim() || (sp.atmosphere ? `${sp.atmosphere} 情绪铺垫` : 'none')
+    // H3 官方规范 (skills/storyboard_breaker/h3-official-prompt/fl2va.md):
+    //   - Overall soundscape: 无环境音/音效时显式写 'N/A',不要 'none'
+    //   - Non-diegetic music: 描述必须用配器/速度/节奏/动态变化,
+    //     不能用抽象情绪词 (比如 '情绪铺垫') — atmosphere 不是音乐描述,
+    //     H3 看到抽象词会自由发挥,产生不可控的随机音频
+    // 2026-09-10 fix: 把 'none' 改成 'N/A' (H3 官方关键字),
+    //   music 兜底只允许 'N/A',不允许拿 atmosphere 当音乐描述
+    const soundscape = sp.sound_effect?.trim() || 'N/A'
+    const music = sp.bgm_prompt?.trim() || 'N/A'
 
     const videoPrompt =
       `Integrated multimodal description:\n${integrated}\n\n` +

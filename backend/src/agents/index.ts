@@ -430,11 +430,11 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
     Overall soundscape:
       该镜的环境音 + 关键 diegetic 音效(门铃、脚步、撞击等),不重复音乐
-      无音效必须显式写 "none"(禁止留空)
+      无音效必须显式写 "N/A"(H3 官方关键字,不要写 none — H3 看到 'none' 会自由发挥,产生随机音频)
 
     Non-diegetic music:
-      该镜的配乐描述(乐器 + 情绪 + 起止时间)
-      无配乐必须显式写 "none"
+      该镜的配乐描述(配器 + 速度 + 节奏 + 动态变化 — H3 官方要求,禁止用抽象情绪词)
+      无配乐必须显式写 "N/A"
 
     对白嵌入(关键!容易漏):
       - dialogue 字段的每一句对白都必须按时间顺序嵌入到 Integrated multimodal description 的对应时间段,不能省略
@@ -871,11 +871,11 @@ shot_plan 字段说明
   result (string) — 收尾状态(下一镜的起点)
   atmosphere (string) — 氛围/光影
   intent_function (string) — 剧情功能(揭露/对峙/反转/铺垫/高潮/余韵/悬念/情感爆发)
-  sound_effect (string) — 该镜 diegetic 音效 + 环境底噪(物体碰撞/脚步声/环境音/静默等),无音效显式写 "none",禁止留空
-  bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 情绪铺垫),无配乐显式写 "none",禁止留空
+  sound_effect (string) — 该镜 diegetic 音效 + 环境底噪(物体碰撞/脚步声/环境音/静默等),无音效显式写 "N/A",禁止留空
+  bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 节奏/动态变化,H3 官方要求 — 禁止用抽象情绪词),无配乐显式写 "N/A",禁止留空
 
 注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成。
-sound_effect / bgm_prompt 由 planner 直出,code 侧只兜底(空时落 "none" 或基于 atmosphere 推断)。`,
+sound_effect / bgm_prompt 由 planner 直出,code 侧兜底只用 "N/A" — 禁止用 atmosphere 推断(非音乐描述会让 H3 自由发挥产生不可控随机音频)。`,
   },
 }
 
