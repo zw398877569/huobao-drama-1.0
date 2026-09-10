@@ -101,6 +101,30 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
   }
 }
 
+// 2026-09-10 fix: H3 三段式 video_prompt 兜底
+//   LLM 经常只输出 Integrated multimodal description 一段,导致
+//   Overall soundscape / Non-diegetic music 缺失, H3 模型对缺失段
+//   自由发挥, 产生不可控随机音频("杂乱的声音")。code 端必须保证
+//   video_prompt 字段始终包含完整三段式。
+//   music 兜底不允许用 atmosphere 推断 (atmosphere 不是音乐描述,
+//   会让 H3 看到抽象词后自由发挥) — 见 commit f927a6a。
+function ensureH3ThreePartPrompt(
+  prompt: string,
+  soundEffect?: string | null,
+  bgmPrompt?: string | null,
+): string {
+  let result = prompt
+  if (!/Overall soundscape:/i.test(result)) {
+    const soundscape = soundEffect?.trim() || 'N/A'
+    result = result.trimEnd() + "\n\nOverall soundscape:\n" + soundscape
+  }
+  if (!/Non-diegetic music:/i.test(result)) {
+    const music = bgmPrompt?.trim() || 'N/A'
+    result = result.trimEnd() + "\n\nNon-diegetic music:\n" + music
+  }
+  return result
+}
+
 export function createStoryboardTools(episodeId: number, dramaId: number) {
   // 预计算自动反词：按 drama.style 匹配一次，整个会话复用
   const [drama] = db.select({ style: schema.dramas.style })
@@ -307,7 +331,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       for (const sb of storyboards) {
         validateStoryboardBindings(episodeId, sb.scene_id, sb.character_ids)
         const cleanedImage = applyQualityChecklist(sb.image_prompt, 'image').cleaned
-        const cleanedVideo = applyQualityChecklist(sb.video_prompt, 'video').cleaned
+        const baseVideo = applyQualityChecklist(sb.video_prompt, 'video').cleaned
+        // 2026-09-10: 兜底三段式,补齐缺失的 Overall soundscape / Non-diegetic music 段
+        const cleanedVideo = ensureH3ThreePartPrompt(baseVideo, sb.sound_effect, sb.bgm_prompt)
         const densityResult = validateEventDensity(cleanedVideo)
         const safetyResult = checkPromptSafety(cleanedImage, 'image')
         const res = db.insert(schema.storyboards).values({
@@ -444,7 +470,15 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         }
       }
       if ('video_prompt' in fields) {
-        const cleanedVideo = applyQualityChecklist(fields.video_prompt, 'video').cleaned
+        const baseVideo = applyQualityChecklist(fields.video_prompt, 'video').cleaned
+        // 2026-09-10: 兜底三段式,补齐缺失的 Overall soundscape / Non-diegetic music 段
+        // sound_effect / bgm_prompt 用 fields 优先, 否则用 db 当前值
+        const [curSb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboard_id)).all()
+        const cleanedVideo = ensureH3ThreePartPrompt(
+          baseVideo,
+          fields.sound_effect ?? curSb?.soundEffect,
+          fields.bgm_prompt ?? curSb?.bgmPrompt,
+        )
         const densityResult = validateEventDensity(cleanedVideo)
         updates.videoPrompt = cleanedVideo
         updates.eventDensity = densityResult.density
@@ -706,6 +740,7 @@ export async function runGenerateShotPrompts(params: {
       const end = Math.min((i + 1) * 3, durationSec)
       return `<n>${start}-${end}s</n>`  // 修 commit 1f1b944 P1: 秒 → s 缩写
     }).join('')
+
 
     const dialogueInline = sp.dialogue ? ` 开口:'${escapeXml(sp.dialogue)}'` : ''
     const resultInline = sp.result ? ` Ends with ${sp.result}.` : ''
