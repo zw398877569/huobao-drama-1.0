@@ -95,10 +95,18 @@ app.get('/:id/scenes', async (c) => {
 // GET /episodes/:episode_id/storyboards
 app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
-  const rows = db.select().from(schema.storyboards)
+  // 2026-09-10: 查询时按 storyboardNumber 去重, 同一 episode 下保留 id 最大(最新)的一条,
+  // 避免反复拆解/重新生成本镜头时数据库残留重复 storyboard_number 记录, 导致
+  // 前端配音列表里出现两条相同 # 编号。
+  const allRows = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
-    .orderBy(schema.storyboards.storyboardNumber)
     .all()
+  const dedupeMap = new Map<number, typeof allRows[number]>()
+  for (const r of allRows) {
+    const cur = dedupeMap.get(r.storyboardNumber)
+    if (!cur || r.id > cur.id) dedupeMap.set(r.storyboardNumber, r)
+  }
+  const rows = Array.from(dedupeMap.values()).sort((a, b) => a.storyboardNumber - b.storyboardNumber)
   const links = db.select().from(schema.storyboardCharacters).all()
   const charIdsByStoryboard = new Map<number, number[]>()
   for (const link of links) {
