@@ -114,11 +114,16 @@ function ensureH3ThreePartPrompt(
   bgmPrompt?: string | null,
 ): string {
   let result = prompt
-  if (!/Overall soundscape:/i.test(result)) {
+  // 宽松匹配 H3 三段式 header (大小写、分隔符空格/_/- 都不敏感)
+  // LLM 翻译后可能写出 Overall soundscape: / Overall_Soundscape: /
+  // OVERALL SOUNDSCAPE: 等变体, 下面这个 regex 都接得住
+  const hasSoundscape = /(?:^|\n)\s*overall[\s_-]+soundscape[\s_-]*:/i.test(result)
+  const hasMusic = /(?:^|\n)\s*(?:non[\s_-]+diegetic[\s_-]+music|non-diegetic\s+music)[\s_-]*:/i.test(result)
+  if (!hasSoundscape) {
     const soundscape = soundEffect?.trim() || 'N/A'
     result = result.trimEnd() + "\n\nOverall soundscape:\n" + soundscape
   }
-  if (!/Non-diegetic music:/i.test(result)) {
+  if (!hasMusic) {
     const music = bgmPrompt?.trim() || 'N/A'
     result = result.trimEnd() + "\n\nNon-diegetic music:\n" + music
   }
@@ -334,7 +339,10 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         const baseVideo = applyQualityChecklist(sb.video_prompt, 'video').cleaned
         // 2026-09-10: 兜底三段式,补齐缺失的 Overall soundscape / Non-diegetic music 段
         const cleanedVideo = ensureH3ThreePartPrompt(baseVideo, sb.sound_effect, sb.bgm_prompt)
-        const densityResult = validateEventDensity(cleanedVideo)
+        // 2026-09-10: 只对 integrated multimodal description 段做事件密度检查,
+        //   避免 soundscape/music 描述里的句号被算成独立事件而误报 density
+        const densityInput = cleanedVideo.split(/\n\n(?:Overall|non[\s_-]+diegetic)[\s_-]+(?:soundscape|music)[\s_-]*:/i)[0]
+        const densityResult = validateEventDensity(densityInput)
         const safetyResult = checkPromptSafety(cleanedImage, 'image')
         const res = db.insert(schema.storyboards).values({
           episodeId,
@@ -479,7 +487,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           fields.sound_effect ?? curSb?.soundEffect,
           fields.bgm_prompt ?? curSb?.bgmPrompt,
         )
-        const densityResult = validateEventDensity(cleanedVideo)
+        // 2026-09-10: 只对 integrated 段做事件密度检查 (避免 soundscape/music 描述里的句号被算成事件)
+        const densityInput = cleanedVideo.split(/\n\n(?:Overall|non[\s_-]+diegetic)[\s_-]+(?:soundscape|music)[\s_-]*:/i)[0]
+        const densityResult = validateEventDensity(densityInput)
         updates.videoPrompt = cleanedVideo
         updates.eventDensity = densityResult.density
         updates.eventList = densityResult.events.length ? JSON.stringify(densityResult.events) : ''
@@ -762,7 +772,9 @@ export async function runGenerateShotPrompts(params: {
 
     const cleanedImage = applyQualityChecklist(imagePrompt, 'image').cleaned
     const cleanedVideo = applyQualityChecklist(videoPrompt, 'video').cleaned
-    const densityResult = validateEventDensity(cleanedVideo)
+    // 2026-09-10: 只对 integrated 段做事件密度检查, 避免 soundscape/music 描述里的句号被算成事件
+    const densityInput = cleanedVideo.split(/\n\n(?:Overall|non[\s_-]+diegetic)[\s_-]+(?:soundscape|music)[\s_-]*:/i)[0]
+    const densityResult = validateEventDensity(densityInput)
     const safetyResult = checkPromptSafety(cleanedImage, 'image')
 
     const res = db.insert(schema.storyboards).values({
