@@ -93,7 +93,7 @@ export function useEpisodePipeline(deps: Deps) {
     { id: 'scenes', label: '场景图片', icon: 'MapPin', badge: sceneImgCount.value ? `${sceneImgCount.value}/${ctx.scenes.value.length}` : '' },
     { id: 'dubbing', label: '配音生成', icon: 'Mic2', badge: '' },
     { id: 'shots', label: '镜头图片', icon: 'ImageIcon', badge: shotImgCount.value ? `${shotImgCount.value}/${ctx.sbs.value.length}` : '' },
-    { id: 'videos', label: '视频生成', icon: 'Video', badge: shotVidCount.value ? `${shotVidCount.value}/${ctx.sbs.value.length}` : '' },
+    { id: 'videos', label: '视频生成', icon: 'Videotape', badge: shotVidCount.value ? `${shotVidCount.value}/${ctx.sbs.value.length}` : '' },
     { id: 'compose', label: '视频合成', icon: 'Layers', badge: ctx.composedCount.value ? `${ctx.composedCount.value}/${ctx.sbs.value.length}` : '' },
   ])
 
@@ -124,7 +124,7 @@ export function useEpisodePipeline(deps: Deps) {
         { key: 'prod:scenes', label: '场景图片', desc: '', icon: 'MapPin', done: prodStepDone('scenes') },
         { key: 'prod:dubbing', label: '配音生成', desc: '', icon: 'Mic2', done: prodStepDone('dubbing') },
         { key: 'prod:shots', label: '镜头图片', desc: '', icon: 'ImageIcon', done: prodStepDone('shots') },
-        { key: 'prod:videos', label: '视频生成', desc: '', icon: 'Video', done: prodStepDone('videos') },
+        { key: 'prod:videos', label: '视频生成', desc: '', icon: 'Videotape', done: prodStepDone('videos') },
         { key: 'prod:compose', label: '视频合成', desc: '', icon: 'Layers', done: prodStepDone('compose') },
       ],
     },
