@@ -43,3 +43,6 @@ temp/
 .superpowers/
 /CLAUDE.md
 /AGENTS.md
+
+# Local frontend build artifact symlink (was tracked as a symlink, removed from tracking)
+frontend/dist
