@@ -187,7 +187,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景</span>
+              <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ props.length }} 道具</span>
               <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -214,8 +214,8 @@
           <div v-else class="extract-stage">
             <aside class="card extract-summary">
               <div class="extract-summary-kicker">Extraction Board</div>
-              <div class="extract-summary-title">角色与场景结果</div>
-              <div class="extract-summary-desc">从剧本里提取出的角色和场景已经入库。这里先确认命名、定位和描述是否可直接进入后续制作。</div>
+              <div class="extract-summary-title">角色 · 场景 · 道具</div>
+              <div class="extract-summary-desc">从剧本里提取出的角色、场景和关键道具已经入库。这里先确认命名、定位和描述是否可直接进入后续制作。</div>
               <div class="extract-summary-stats">
                 <div class="extract-summary-stat">
                   <span>角色</span>
@@ -224,6 +224,10 @@
                 <div class="extract-summary-stat">
                   <span>场景</span>
                   <strong>{{ scenes.length }}</strong>
+                </div>
+                <div class="extract-summary-stat">
+                  <span>道具</span>
+                  <strong>{{ props.length }}</strong>
                 </div>
               </div>
               <div class="extract-summary-note">如果角色描述过于简短，后续分配音色和生成形象时建议先补充人物特征。</div>
@@ -266,6 +270,28 @@
                       <span v-if="s.time" class="tag">{{ s.time }}</span>
                     </div>
                     <div class="extract-meta wrap">{{ s.description || s.time || '等待补充场景描述' }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card extract-card" v-if="props.length">
+              <div class="extract-card-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+                <span>道具</span>
+                <span class="tag tag-accent">{{ props.length }}</span>
+              </div>
+              <div class="extract-list">
+                <div v-for="p in props" :key="p.id" class="extract-row">
+                  <div class="prop-icon">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+                  </div>
+                  <div class="extract-info">
+                    <div class="extract-name-row">
+                      <div class="extract-name">{{ p.name }}</div>
+                      <span v-if="p.narrativeRole" class="tag">{{ p.narrativeRole }}</span>
+                    </div>
+                    <div class="extract-meta wrap">{{ p.description || '暂无描述' }}</div>
                   </div>
                 </div>
               </div>
@@ -1876,7 +1902,7 @@ const {
   scriptSteps,
 } = useEpisodePipeline({
   ctx: {
-    drama, episode, chars, scenes, sbs, mergeData,
+    drama, episode, chars, scenes, props, sbs, mergeData,
     scriptStep, panel,
     localRaw, localScript,
     rawContent, scriptContent, charsVoiced, composedCount, mergeUrl,
@@ -1940,6 +1966,7 @@ async function refresh() {
       episode.value = ep
       try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
       try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
+      try { props.value = await episodeAPI.props(ep.id) } catch { props.value = [] }
       sbs.value = await episodeAPI.storyboards(ep.id)
       // 修复 refresh 后 selectedSb stale reference: 找到 id 相同的新对象重新指向,避免显示旧数据
       if (selectedSb.value) {
@@ -2521,12 +2548,12 @@ onMounted(() => { refresh() })
 .bubble-dot.current { background: var(--accent-dark); transform: scale(1.2); box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14); }
 
 /* Extract grid */
-.extract-stage { flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px; display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.extract-stage { flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px; display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
 .extract-summary { padding: 16px; display: flex; flex-direction: column; gap: 14px; align-self: stretch; position: sticky; top: 0; max-height: 100%; }
 .extract-summary-kicker { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); }
 .extract-summary-title { font-size: 20px; line-height: 1.05; font-family: var(--font-display); color: var(--text-0); }
 .extract-summary-desc { font-size: 12px; color: var(--text-2); line-height: 1.7; }
-.extract-summary-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.extract-summary-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .extract-summary-stat { padding: 10px 12px; border-radius: 14px; background: rgba(19, 51, 121, 0.05); border: 1px solid rgba(19, 51, 121, 0.08); display: flex; flex-direction: column; gap: 4px; }
 .extract-summary-stat span { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
 .extract-summary-stat strong { font-size: 18px; color: var(--text-0); font-family: var(--font-display); }
@@ -2552,6 +2579,12 @@ onMounted(() => { refresh() })
   background: var(--bg-2); border: 1px solid var(--border);
   display: flex; align-items: center; justify-content: center;
   color: var(--text-3); flex-shrink: 0;
+}
+.prop-icon {
+  width: 30px; height: 30px; border-radius: 6px;
+  background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.25);
+  display: flex; align-items: center; justify-content: center;
+  color: #7c3aed; flex-shrink: 0;
 }
 .extract-info { min-width: 0; }
 .extract-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

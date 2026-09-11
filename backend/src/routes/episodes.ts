@@ -92,6 +92,19 @@ app.get('/:id/scenes', async (c) => {
   return success(c, toSnakeCaseArray(result))
 })
 
+// GET /episodes/:id/props — key props linked to this episode
+app.get('/:id/props', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const links = db.select().from(schema.episodeProps)
+    .where(eq(schema.episodeProps.episodeId, episodeId)).all()
+  const propIds = links.map(l => l.propId)
+  if (!propIds.length) return success(c, [])
+  const allProps = db.select().from(schema.props).all()
+  return success(c, toSnakeCaseArray(
+    allProps.filter(p => propIds.includes(p.id) && !p.deletedAt),
+  ))
+})
+
 // GET /episodes/:episode_id/storyboards
 app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
