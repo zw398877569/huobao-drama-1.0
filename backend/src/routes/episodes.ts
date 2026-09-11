@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
@@ -93,16 +93,35 @@ app.get('/:id/scenes', async (c) => {
 })
 
 // GET /episodes/:id/props — key props linked to this episode
+//   2026-09-10 review pass: 用 inArray 避免 N+1, JOIN owner_character_name + appearance_weight
+//   排序: critical > major > minor (剧情重要性)
 app.get('/:id/props', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const links = db.select().from(schema.episodeProps)
     .where(eq(schema.episodeProps.episodeId, episodeId)).all()
+  if (!links.length) return success(c, [])
+  const weightByPropId = new Map(links.map(l => [l.propId, l.appearanceWeight]))
   const propIds = links.map(l => l.propId)
-  if (!propIds.length) return success(c, [])
-  const allProps = db.select().from(schema.props).all()
-  return success(c, toSnakeCaseArray(
-    allProps.filter(p => propIds.includes(p.id) && !p.deletedAt),
-  ))
+  // inArray SQL 过滤, 不再全表扫
+  const propRows = db.select().from(schema.props)
+    .where(inArray(schema.props.id, propIds)).all()
+    .filter(p => !p.deletedAt)
+  // JOIN characters 拿 owner 名字
+  const ownerIds = Array.from(new Set(propRows.map(p => p.ownerCharacterId).filter(Boolean))) as number[]
+  const owners = ownerIds.length
+    ? db.select().from(schema.characters).where(inArray(schema.characters.id, ownerIds)).all()
+    : []
+  const ownerById = new Map(owners.map(c => [c.id, c.name]))
+  // 排序权重: critical(3) > major(2) > minor(1)
+  const weightRank: Record<string, number> = { critical: 3, major: 2, minor: 1 }
+  const result = propRows
+    .map(p => ({
+      ...p,
+      owner_character_name: p.ownerCharacterId ? ownerById.get(p.ownerCharacterId) || null : null,
+      appearance_weight: weightByPropId.get(p.id) || 'minor',
+    }))
+    .sort((a, b) => (weightRank[b.appearance_weight!] || 0) - (weightRank[a.appearance_weight!] || 0))
+  return success(c, toSnakeCaseArray(result))
 })
 
 // GET /episodes/:episode_id/storyboards

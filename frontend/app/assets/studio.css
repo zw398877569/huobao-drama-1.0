@@ -33,6 +33,13 @@
   --accent-glow:   rgba(76,125,255,0.2);
   --accent-gradient: linear-gradient(135deg, #7aa7ff 0%, #4c7dff 46%, #355fce 100%);
 
+  /* Accent — purple (关键道具) */
+  --purple:        #a855f7;
+  --purple-dark:   #7c3aed;
+  --purple-bg:     rgba(168,85,247,0.1);
+  --purple-text:   #6b21a8;
+  --purple-glow:   rgba(168,85,247,0.25);
+
   --panel-bg: rgba(255,255,255,0.88);
   --panel-border: rgba(86, 108, 150, 0.12);
   --shadow-panel: 0 18px 48px rgba(73, 95, 131, 0.12), 0 4px 14px rgba(73, 95, 131, 0.08);

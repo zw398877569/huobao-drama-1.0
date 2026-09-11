@@ -188,7 +188,7 @@
             </div>
             <div class="toolbar-right">
               <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ keyProps.length }} 道具</span>
-              <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="rn">
+              <button v-if="hasAnyAsset" class="btn btn-sm" @click="doExtract" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 重新提取
@@ -275,25 +275,31 @@
               </div>
             </div>
 
-            <div class="card extract-card" v-if="keyProps.length">
+            <div class="card extract-card">
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
-                <span>道具</span>
-                <span class="tag tag-accent">{{ keyProps.length }}</span>
+                <span>关键道具</span>
+                <span class="tag tag-purple">{{ keyProps.length }}</span>
               </div>
-              <div class="extract-list">
-                <div v-for="p in keyProps" :key="p.id" class="extract-row">
+              <div v-if="keyProps.length" class="extract-list">
+                <div v-for="p in keyProps" :key="p.id" class="extract-row" :class="`prop-weight-${p.appearance_weight || 'minor'}`">
                   <div class="prop-icon">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
                   </div>
                   <div class="extract-info">
                     <div class="extract-name-row">
                       <div class="extract-name">{{ p.name }}</div>
-                      <span v-if="p.narrativeRole" class="tag">{{ p.narrativeRole }}</span>
+                      <span v-if="p.owner_character_name" class="tag tag-purple-soft">{{ p.owner_character_name }} 的</span>
+                      <span v-if="p.narrative_role" class="tag">{{ p.narrative_role }}</span>
                     </div>
                     <div class="extract-meta wrap">{{ p.description || '暂无描述' }}</div>
                   </div>
                 </div>
+              </div>
+              <div v-else class="extract-empty">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+                <div class="extract-empty-text">本集未识别到关键道具（信物/武器/随身物）</div>
+                <div class="extract-empty-hint">点击"重新提取"可重跑,或检查剧本是否包含跨镜头反复出现的物品</div>
               </div>
             </div>
           </div>
@@ -1033,7 +1039,7 @@
                 </div>
                 <div class="asset-body">
                   <div class="asset-name">{{ p.name }}</div>
-                  <div class="asset-meta dim">{{ p.narrativeRole || '道具' }}</div>
+                  <div class="asset-meta dim">{{ p.narrative_role || '道具' }}</div>
                 </div>
                 <div class="asset-foot">
                   <span :class="['dot', (p.image_url || p.imageUrl) && 'ok', isPendingPropImage(p.id) && 'pending']" />
@@ -1972,6 +1978,8 @@ const {
 
 const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
+// 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
+const hasAnyAsset = computed(() => chars.value.length || scenes.value.length || keyProps.value.length)
 
 
 function openImageViewer(src, title = '') {
@@ -2007,10 +2015,17 @@ async function refresh() {
     const ep = drama.value.episodes?.find(e => (e.episode_number || e.episodeNumber) === episodeNumber)
     if (ep) {
       episode.value = ep
-      try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
-      try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
-      try { keyProps.value = await episodeAPI.props(ep.id) } catch { keyProps.value = [] }
-      sbs.value = await episodeAPI.storyboards(ep.id)
+      // 2026-09-10 review: 4 个端点并行 (Promise.allSettled) 而不是串行
+      const [cRes, sRes, pRes, sbRes] = await Promise.allSettled([
+        episodeAPI.characters(ep.id),
+        episodeAPI.scenes(ep.id),
+        episodeAPI.props(ep.id),
+        episodeAPI.storyboards(ep.id),
+      ])
+      chars.value = cRes.status === 'fulfilled' ? cRes.value : []
+      scenes.value = sRes.status === 'fulfilled' ? sRes.value : []
+      keyProps.value = pRes.status === 'fulfilled' ? pRes.value : []
+      sbs.value = sbRes.status === 'fulfilled' ? sbRes.value : []
       // 修复 refresh 后 selectedSb stale reference: 找到 id 相同的新对象重新指向,避免显示旧数据
       if (selectedSb.value) {
         const refreshed = sbs.value.find(s => s.id === selectedSb.value.id)
@@ -2591,7 +2606,11 @@ onMounted(() => { refresh() })
 .bubble-dot.current { background: var(--accent-dark); transform: scale(1.2); box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14); }
 
 /* Extract grid */
+/* 2026-09-10 review: 4 列在 <1400px 自动降为 2 列, <900px 降为 1 列 */
 .extract-stage { flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px; display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+@media (max-width: 1400px) { .extract-stage { grid-template-columns: 280px 1fr 1fr; } }
+@media (max-width: 1100px) { .extract-stage { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 800px)  { .extract-stage { grid-template-columns: 1fr; } }
 .extract-summary { padding: 16px; display: flex; flex-direction: column; gap: 14px; align-self: stretch; position: sticky; top: 0; max-height: 100%; }
 .extract-summary-kicker { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); }
 .extract-summary-title { font-size: 20px; line-height: 1.05; font-family: var(--font-display); color: var(--text-0); }
@@ -2623,12 +2642,34 @@ onMounted(() => { refresh() })
   display: flex; align-items: center; justify-content: center;
   color: var(--text-3); flex-shrink: 0;
 }
+/* 2026-09-10 review: 用 --purple 变量替换 hardcode */
 .prop-icon {
   width: 30px; height: 30px; border-radius: 6px;
-  background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.25);
+  background: var(--purple-bg); border: 1px solid var(--purple-glow);
   display: flex; align-items: center; justify-content: center;
-  color: #7c3aed; flex-shrink: 0;
+  color: var(--purple-dark); flex-shrink: 0;
 }
+
+/* 2026-09-10 review: 关键道具按剧情重要性分 3 档视觉差异 */
+.prop-weight-critical .prop-icon {
+  background: var(--purple); border-color: var(--purple-dark);
+  color: #fff; box-shadow: 0 0 0 2px var(--purple-glow);
+}
+.prop-weight-critical .extract-name { color: var(--purple-dark); }
+.prop-weight-major .prop-icon { color: var(--purple-dark); }
+.prop-weight-minor { opacity: 0.78; }
+
+/* 2026-09-10 review: 空态样式 */
+.extract-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 32px 16px; color: var(--text-3);
+}
+.extract-empty-text { font-size: 13px; color: var(--text-2); }
+.extract-empty-hint { font-size: 11px; color: var(--text-3); text-align: center; line-height: 1.5; }
+
+/* 2026-09-10 review: 紫色 tag */
+.tag-purple { background: var(--purple-bg); color: var(--purple-text); }
+.tag-purple-soft { background: rgba(168,85,247,0.05); color: var(--purple-text); }
 .extract-info { min-width: 0; }
 .extract-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .extract-name { font-size: 13px; font-weight: 600; }
