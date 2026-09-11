@@ -286,7 +286,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
-  // 6. 智能保存关键道具（按 name + owner_character_id 去重）— 2026-09-10
+  // 7. 智能保存关键道具（按 name + owner_character_id 去重）— 2026-09-10
   //    关键道具判据: 跨镜头反复出现 + 推动剧情 + 角色标志性 (信物/武器/随身工具/纪念品)
   //    不是: 纯场景装饰物(吧台/吊灯/椅子), 一次性物品(门铃响一下), 抽象概念
   const saveDedupProps = createTool({
@@ -332,10 +332,14 @@ export function createExtractTools(episodeId: number, dramaId: number) {
         }
 
         // 按 name + owner_character_id 组合去重 (同项目同名道具分归属角色)
+        // 降级匹配: 已存在同名但 owner 为 null (LLM 第一次漏填), 视为同一条
         const existing = db.select().from(schema.props)
           .where(eq(schema.props.dramaId, dramaId)).all()
           .filter(p => !p.deletedAt)
-          .find(p => p.name === prop.name && p.ownerCharacterId === ownerId)
+          .find(p => p.name === prop.name && (
+            p.ownerCharacterId === ownerId ||
+            (ownerId != null && p.ownerCharacterId == null)
+          ))
 
         if (existing) {
           // 已存在: 合并, 保留 ID, 累加出现次数

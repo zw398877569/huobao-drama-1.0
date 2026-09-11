@@ -284,7 +284,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
      - 提炼本集实际出现的角色(过滤路人/纯背景),核对是否在已有列表
      - 提炼本集实际发生剧情的场景,核对是否在已有列表
      - 提炼本集关键道具(跨镜头反复出现+推动剧情+角色标志),核对是否在已有列表
-  6) 按 6+5 维框架填字段,appearance/personality/prompt/description 要尽量丰富
+  6) 按各类型对应维度填字段 (角色 6 维 / 场景 5 维 / 关键道具 8 维),appearance/personality/prompt/description 要尽量丰富
   7) save_dedup_characters: 传所有本集角色(包括已存在 — 工具自动去重)
   8) save_dedup_scenes: 传所有本集场景(包括已存在 — 工具自动复用)
   9) save_dedup_props: 传所有本集关键道具(包括已存在 — 按 name+owner_character_id 去重)
