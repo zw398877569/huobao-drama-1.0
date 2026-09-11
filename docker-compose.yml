@@ -1,6 +1,6 @@
 services:
   huobao-drama:
-    build: .
+    image: ghcr.io/zw398877569/huobao-drama-1.0:latest
     ports:
       - "5679:5679"
     volumes:
@@ -10,3 +10,4 @@ services:
       - NODE_ENV=production
       - PORT=5679
     restart: unless-stopped
+# deploy-trigger: initial
