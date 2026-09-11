@@ -312,9 +312,19 @@ sqlite.exec(`
     image_url TEXT,
     reference_images TEXT,
     local_path TEXT,
+    -- 2026-09-10 关键道具扩展字段 (created_at/updated_at/deleted_at 后面)
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT
+  );
+
+  -- 2026-09-10 关键道具关联表
+  CREATE TABLE IF NOT EXISTS episode_props (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL,
+    prop_id INTEGER NOT NULL,
+    appearance_weight TEXT DEFAULT 'minor',
+    created_at TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS assets (
@@ -376,6 +386,12 @@ ensureColumn('storyboards', 'eval_notes', 'TEXT')
 ensureColumn('storyboards', 'evaluated_at', 'TEXT')
 ensureColumn('storyboards', 'retake_count', 'INTEGER DEFAULT 0')
 ensureColumn('storyboards', 'retake_variable', 'TEXT')
+
+// 2026-09-10 关键道具元数据迁移
+ensureColumn('props', 'owner_character_id', 'INTEGER')
+ensureColumn('props', 'narrative_role', 'TEXT')
+ensureColumn('props', 'first_storyboard_number', 'INTEGER')
+ensureColumn('props', 'appearance_count', "INTEGER DEFAULT 1")
 
 // P2 Event Density Firewall: density classification + detected events list
 ensureColumn('storyboards', 'event_density', "TEXT DEFAULT 'low'")
