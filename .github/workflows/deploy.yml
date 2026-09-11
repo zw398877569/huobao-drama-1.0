@@ -11,6 +11,7 @@ on:
       - 'skills/**'
       - 'Dockerfile'
       - '.dockerignore'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   build:
@@ -39,7 +40,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=refname,event=branch
+            type=ref,event=branch
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
