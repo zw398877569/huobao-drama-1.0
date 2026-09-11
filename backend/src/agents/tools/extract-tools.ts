@@ -159,7 +159,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
-  // 4. 智能保存角色（按名字去重，与现有数据合并）
+  // 5. 智能保存角色（按名字去重，与现有数据合并）
   const saveDedupCharacters = createTool({
     id: 'save_dedup_characters',
     description: 'Save extracted characters with deduplication. Existing characters (same name) are merged/updated; new ones are created. All are linked to the current episode.',
@@ -225,7 +225,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
-  // 5. 智能保存场景（按地点+时间段去重，与现有数据合并）
+  // 6. 智能保存场景（按地点+时间段去重，与现有数据合并）
   const saveDedupScenes = createTool({
     id: 'save_dedup_scenes',
     description: 'Save extracted scenes with deduplication. Existing scenes (same location+time) are reused; new ones are created. All are linked to the current episode.',
@@ -331,11 +331,11 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           }
         }
 
-        // 按 name + dramaId 去重 (同集/同项目重名道具合并)
+        // 按 name + owner_character_id 组合去重 (同项目同名道具分归属角色)
         const existing = db.select().from(schema.props)
           .where(eq(schema.props.dramaId, dramaId)).all()
           .filter(p => !p.deletedAt)
-          .find(p => p.name === prop.name)
+          .find(p => p.name === prop.name && p.ownerCharacterId === ownerId)
 
         if (existing) {
           // 已存在: 合并, 保留 ID, 累加出现次数
@@ -346,7 +346,6 @@ export function createExtractTools(episodeId: number, dramaId: number) {
             type: prop.type || existing.type,
             description: prop.description || existing.description,
             prompt: prop.prompt || existing.prompt,
-            ownerCharacterId: ownerId ?? existing.ownerCharacterId,
             narrativeRole: prop.narrative_role || existing.narrativeRole,
             firstStoryboardNumber: prop.first_storyboard_number ?? existing.firstStoryboardNumber,
             appearanceCount: newCount,

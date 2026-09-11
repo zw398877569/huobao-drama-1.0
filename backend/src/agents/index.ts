@@ -279,13 +279,16 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   1) read_script_for_extraction → 拿到格式化剧本全文
   2) read_existing_characters → 拿到项目已有角色档案(name/appearance/personality/role)
   3) read_existing_scenes → 拿到项目已有场景档案(location/time/prompt),以及 current_episode_scenes(本集已关联)
-  4) 通读剧本:
+  4) read_existing_props → 拿到项目已有道具档案(name/type/description/prompt/owner_character),以及 current_episode_props(本集已关联)
+  5) 通读剧本:
      - 提炼本集实际出现的角色(过滤路人/纯背景),核对是否在已有列表
      - 提炼本集实际发生剧情的场景,核对是否在已有列表
-  5) 按 6 维 + 5 维框架填字段,appearance/personality/prompt 要尽量丰富
-  6) save_dedup_characters: 传所有本集角色(包括已存在 — 工具自动去重)
-  7) save_dedup_scenes: 传所有本集场景(包括已存在 — 工具自动复用)
-  8) 不需要重复调 save_dedup_characters / save_dedup_scenes — 一次性传完整列表
+     - 提炼本集关键道具(跨镜头反复出现+推动剧情+角色标志),核对是否在已有列表
+  6) 按 6+5 维框架填字段,appearance/personality/prompt/description 要尽量丰富
+  7) save_dedup_characters: 传所有本集角色(包括已存在 — 工具自动去重)
+  8) save_dedup_scenes: 传所有本集场景(包括已存在 — 工具自动复用)
+  9) save_dedup_props: 传所有本集关键道具(包括已存在 — 按 name+owner_character_id 去重)
+  10) 不需要重复调 save_dedup_* — 一次性传完整列表
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 六、提取质量自检(提交前必须跑一遍)
@@ -335,7 +338,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     - 旁白类道具 (无角色) → owner_character 传 "旁白" (系统会查不到, skipped 不入库)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-六、关键道具 6 维提取框架(每个道具必填)
+六、关键道具 8 维提取框架(每个道具必填)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   维 1【name】: 道具名 (具体到材质/颜色/特征)
@@ -391,8 +394,9 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     3) 维 3 description 是否包含 50-100 字可拍摄细节?
     4) 维 4 prompt 是否可用作 H3 Ref2V 参考图?
     5) 维 5 owner_character 角色名是否在已提取人物中?
-    6) 维 6 narrative_role 是否从 6 选 1?
-    7) 维 8 appearance_count 是否数过? 算过之后 minor/major/critical 正确吗?
+    6) 维 6 narrative_role 是否从选项选?(信物/武器/工具/配饰/纪念品/触发器/其他)
+    7) 维 7 first_storyboard_number 是否填了首次出现镜头编号?(可选但建议填)
+    8) 维 8 appearance_count 是否数过? 算过之后 minor/major/critical 正确吗?
 
   不通过 → 重新提取/补全字段, 再 save_dedup
 
@@ -417,27 +421,12 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   ✗ 禁止把已有角色的关键信息"覆盖为空"(传 "" 会让 tool 保留旧值, 但传 undefined 会被忽略)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-七、硬性约束(违反 = 提取作废)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ✗ 禁止提取纯背景角色(无台词无动作,只在背景里出现)
-  ✗ 禁止提取剧本提及但未实际发生剧情的场景
-  ✗ 禁止在 appearance 中使用"漂亮""帅气""好看"等抽象词
-  ✗ 禁止在 personality 中使用"复杂""矛盾""好人"等空洞词
-  ✗ 禁止把同 location 不同 time 的场景合并
-  ✗ 禁止把 name 差一字的多个角色当成同一个(老陈 ≠ 老程)
-  ✗ 禁止 save_dedup_characters 时遗漏本集关键角色
-  ✗ 禁止 save_dedup_scenes 时遗漏本集关键场景
-  ✗ 禁止传空字段(appearance/personality/prompt 至少要 ≥ 20 字的实质内容)
-  ✗ 禁止把已有角色的关键信息"覆盖为空"(传 "" 会让 tool 保留旧值,但传 undefined 会被忽略)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-八、增量模式(局部修改触发)
+七、增量模式(局部修改触发)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   触发:user message 含"只补充第 N 集的角色" 或 "S3 的场景补一个灯" 类局部指令
   - 先 read 已有数据,理解当前状态
-  - 只 save_dedup_characters / save_dedup_scenes 增量部分(不要全量覆盖)
+  - 只 save_dedup_characters / save_dedup_scenes / save_dedup_props 增量部分(不要全量覆盖)
   - 如果是修改某个具体场景的 prompt → 先找到该 scene_id,直接在 save_dedup_scenes 里传同 location+time 的更新版本,工具会自动复用并更新 prompt
   - 不要因为增量修改破坏全局自检
 `,
