@@ -1866,7 +1866,7 @@ const {
   isPendingCharImage, isPendingSceneImage, isPendingShotFrame,
   genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
 } = useImageGeneration({
-  ctx: { chars, scenes, props, sbs, epId, dramaId: dramaId.value },
+  ctx: { chars, scenes, keyProps, sbs, epId, dramaId: dramaId.value },
   refresh,
   getFirstFrame,
   getLastFrame,

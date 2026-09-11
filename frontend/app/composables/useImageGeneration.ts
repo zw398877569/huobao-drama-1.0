@@ -6,7 +6,7 @@ type Deps = {
   ctx: {
     chars: Ref<any[]>
     scenes: Ref<any[]>
-    props: Ref<any[]>
+    keyProps: Ref<any[]>
     sbs: Ref<any[]>
     epId: ComputedRef<number>
     dramaId: number
@@ -361,7 +361,7 @@ export function useImageGeneration(deps: Deps) {
       toast.success('道具图片生成中')
       await refresh()
       await watchAsyncResult(() => {
-        const prop = ctx.props.value.find(s => s.id === id)
+        const prop = ctx.keyProps.value.find(s => s.id === id)
         const done = !!(prop?.image_url || prop?.imageUrl)
         if (done) {
           pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
@@ -376,7 +376,7 @@ export function useImageGeneration(deps: Deps) {
   }
 
   function batchPropImages() {
-    const ids = ctx.props.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
+    const ids = ctx.keyProps.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
     if (!ids.length) {
       toast.info('所有道具图片已生成')
       return
