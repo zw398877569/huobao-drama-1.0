@@ -3,6 +3,14 @@ name: Build and Publish Image
 on:
   push:
     branches: [master]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'configs/**'
+      - 'scripts/**'
+      - 'skills/**'
+      - 'Dockerfile'
+      - '.dockerignore'
 
 jobs:
   build:
@@ -50,13 +58,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Touch compose so Portainer Polling picks up the new image tag.
-      # This is a no-op for Docker but forces a git diff Portainer can detect.
+      # Only bump compose for real user pushes; skip when this workflow's own
+      # auto-commit (pushed by github-actions[bot]) re-triggers a run, to avoid
+      # an infinite loop.
       - name: Bump compose timestamp
+        if: github.actor != 'github-actions[bot]'
         run: |
           sed -i "s|# deploy-trigger:.*|# deploy-trigger: $(date -u +%FT%TZ)|" docker-compose.yml
 
       - name: Commit and push compose bump
+        if: github.actor != 'github-actions[bot]'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "ci: bump compose for redeploy (${{ github.sha }})"
