@@ -35,6 +35,25 @@ function linkSceneToEpisode(episodeId: number, sceneId: number) {
   }
 }
 
+function linkPropToEpisode(episodeId: number, propId: number, appearanceWeight: string) {
+  const ts = now()
+  const existing = db.select().from(schema.episodeProps)
+    .where(and(eq(schema.episodeProps.episodeId, episodeId), eq(schema.episodeProps.propId, propId)))
+    .all()
+  if (existing.length) {
+    // 升级出现强度 (minor -> major -> critical),不降级
+    const order: Record<string, number> = { minor: 1, major: 2, critical: 3 }
+    const cur = order[existing[0].appearanceWeight || 'minor'] || 1
+    const upd = order[appearanceWeight] || 1
+    if (upd > cur) {
+      db.update(schema.episodeProps).set({ appearanceWeight })
+        .where(eq(schema.episodeProps.id, existing[0].id)).run()
+    }
+    return
+  }
+  db.insert(schema.episodeProps).values({ episodeId, propId, appearanceWeight, createdAt: ts }).run()
+}
+
 export function createExtractTools(episodeId: number, dramaId: number) {
 
   // 1. 读取剧本内容
@@ -82,7 +101,36 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
-  // 3. 读取项目中已存在的场景（用于去重判断）
+  // 3. 读取项目中已存在的关键道具（用于去重判断）— 2026-09-10
+  const readExistingProps = createTool({
+    id: 'read_existing_props',
+    description: 'Read all key props already existing in this drama project (for deduplication).',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const linkedIds = new Set(
+        db.select().from(schema.episodeProps)
+          .where(eq(schema.episodeProps.episodeId, episodeId)).all()
+          .map(link => link.propId),
+      )
+      const props = db.select().from(schema.props)
+        .where(eq(schema.props.dramaId, dramaId)).all()
+        .filter(p => !p.deletedAt)
+      const payload = {
+        count: props.length,
+        props,
+        current_episode_props: props.filter(p => linkedIds.has(p.id)),
+      }
+      logTaskSuccess('ExtractTool', 'read-props', {
+        episodeId,
+        dramaId,
+        projectProps: payload.count,
+        episodeProps: payload.current_episode_props.length,
+      })
+      return payload
+    },
+  })
+
+  // 4. 读取项目中已存在的场景（用于去重判断）
   const readExistingScenes = createTool({
     id: 'read_existing_scenes',
     description: 'Read all scenes already existing in this drama project (for deduplication).',
@@ -238,11 +286,115 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
+  // 6. 智能保存关键道具（按 name + owner_character_id 去重）— 2026-09-10
+  //    关键道具判据: 跨镜头反复出现 + 推动剧情 + 角色标志性 (信物/武器/随身工具/纪念品)
+  //    不是: 纯场景装饰物(吧台/吊灯/椅子), 一次性物品(门铃响一下), 抽象概念
+  const saveDedupProps = createTool({
+    id: 'save_dedup_props',
+    description: 'Save extracted key props with deduplication. Existing props (same name within same drama, optionally narrowed by owner_character) are merged/updated; new ones are created. All are linked to the current episode. Each prop must declare an owner_character (referenced by character name from extraction).',
+    inputSchema: z.object({
+      props: z.array(z.object({
+        name: z.string(),
+        type: z.string().optional(),                          // single=单一物, set=成套物
+        description: z.string().optional(),                  // 外观详细描述 (材质/颜色/尺寸/状态/特殊标记)
+        prompt: z.string().optional(),                        // 图像生成 prompt (用于 H3 Ref2V 参考图)
+        owner_character: z.string().optional(),              // 归属于哪个角色 (角色名,会解析为 character_id)
+        narrative_role: z.string().optional(),                // 信物 / 武器 / 随身工具 / 纪念品 / 服装配饰
+        first_storyboard_number: z.number().optional(),      // 首次出现的镜头编号
+        appearance_count: z.number().optional(),              // 在本集出现次数 (用于计算 appearance_weight)
+      })),
+    }),
+    execute: async ({ props }) => {
+      const ts = now()
+      const results = { created: 0, merged: 0, skipped: 0 }
+      logTaskProgress('ExtractTool', 'save-props-begin', {
+        episodeId,
+        dramaId,
+        names: props.map(p => p.name).join(','),
+      })
+
+      // 先把所有角色加载到内存,按 name 查 id
+      const allChars = db.select().from(schema.characters)
+        .where(eq(schema.characters.dramaId, dramaId)).all()
+        .filter(c => !c.deletedAt)
+      const charByName = new Map(allChars.map(c => [c.name, c.id]))
+
+      for (const prop of props) {
+        // 解析 owner_character_id (可能为空,如旁白类道具)
+        let ownerId: number | null = null
+        if (prop.owner_character) {
+          ownerId = charByName.get(prop.owner_character) ?? null
+          if (ownerId === null) {
+            logTaskProgress('ExtractTool', 'prop-owner-unknown', {
+              propName: prop.name, ownerName: prop.owner_character,
+            })
+          }
+        }
+
+        // 按 name + dramaId 去重 (同集/同项目重名道具合并)
+        const existing = db.select().from(schema.props)
+          .where(eq(schema.props.dramaId, dramaId)).all()
+          .filter(p => !p.deletedAt)
+          .find(p => p.name === prop.name)
+
+        if (existing) {
+          // 已存在: 合并, 保留 ID, 累加出现次数
+          const newCount = (existing as any).appearanceCount
+            ? (existing as any).appearanceCount + (prop.appearance_count || 1)
+            : (prop.appearance_count || 1)
+          db.update(schema.props).set({
+            type: prop.type || existing.type,
+            description: prop.description || existing.description,
+            prompt: prop.prompt || existing.prompt,
+            ownerCharacterId: ownerId ?? existing.ownerCharacterId,
+            narrativeRole: prop.narrative_role || existing.narrativeRole,
+            firstStoryboardNumber: prop.first_storyboard_number ?? existing.firstStoryboardNumber,
+            appearanceCount: newCount,
+            updatedAt: ts,
+          }).where(eq(schema.props.id, existing.id)).run()
+          // 计算 appearance_weight
+          const weight = newCount >= 9 ? 'critical' : newCount >= 4 ? 'major' : 'minor'
+          linkPropToEpisode(episodeId, existing.id, weight)
+          results.merged++
+        } else {
+          // 新增
+          const res = db.insert(schema.props).values({
+            dramaId,
+            name: prop.name,
+            type: prop.type || 'single',
+            description: prop.description || '',
+            prompt: prop.prompt || prop.description || '',
+            ownerCharacterId: ownerId,
+            narrativeRole: prop.narrative_role || '道具',
+            firstStoryboardNumber: prop.first_storyboard_number || null,
+            appearanceCount: prop.appearance_count || 1,
+            createdAt: ts,
+            updatedAt: ts,
+          } as any).run()
+          const propId = Number(res.lastInsertRowid)
+          const count = prop.appearance_count || 1
+          const weight = count >= 9 ? 'critical' : count >= 4 ? 'major' : 'minor'
+          linkPropToEpisode(episodeId, propId, weight)
+          results.created++
+        }
+      }
+
+      const payload = {
+        message: `关键道具保存完成：新增 ${results.created}，合并更新 ${results.merged}，跳过 ${results.skipped}`,
+        ...results,
+      }
+      logTaskSuccess('ExtractTool', 'save-props-complete', { episodeId, ...results })
+      return payload
+    },
+  })
+
   return {
     readScriptForExtraction,
     readExistingCharacters,
     readExistingScenes,
+    readExistingProps,
     saveDedupCharacters,
     saveDedupScenes,
+    saveDedupProps,
   }
 }

@@ -78,6 +78,16 @@ export const episodeScenes = sqliteTable('episode_scenes', {
   createdAt: text('created_at').notNull(),
 })
 
+// Episode-Prop many-to-many (2026-09-10 关键道具关联)
+export const episodeProps = sqliteTable('episode_props', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  episodeId: integer('episode_id').notNull(),
+  propId: integer('prop_id').notNull(),
+  // 该 prop 在本集里的出现强度 (1-3 镜头 = minor, 4-8 = major, 9+ = critical)
+  appearanceWeight: text('appearance_weight').default('minor'),
+  createdAt: text('created_at').notNull(),
+})
+
 export const scenes = sqliteTable('scenes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   dramaId: integer('drama_id').notNull(),
@@ -321,6 +331,11 @@ export const props = sqliteTable('props', {
   imageUrl: text('image_url'),
   referenceImages: text('reference_images'),
   localPath: text('local_path'),
+  // 2026-09-10: 关键道具元数据 (用于 H3 Ref2V 跨镜头一致性)
+  ownerCharacterId: integer('owner_character_id'),
+  narrativeRole: text('narrative_role'),         // 信物 / 武器 / 随身工具 / 纪念品 / ...
+  firstStoryboardNumber: integer('first_storyboard_number'),
+  appearanceCount: integer('appearance_count').default(1),   // 跨集出现总次数, 累加
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
