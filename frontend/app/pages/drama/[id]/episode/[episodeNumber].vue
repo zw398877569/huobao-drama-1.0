@@ -1862,8 +1862,8 @@ onMounted(() => { loadStylesForShot() })
 
 // Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
 const {
-  pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
-  isPendingCharImage, isPendingSceneImage, isPendingShotFrame,
+  pendingCharImageIds, pendingSceneImageIds, pendingPropImageIds, pendingShotFrameKeys,
+  isPendingCharImage, isPendingSceneImage, isPendingPropImage, isPendingShotFrame,
   genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
 } = useImageGeneration({
   ctx: { chars, scenes, keyProps, sbs, epId, dramaId: dramaId.value },
