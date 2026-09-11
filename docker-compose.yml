@@ -1,13 +1,14 @@
 services:
   huobao-drama:
     image: ghcr.io/zw398877569/huobao-drama-1.0:latest
+    container_name: huobao-drama-1.0
     ports:
       - "5679:5679"
     volumes:
-      - /Users/mac/Documents/aicg-dev/huobao-drama-1.0/data:/app/data
-      - /Users/mac/Documents/aicg-dev/huobao-drama-1.0/configs/config.yaml:/app/configs/config.yaml
+      - D:/aicg1.0/data:/app/data
+      - D:/aicg1.0/config/config.yaml:/app/configs/config.yaml
     environment:
       - NODE_ENV=production
       - PORT=5679
     restart: unless-stopped
-# deploy-trigger: 2026-09-11T14:02:32Z
+# deploy-trigger: latest
