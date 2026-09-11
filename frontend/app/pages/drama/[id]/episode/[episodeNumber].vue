@@ -187,7 +187,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ props.length }} 道具</span>
+              <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ props.length }} 道具</span>
               <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
