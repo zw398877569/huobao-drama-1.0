@@ -9,7 +9,7 @@ export function useEpisodeContext() {
   const episode = ref<any>(null)
   const chars = ref<any[]>([])
   const scenes = ref<any[]>([])
-  const props = ref<any[]>([])
+  const keyProps = ref<any[]>([])
   const sbs = ref<any[]>([])
   const mergeData = ref<any>(null)
 
@@ -41,7 +41,7 @@ export function useEpisodeContext() {
 
   return {
     dramaId, episodeNumber,
-    drama, episode, chars, scenes, props, sbs, mergeData,
+    drama, episode, chars, scenes, keyProps, sbs, mergeData,
     localRaw, localScript, scriptStep,
     rawContent, scriptContent, epId,
     rawLen, scriptLen, charsVoiced, voiceSampleCount, composedCount, mergeUrl,

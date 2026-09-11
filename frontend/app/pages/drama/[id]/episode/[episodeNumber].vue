@@ -187,7 +187,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ props.length }} 道具</span>
+              <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ keyProps.length }} 道具</span>
               <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -227,7 +227,7 @@
                 </div>
                 <div class="extract-summary-stat">
                   <span>道具</span>
-                  <strong>{{ props.length }}</strong>
+                  <strong>{{ keyProps.length }}</strong>
                 </div>
               </div>
               <div class="extract-summary-note">如果角色描述过于简短，后续分配音色和生成形象时建议先补充人物特征。</div>
@@ -275,14 +275,14 @@
               </div>
             </div>
 
-            <div class="card extract-card" v-if="props.length">
+            <div class="card extract-card" v-if="keyProps.length">
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
                 <span>道具</span>
-                <span class="tag tag-accent">{{ props.length }}</span>
+                <span class="tag tag-accent">{{ keyProps.length }}</span>
               </div>
               <div class="extract-list">
-                <div v-for="p in props" :key="p.id" class="extract-row">
+                <div v-for="p in keyProps" :key="p.id" class="extract-row">
                   <div class="prop-icon">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
                   </div>
@@ -1902,7 +1902,7 @@ const {
   scriptSteps,
 } = useEpisodePipeline({
   ctx: {
-    drama, episode, chars, scenes, props, sbs, mergeData,
+    drama, episode, chars, scenes, keyProps, sbs, mergeData,
     scriptStep, panel,
     localRaw, localScript,
     rawContent, scriptContent, charsVoiced, composedCount, mergeUrl,
@@ -1966,7 +1966,7 @@ async function refresh() {
       episode.value = ep
       try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
       try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
-      try { props.value = await episodeAPI.props(ep.id) } catch { props.value = [] }
+      try { keyProps.value = await episodeAPI.props(ep.id) } catch { keyProps.value = [] }
       sbs.value = await episodeAPI.storyboards(ep.id)
       // 修复 refresh 后 selectedSb stale reference: 找到 id 相同的新对象重新指向,避免显示旧数据
       if (selectedSb.value) {
