@@ -288,7 +288,7 @@ function markRelatedTablesFailed(record: any, errorMsg: string) {
     logTaskProgress('ImageTask', 'failed-backfill-scene', { sceneId: record.sceneId })
   }
   if (record?.propId) {
-    db.update(schema.props).set({ status: 'failed', updatedAt: ts })
+    db.update(schema.props).set({ updatedAt: ts })
       .where(eq(schema.props.id, record.propId)).run()
     logTaskProgress('ImageTask', 'failed-backfill-prop', { propId: record.propId })
   }
