@@ -20,6 +20,7 @@ interface GenerateImageParams {
   dramaId?: number
   sceneId?: number
   characterId?: number
+  propId?: number
   prompt: string
   negativePrompt?: string
   model?: string
@@ -41,6 +42,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     dramaId: params.dramaId,
     sceneId: params.sceneId,
     characterId: params.characterId,
+    propId: params.propId,
     prompt: params.prompt,
     model: params.model || config.model,
     provider: config.provider,
@@ -59,6 +61,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     storyboardId: params.storyboardId,
     sceneId: params.sceneId,
     characterId: params.characterId,
+    propId: params.propId,
     frameType: params.frameType,
     model: params.model || config.model,
   })
@@ -107,6 +110,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
           storyboardId: genRecord.storyboardId,
           sceneId: genRecord.sceneId,
           characterId: genRecord.characterId,
+          propId: genRecord.propId,
           frameType: genRecord.frameType,
         })
 
@@ -279,10 +283,14 @@ async function processImageGeneration(id: number, config: AIConfig) {
 function markRelatedTablesFailed(record: any, errorMsg: string) {
   const ts = now()
   if (record?.sceneId) {
-    // scenes 有 status，无 errorMsg
     db.update(schema.scenes).set({ status: 'failed', updatedAt: ts })
       .where(eq(schema.scenes.id, record.sceneId)).run()
     logTaskProgress('ImageTask', 'failed-backfill-scene', { sceneId: record.sceneId })
+  }
+  if (record?.propId) {
+    db.update(schema.props).set({ status: 'failed', updatedAt: ts })
+      .where(eq(schema.props.id, record.propId)).run()
+    logTaskProgress('ImageTask', 'failed-backfill-prop', { propId: record.propId })
   }
   if (record?.storyboardId) {
     // storyboards 有 status，无 errorMsg
@@ -473,6 +481,10 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
     db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
     logTaskSuccess('ImageTask', 'scene-image-synced', { id, sceneId: record.sceneId, localPath })
   }
+  if (record?.propId) {
+    db.update(schema.props).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.props.id, record.propId)).run()
+    logTaskSuccess('ImageTask', 'prop-image-synced', { id, propId: record.propId, localPath })
+  }
 }
 
 async function handleImageCompleteBase64(id: number, provider: string, base64Data: string, mimeType: string) {
@@ -499,5 +511,8 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
   }
   if (record?.sceneId) {
     db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
+  }
+  if (record?.propId) {
+    db.update(schema.props).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.props.id, record.propId)).run()
   }
 }

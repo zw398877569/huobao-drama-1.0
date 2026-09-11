@@ -74,6 +74,10 @@ export const sceneAPI = {
   generateImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
 }
 
+export const propsAPI = {
+  generateImage: (id: number, episodeId: number) => api.post(`/props/${id}/generate-image`, { episode_id: episodeId }),
+}
+
 export const imageAPI = {
   get: (id: number) => api.get(`/images/${id}`),
   generate: (d: any) => api.post('/images', d),

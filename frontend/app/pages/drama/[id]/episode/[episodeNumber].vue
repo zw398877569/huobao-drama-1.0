@@ -1001,6 +1001,49 @@
             </div>
           </div>
 
+          <!-- Sub: Props -->
+          <div v-else-if="prodTab === 'props'" class="prod-content">
+            <div class="prod-section-bar">
+              <span class="dim" style="font-size:12px">{{ keyProps.length }} 个道具</span>
+              <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" @click="batchPropImages">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  批量生成
+                </button>
+              </div>
+            </div>
+            <div v-if="!keyProps.length" class="step-empty" style="min-height:160px">
+              <div class="empty-title">当前没有关键道具</div>
+              <div class="empty-desc">先在提取页让 AI 提取关键道具，这里会出现道具卡片供生成参考图。</div>
+            </div>
+            <div class="asset-grid" v-else>
+              <div v-for="p in keyProps" :key="p.id" class="card asset-card">
+                <div class="asset-cover">
+                  <img
+                    v-if="p.image_url || p.imageUrl"
+                    :src="'/' + (p.image_url || p.imageUrl)"
+                    class="previewable-image"
+                    @click.stop="openImageViewer('/' + (p.image_url || p.imageUrl), `${p.name} 道具图`)"
+                  />
+                  <div v-else class="asset-cover-empty">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+                  </div>
+                  <span class="asset-cover-badge" :class="(p.image_url || p.imageUrl) ? 'is-ready' : (isPendingPropImage(p.id) ? 'is-pending' : '')">{{ (p.image_url || p.imageUrl) ? '已生成' : (isPendingPropImage(p.id) ? '生成中' : '待生成') }}</span>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">{{ p.name }}</div>
+                  <div class="asset-meta dim">{{ p.narrativeRole || '道具' }}</div>
+                </div>
+                <div class="asset-foot">
+                  <span :class="['dot', (p.image_url || p.imageUrl) && 'ok', isPendingPropImage(p.id) && 'pending']" />
+                  <span class="dim" style="font-size:10px">{{ (p.image_url || p.imageUrl) ? '已生成' : (isPendingPropImage(p.id) ? '生成中' : '待生成') }}</span>
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingPropImage(p.id)" @click="genPropImg(p.id)">{{ isPendingPropImage(p.id) ? '生成中' : '生成' }}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Sub: Dubbing -->
           <div v-else-if="prodTab === 'dubbing'" class="prod-content">
             <div class="prod-section-bar">
@@ -1734,9 +1777,9 @@
 <script setup lang="ts">
 import { toast } from 'vue-sonner'
 import {
-  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
+  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Package,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'
@@ -1815,9 +1858,9 @@ onMounted(() => { loadStylesForShot() })
 const {
   pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
   isPendingCharImage, isPendingSceneImage, isPendingShotFrame,
-  genCharImg, batchCharImages, genSceneImg, batchSceneImages, genShotFrame,
+  genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
 } = useImageGeneration({
-  ctx: { chars, scenes, sbs, epId, dramaId: dramaId.value },
+  ctx: { chars, scenes, props, sbs, epId, dramaId: dramaId.value },
   refresh,
   getFirstFrame,
   getLastFrame,

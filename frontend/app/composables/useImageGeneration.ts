@@ -1,11 +1,12 @@
 import { toast } from 'vue-sonner'
-import { characterAPI, sceneAPI, imageAPI } from '~/composables/useApi'
+import { characterAPI, sceneAPI, propsAPI, imageAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {
   ctx: {
     chars: Ref<any[]>
     scenes: Ref<any[]>
+    props: Ref<any[]>
     sbs: Ref<any[]>
     epId: ComputedRef<number>
     dramaId: number
@@ -28,6 +29,7 @@ export function useImageGeneration(deps: Deps) {
 
   const pendingCharImageIds = ref<number[]>([])
   const pendingSceneImageIds = ref<number[]>([])
+  const pendingPropImageIds = ref<number[]>([])
   const pendingShotFrameKeys = ref<string[]>([])
 
   function framePendingKey(id: number, frameType: string) {
@@ -38,6 +40,9 @@ export function useImageGeneration(deps: Deps) {
   }
   function isPendingSceneImage(id: number) {
     return pendingSceneImageIds.value.includes(id)
+  }
+  function isPendingPropImage(id: number) {
+    return pendingPropImageIds.value.includes(id)
   }
   function isPendingShotFrame(id: number, frameType: string) {
     return pendingShotFrameKeys.value.includes(framePendingKey(id, frameType))
@@ -332,14 +337,12 @@ export function useImageGeneration(deps: Deps) {
     pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
     ids.forEach(id => { sceneAPI.generateImage(id, ctx.epId.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
     toast.success('场景图片批量生成中')
-    // 轮询等到全部场景都到终态(image_url 有 OR status=failed),然后统计失败数 toast
     void watchAsyncResult(() => {
       const scenes = ids.map(id => ctx.scenes.value.find(s => s.id === id))
       const allDone = scenes.every(s =>
         !!(s?.image_url || s?.imageUrl) || s?.status === 'failed'
       )
       if (!allDone) return false
-      // 全部到终态 — 清理 pending + 提示
       pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => !ids.includes(item))
       const failedCount = scenes.filter(s => s?.status === 'failed').length
       if (failedCount > 0) {
@@ -349,6 +352,38 @@ export function useImageGeneration(deps: Deps) {
       }
       return true
     }, 36)
+  }
+
+  async function genPropImg(id: number) {
+    try {
+      if (!isPendingPropImage(id)) pendingPropImageIds.value.push(id)
+      await propsAPI.generateImage(id, ctx.epId.value)
+      toast.success('道具图片生成中')
+      await refresh()
+      await watchAsyncResult(() => {
+        const prop = ctx.props.value.find(s => s.id === id)
+        const done = !!(prop?.image_url || prop?.imageUrl)
+        if (done) {
+          pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
+          return true
+        }
+        return false
+      })
+    } catch (e: any) {
+      pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
+      toast.error(e.message)
+    }
+  }
+
+  function batchPropImages() {
+    const ids = ctx.props.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
+    if (!ids.length) {
+      toast.info('所有道具图片已生成')
+      return
+    }
+    pendingPropImageIds.value = [...new Set([...pendingPropImageIds.value, ...ids])]
+    ids.forEach(id => { propsAPI.generateImage(id, ctx.epId.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
+    toast.success('道具图片批量生成中')
   }
 
   async function genShotFrame(sb: any, frameType: string) {
@@ -385,9 +420,9 @@ export function useImageGeneration(deps: Deps) {
   }
 
   return {
-    pendingCharImageIds, pendingSceneImageIds, pendingShotFrameKeys,
-    isPendingCharImage, isPendingSceneImage, isPendingShotFrame, framePendingKey,
-    genCharImg, batchCharImages, genSceneImg, batchSceneImages, genShotFrame,
+    pendingCharImageIds, pendingSceneImageIds, pendingPropImageIds, pendingShotFrameKeys,
+    isPendingCharImage, isPendingSceneImage, isPendingPropImage, isPendingShotFrame, framePendingKey,
+    genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
     buildShotReferenceAssets, getShotReferenceImages, buildShotImagePrompt,
   }
 }

@@ -6,6 +6,7 @@ type Deps = {
     episode: Ref<any>
     chars: Ref<any[]>
     scenes: Ref<any[]>
+    keyProps: Ref<any[]>
     sbs: Ref<any[]>
     mergeData: Ref<any>
     scriptStep: Ref<number>
@@ -39,6 +40,7 @@ export function useEpisodePipeline(deps: Deps) {
   // Character / scene / shot counts (used by step gating + progress UI)
   const charImgCount = computed(() => visualChars.value.filter(c => c.image_url || c.imageUrl).length)
   const sceneImgCount = computed(() => ctx.scenes.value.filter(s => s.image_url || s.imageUrl).length)
+  const propImgCount = computed(() => ctx.keyProps.value.filter(p => p.image_url || p.imageUrl).length)
   const ttsEligibleCount = computed(() => ctx.sbs.value.filter(s => hasDialogue(s)).length)
   const ttsGeneratedCount = computed(() => ctx.sbs.value.filter(s => hasDialogue(s) && hasTTS(s)).length)
   const shotImgCount = computed(() => ctx.sbs.value.filter(s => s.first_frame_image || s.firstFrameImage || s.last_frame_image || s.lastFrameImage || s.composed_image || s.composedImage).length)
@@ -48,6 +50,7 @@ export function useEpisodePipeline(deps: Deps) {
   function prodStepDone(id: string) {
     if (id === 'chars') return !visualCharTotal.value || charImgCount.value === visualCharTotal.value
     if (id === 'scenes') return !!ctx.scenes.value.length && sceneImgCount.value === ctx.scenes.value.length
+    if (id === 'props') return !!ctx.keyProps.value.length && propImgCount.value === ctx.keyProps.value.length
     if (id === 'dubbing') return !!ctx.sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)
     if (id === 'shots') return !!ctx.sbs.value.length && shotImgCount.value === ctx.sbs.value.length
     if (id === 'videos') return !!ctx.sbs.value.length && shotVidCount.value === ctx.sbs.value.length
@@ -91,6 +94,7 @@ export function useEpisodePipeline(deps: Deps) {
   const prodTabDefs = computed(() => [
     { id: 'chars', label: '角色形象', icon: 'Users', badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
     { id: 'scenes', label: '场景图片', icon: 'MapPin', badge: sceneImgCount.value ? `${sceneImgCount.value}/${ctx.scenes.value.length}` : '' },
+    { id: 'props', label: '道具图片', icon: 'Package', badge: propImgCount.value ? `${propImgCount.value}/${ctx.keyProps.value.length}` : '' },
     { id: 'dubbing', label: '配音生成', icon: 'Mic2', badge: '' },
     { id: 'shots', label: '镜头图片', icon: 'ImageIcon', badge: shotImgCount.value ? `${shotImgCount.value}/${ctx.sbs.value.length}` : '' },
     { id: 'videos', label: '视频生成', icon: 'Videotape', badge: shotVidCount.value ? `${shotVidCount.value}/${ctx.sbs.value.length}` : '' },
@@ -122,6 +126,7 @@ export function useEpisodePipeline(deps: Deps) {
       items: [
         { key: 'prod:chars', label: '角色形象', desc: '', icon: 'Users', done: prodStepDone('chars') },
         { key: 'prod:scenes', label: '场景图片', desc: '', icon: 'MapPin', done: prodStepDone('scenes') },
+        { key: 'prod:props', label: '道具图片', desc: '', icon: 'Package', done: prodStepDone('props') },
         { key: 'prod:dubbing', label: '配音生成', desc: '', icon: 'Mic2', done: prodStepDone('dubbing') },
         { key: 'prod:shots', label: '镜头图片', desc: '', icon: 'ImageIcon', done: prodStepDone('shots') },
         { key: 'prod:videos', label: '视频生成', desc: '', icon: 'Videotape', done: prodStepDone('videos') },
@@ -275,7 +280,7 @@ export function useEpisodePipeline(deps: Deps) {
     // state
     prodTab, prodTabIdx, frameMode, frameModeOptions,
     // counts
-    charImgCount, sceneImgCount, ttsEligibleCount, ttsGeneratedCount, shotImgCount, shotVidCount, visualCharTotal, visualChars,
+    charImgCount, sceneImgCount, propImgCount, ttsEligibleCount, ttsGeneratedCount, shotImgCount, shotVidCount, visualCharTotal, visualChars,
     // gating
     prodStepDone, canExport, goNextProd,
     // script step nav
