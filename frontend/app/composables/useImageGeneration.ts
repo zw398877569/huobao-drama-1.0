@@ -22,10 +22,12 @@ type Deps = {
   videoConfigLabel?: string,
   /** Drama 风格的正向 token (来自 useStylePresets 解析 drama.style) — 注入 buildShotImagePrompt */
   positiveShotTokens?: Ref<string>,
+  /** 制作 tab 临时覆盖的图片配置 id，null 时回退到 episode 锁定配置 */
+  imageConfigId?: Ref<number | null>,
 }
 
 export function useImageGeneration(deps: Deps) {
-  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel, positiveShotTokens } = deps
+  const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel, positiveShotTokens, imageConfigId } = deps
 
   const pendingCharImageIds = ref<number[]>([])
   const pendingSceneImageIds = ref<number[]>([])
@@ -244,7 +246,7 @@ export function useImageGeneration(deps: Deps) {
     let genId: number | null = null
     try {
       if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
-      const resp = await characterAPI.generateImage(id, ctx.epId.value) as any
+      const resp = await characterAPI.generateImage(id, ctx.epId.value, imageConfigId?.value) as any
       genId = resp?.image_generation_id || null
       toast.success('角色图片生成中')
       await refresh()
@@ -280,7 +282,7 @@ export function useImageGeneration(deps: Deps) {
       return
     }
     pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
-    characterAPI.batchImages(ids, ctx.epId.value).then(async (resp: any) => {
+    characterAPI.batchImages(ids, ctx.epId.value, imageConfigId?.value).then(async (resp: any) => {
       toast.success('角色图片批量生成中')
       await refresh()
       const genIds: (number | null)[] = resp?.ids || []
@@ -307,7 +309,7 @@ export function useImageGeneration(deps: Deps) {
   async function genSceneImg(id: number) {
     try {
       if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
-      await sceneAPI.generateImage(id, ctx.epId.value)
+      await sceneAPI.generateImage(id, ctx.epId.value, imageConfigId?.value)
       toast.success('场景图片生成中')
       await refresh()
       await watchAsyncResult(() => {
@@ -335,7 +337,7 @@ export function useImageGeneration(deps: Deps) {
       return
     }
     pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
-    ids.forEach(id => { sceneAPI.generateImage(id, ctx.epId.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
+    ids.forEach(id => { sceneAPI.generateImage(id, ctx.epId.value, imageConfigId?.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
     toast.success('场景图片批量生成中')
     void watchAsyncResult(() => {
       const scenes = ids.map(id => ctx.scenes.value.find(s => s.id === id))
@@ -357,7 +359,7 @@ export function useImageGeneration(deps: Deps) {
   async function genPropImg(id: number) {
     try {
       if (!isPendingPropImage(id)) pendingPropImageIds.value.push(id)
-      await propsAPI.generateImage(id, ctx.epId.value)
+      await propsAPI.generateImage(id, ctx.epId.value, imageConfigId?.value)
       toast.success('道具图片生成中')
       await refresh()
       await watchAsyncResult(() => {
@@ -382,7 +384,7 @@ export function useImageGeneration(deps: Deps) {
       return
     }
     pendingPropImageIds.value = [...new Set([...pendingPropImageIds.value, ...ids])]
-    ids.forEach(id => { propsAPI.generateImage(id, ctx.epId.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
+    ids.forEach(id => { propsAPI.generateImage(id, ctx.epId.value, imageConfigId?.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
     toast.success('道具图片批量生成中')
   }
 

@@ -49,6 +49,29 @@ export function useConfigLoading(deps: Deps) {
   const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)))
   const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
+  // image config 选择器选项：按 provider 分组
+  const imageConfigSelectOptions = computed(() => {
+    const byProvider = new Map<string, any[]>()
+    for (const c of imageConfigs.value) {
+      const arr = byProvider.get(c.provider) || []
+      arr.push(c)
+      byProvider.set(c.provider, arr)
+    }
+    const groups: Array<{ group: string; items: Array<{ label: string; value: number }> }> = []
+    for (const [provider, configs] of byProvider.entries()) {
+      groups.push({
+        group: provider,
+        items: configs.map(c => {
+          let modelName = ''
+          try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
+          const label = modelName ? `${c.name} · ${modelName}` : c.name
+          return { label, value: c.id }
+        }),
+      })
+    }
+    return groups
+  })
+
   async function loadConfigs() {
     try {
       const [imgCfgs, vidCfgs, audCfgs] = await Promise.all([
@@ -105,7 +128,7 @@ export function useConfigLoading(deps: Deps) {
   return {
     imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
     fallbackVoiceProfiles,
-    voiceSelectOptions, videoConfigSelectOptions,
+    voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions,
     lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
     lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
     configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,

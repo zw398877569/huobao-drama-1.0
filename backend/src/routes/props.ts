@@ -23,7 +23,9 @@ app.post('/:id/generate-image', async (c) => {
   const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('PropImage', 'generate', { propId: id, episodeId: ep.id, dramaId: prop.dramaId, name: prop.name })
-    const genId = await generateImage({ propId: id, dramaId: prop.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
+    // config_id 优先于 episode 锁定配置
+    const effectiveConfigId = body?.config_id || ep.imageConfigId
+    const genId = await generateImage({ propId: id, dramaId: prop.dramaId, prompt, configId: effectiveConfigId ?? undefined })
     logTaskSuccess('PropImage', 'generate', { propId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
   } catch (err: any) {

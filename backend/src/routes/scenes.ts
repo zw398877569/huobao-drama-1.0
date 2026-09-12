@@ -53,7 +53,9 @@ app.post('/:id/generate-image', async (c) => {
   try {
     logTaskStart('SceneImage', 'generate', { sceneId: id, episodeId: ep.id, dramaId: scene.dramaId, location: scene.location })
     db.update(schema.scenes).set({ status: 'processing', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
-    const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
+    // config_id 优先于 episode 锁定配置 (支持制作 tab 临时切换模型)
+    const effectiveConfigId = body?.config_id || ep.imageConfigId
+    const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: effectiveConfigId ?? undefined })
     logTaskSuccess('SceneImage', 'generate', { sceneId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
   } catch (err: any) {

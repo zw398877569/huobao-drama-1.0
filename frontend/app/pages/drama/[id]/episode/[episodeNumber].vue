@@ -932,7 +932,16 @@
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
-              <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <select class="model-select" :value="imageConfigIds['chars'] ?? ''" @change="imageConfigIds['chars'] = $event.target.value ? Number($event.target.value) : null">
+                <option value="" disabled>📷 默认模型</option>
+                <template v-for="g in imageConfigSelectOptions" :key="g.group">
+                  <optgroup :label="g.group">
+                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </optgroup>
+                </template>
+              </select>
+              <span v-if="imageConfigIds['chars']" class="tag" style="font-size:10px">自定义</span>
+              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCharImages">
@@ -972,7 +981,16 @@
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
-              <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <select class="model-select" :value="imageConfigIds['scenes'] ?? ''" @change="imageConfigIds['scenes'] = $event.target.value ? Number($event.target.value) : null">
+                <option value="" disabled>📷 默认模型</option>
+                <template v-for="g in imageConfigSelectOptions" :key="g.group">
+                  <optgroup :label="g.group">
+                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </optgroup>
+                </template>
+              </select>
+              <span v-if="imageConfigIds['scenes']" class="tag" style="font-size:10px">自定义</span>
+              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1011,7 +1029,16 @@
           <div v-else-if="prodTab === 'props'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ keyProps.length }} 个道具</span>
-              <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <select class="model-select" :value="imageConfigIds['props'] ?? ''" @change="imageConfigIds['props'] = $event.target.value ? Number($event.target.value) : null">
+                <option value="" disabled>📷 默认模型</option>
+                <template v-for="g in imageConfigSelectOptions" :key="g.group">
+                  <optgroup :label="g.group">
+                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                  </optgroup>
+                </template>
+              </select>
+              <span v-if="imageConfigIds['props']" class="tag" style="font-size:10px">自定义</span>
+              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchPropImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1819,7 +1846,7 @@ const {
 const {
   imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
   fallbackVoiceProfiles,
-  voiceSelectOptions, videoConfigSelectOptions,
+  voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions,
   lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
   lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
   configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
@@ -1877,6 +1904,7 @@ const {
   sleep,
   videoConfigLabel: lockedVideoConfigLabel.value,
   positiveShotTokens,
+  imageConfigId: computed(() => imageConfigIds.value[prodTab.value] ?? null),
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)
@@ -1978,6 +2006,10 @@ const {
 
 const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
+// 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
+const imageConfigIds = ref<Record<string, number | null>>({})
+// 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
+const imageConfigIds = ref<Record<string, number | null>>({})
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
 const hasAnyAsset = computed(() => chars.value.length || scenes.value.length || keyProps.value.length)
 
@@ -3517,6 +3549,12 @@ onMounted(() => { refresh() })
 /* Production content */
 .prod-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 360px); }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.model-select {
+  font-size: 11px; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
+  cursor: pointer; outline: none; max-width: 180px;
+}
+.model-select:focus { border-color: var(--accent); }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
 .dub-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58)); }

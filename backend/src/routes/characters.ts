@@ -90,7 +90,9 @@ app.post('/:id/generate-image', async (c) => {
   const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
-    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
+    // config_id 优先于 episode 锁定配置
+    const effectiveConfigId = body?.config_id || ep.imageConfigId
+    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined })
     logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
   } catch (err: any) {
@@ -137,7 +139,9 @@ app.post('/batch-generate-images', async (c) => {
     ].filter(Boolean).join(', ')
     const prompt = await sanitizeImagePrompt(rawPrompt)
     try {
-      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
+      // config_id 优先于 episode 锁定配置
+      const effectiveConfigId = body?.config_id || ep.imageConfigId
+      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined })
       results.push(genId)
     } catch {}
   }

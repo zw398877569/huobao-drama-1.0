@@ -66,16 +66,16 @@ export const storyboardAPI = {
 export const characterAPI = {
   update: (id: number, data: any) => api.put(`/characters/${id}`, data),
   voiceSample: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
-  generateImage: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId }),
-  batchImages: (ids: number[], episodeId: number) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId }),
+  generateImage: (id: number, episodeId: number, configId?: number) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId, config_id: configId }),
+  batchImages: (ids: number[], episodeId: number, configId?: number) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId, config_id: configId }),
 }
 
 export const sceneAPI = {
-  generateImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
+  generateImage: (id: number, episodeId: number, configId?: number) => api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId, config_id: configId }),
 }
 
 export const propsAPI = {
-  generateImage: (id: number, episodeId: number) => api.post(`/props/${id}/generate-image`, { episode_id: episodeId }),
+  generateImage: (id: number, episodeId: number, configId?: number) => api.post(`/props/${id}/generate-image`, { episode_id: episodeId, config_id: configId }),
 }
 
 export const imageAPI = {
