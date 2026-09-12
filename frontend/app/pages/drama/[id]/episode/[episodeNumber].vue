@@ -1873,6 +1873,7 @@ const {
   lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
   lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
   configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
+  parseModelValue,
 } = useConfigLoading({
   ctx: { episode },
 })
@@ -2036,16 +2037,23 @@ const modelPopoverTab = ref<string | null>(null)
 
 // 获取当前选中模型的显示标签
 const currentModelLabel = computed(() => {
-  const configId = imageConfigIds.value[prodTab.value]
-  if (!configId) return lockedImageConfigLabel.value || '未配置'
+  const stored = imageConfigIds.value[prodTab.value]
+  if (!stored) return lockedImageConfigLabel.value || '未配置'
+  // stored 格式为 "configId:modelName"，解析出 configId
+  const configId = parseModelValue(stored)
+  if (!configId) return '未配置'
   const cfg = imageConfigs.value.find(c => c.id === configId)
   if (!cfg) return '未配置'
-  // 解析 model 字段（可能是 JSON 数组或单字符串）
+  // 解析 model 字段获取模型名
   let modelStr = ''
-  try {
-    const m = JSON.parse(cfg.model || '[]')
-    modelStr = Array.isArray(m) ? (m[0] || '') : (m || '')
-  } catch { modelStr = cfg.model || '' }
+  if (Array.isArray(cfg.model)) {
+    modelStr = cfg.model[0] || ''
+  } else {
+    try {
+      const m = JSON.parse(cfg.model || '[]')
+      modelStr = Array.isArray(m) ? (m[0] || '') : (m || '')
+    } catch { modelStr = cfg.model || '' }
+  }
   return modelStr || cfg.name
 })
 

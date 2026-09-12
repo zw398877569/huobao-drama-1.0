@@ -50,11 +50,12 @@ export function useConfigLoading(deps: Deps) {
   const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
   // image config 选择器选项：按 provider 分组，展开 model 字段为独立选项
+  // 每个选项的 value 是 "configId:modelName" 格式，用于精确匹配
   // R3 review: 空 config 时返回空数组, 前端用 v-if 隐藏 select, 显示 "未配置" tag
-  // 2026-09-12: model 字段后端已返回数组，无需再 JSON.parse
+  // 2026-09-12
   const imageConfigSelectOptions = computed(() => {
     if (!imageConfigs.value.length) return []
-    const byProvider = new Map<string, Array<{ label: string; value: number }>>()
+    const byProvider = new Map<string, Array<{ label: string; value: string }>>()
     for (const c of imageConfigs.value) {
       // 解析 model 字段：后端已返回数组，但兼容一下原始字符串情况
       let models: string[] = []
@@ -70,17 +71,25 @@ export function useConfigLoading(deps: Deps) {
       }
       if (!models.length) continue
 
-      // 同一 provider 下的所有模型共用同一个 configId
+      // 每个模型生成独立选项，value 为 "configId:modelName"
       const existing = byProvider.get(c.provider) || []
-      const items = models.map(m => ({ label: m, value: c.id }))
+      const items = models.map(m => ({ label: m, value: `${c.id}:${m}` }))
       byProvider.set(c.provider, [...existing, ...items])
     }
-    const groups: Array<{ group: string; items: Array<{ label: string; value: number }> }> = []
+    const groups: Array<{ group: string; items: Array<{ label: string; value: string }> }> = []
     for (const [provider, items] of byProvider.entries()) {
       groups.push({ group: provider, items })
     }
     return groups
   })
+
+  // 解析 "configId:modelName" 格式的 value，返回 configId
+  function parseModelValue(value: string | null | undefined): number | null {
+    if (!value || !value.includes(':')) return null
+    const [idStr] = value.split(':')
+    const id = Number(idStr)
+    return isNaN(id) ? null : id
+  }
 
   async function loadConfigs() {
     try {
@@ -142,5 +151,6 @@ export function useConfigLoading(deps: Deps) {
     lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
     lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
     configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
+    parseModelValue,
   }
 }
