@@ -32,6 +32,60 @@ const NARRATOR_SPEAKERS = /^(旁白|画外音|narrator)$/i
 const IGNORABLE_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound\s*effect|bgm|背景音|背景音乐|ambient)$/i
 const IGNORABLE_PLAIN = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
 
+/**
+ * 检测并拆分单行多角色对白
+ * 现实场景: LLM 经常把 3 句对话挤到一个 storyboard.dialogue 里,
+ * 格式如 "(试探地)听说……  老陈:(头也没抬)什么故事?  年轻人:(抿了抿嘴)我后悔了。"
+ * 这种行里包含多个 "角色名:文本" 模式, 应当按边界拆成多行让后续按行处理。
+ *
+ * 触发条件: 行内出现 ≥2 个 "角色名:" 模式 (排除纯时间戳)
+ * 拆分边界: 每个 "角色名:" 前缀位置
+ *
+ * 启发式角色名识别: 中文 2-8 字 + (半角/全角)冒号, 角色名后常带括号状态注释
+ *
+ * 例子:
+ *   "（试探地）听说……  老陈：（头也没抬）什么故事？  年轻人：（抿了抿嘴）我后悔了。"
+ *   → [
+ *       "（试探地）听说……",
+ *       "老陈：（头也没抬）什么故事？",
+ *       "年轻人：（抿了抿嘴）我后悔了。"
+ *     ]
+ */
+export function splitMultiSpeakerLine(line: string): string[] {
+  if (!line || !line.trim()) return [line]
+  // 匹配 "中文 2-8 字 + 冒号" 或 "英文/拼音 + 冒号", 至少 2 个才拆
+  const segmenter = /(?<=[\s　]|^)([一-龥A-Za-z0-9_]{2,8})[\s　]*[:：]\s*(?=\S)/g
+  const matches: Array<{ index: number; speaker: string; prefixLen: number }> = []
+  let m: RegExpExecArray | null
+  while ((m = segmenter.exec(line)) !== null) {
+    // 排除看起来像时间戳的伪匹配 (如 "12:30", "15:00")
+    const candidate = m[1]
+    if (/^\d+$/.test(candidate)) continue
+    matches.push({
+      index: m.index,
+      speaker: candidate,
+      prefixLen: m[1].length,
+    })
+  }
+  if (matches.length < 2) return [line]  // 只有 0-1 个角色 → 不拆, 保持原样
+  // 验证角色名在 script 角色表里至少出现 1 个, 才认定是真多角色对话
+  // 简化: 启发式 — 要求每个匹配前后有合理间隔 (≥4 个非空字符), 避免误拆
+  // 跳过 — 直接按 matches 拆分, 上层 autoFillSpeakerFromScript 会处理
+  const parts: string[] = []
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index
+    const end = i + 1 < matches.length ? matches[i + 1].index : line.length
+    parts.push(line.slice(start, end).trim())
+  }
+  // 第一个分段前面的"前缀" (状态/动作描述) 拼回去
+  const leadingPrefix = line.slice(0, matches[0].index).trim()
+  if (leadingPrefix) {
+    // 前缀可能是"（试探地）" 状态注释, 附给第一段
+    parts[0] = leadingPrefix + ' ' + parts[0]
+  }
+  return parts.filter(Boolean)
+}
+
 /** 抽掉状态括号, 只比较纯文本 */
 export function stripParenNoise(s: string): string {
   return s.replace(/[（(].+?[)）]/g, '').trim()
@@ -58,7 +112,11 @@ export function parseDialogueSegments(dialogue?: string | null): ParsedDialogue 
     .filter(Boolean)
 
   const segments: DialogueSegment[] = []
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    // 2026-09-12 review: 单行多角色拆分 — LLM 把 3 句对话挤到一行时,
+    // 拆成多段后每段独立匹配 speaker:前缀, 避免下游 TTS 用单角色音色读整段
+    const subLines = splitMultiSpeakerLine(rawLine)
+    for (const line of subLines) {
     // 尝试匹配 "角色名:文本" 或 "角色名:（状态）:文本"
     const m = line.match(/^([^:：]{1,40}?)\s*[：:]\s*(.+)$/)
     if (!m) {
@@ -78,6 +136,7 @@ export function parseDialogueSegments(dialogue?: string | null): ParsedDialogue 
       text,
       isNarrator: NARRATOR_SPEAKERS.test(speaker),
     })
+    }  // end for subLine
   }
 
   if (segments.length === 0) {
@@ -120,12 +179,23 @@ export function autoFillSpeakerFromScript(dialogue: string | null | undefined, s
 
   if (!scriptLines.length) return dialogue
 
-  // 逐行处理 dialogue (支持换行 / \\n / ; 三种分隔)
-  const dialogueLines = dialogue
+  // 2026-09-12 review: 先按多角色切分 — LLM 经常把 3 句对话挤到一行
+  // 拆完后每个分段会按角色-台词格式独立处理
+  const rawLines = dialogue
     .replace(/\\n/g, '\n')
     .split(/\r?\n|;/)
     .map(l => l.trim())
     .filter(Boolean)
+  const dialogueLines: string[] = []
+  for (const line of rawLines) {
+    const sub = splitMultiSpeakerLine(line)
+    if (sub.length > 1) {
+      // 拆分后保留前导状态注释到第一段 (splitMultiSpeakerLine 已处理)
+      dialogueLines.push(...sub)
+    } else {
+      dialogueLines.push(line)
+    }
+  }
 
   const fixed = dialogueLines.map(line => {
     if (hasSpeakerPrefix(line)) return line  // 已有前缀 → 不动

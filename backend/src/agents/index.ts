@@ -69,6 +69,13 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     - 一个场景内同一角色多句对白,角色名重复出现(每句前都带)
     - 独白/旁白:\`旁白:文字\` 或 \`角色名（独白）:文字\`
 
+  铁律 3【单 storyboard 只放一段对白】(2026-09-12 修):
+    - 每个 storyboard 的 dialogue 字段只能包含**一段对白**(一个角色的一句话)
+    - 多轮对话(试探问→对方答→再回)必须拆成**多个** storyboard, 不能塞一个里
+    - 错误示例: 一个 storyboard 写 "年轻人:(试探地)听说这里能用故事换酒? 老陈:(头也没抬)什么故事? 年轻人:我后悔了。" ← 错! 3 句对白该拆 3 个 storyboard
+    - 正确做法: 3 个 storyboard, 每个 1 句, 标号相邻 (如 #03、#04、#05)
+    - 兜底: code 端 splitMultiSpeakerLine 会按"角色:"模式切分整行多角色对话, 但仍建议源头就分对
+
   场景内结构:
     场景头 → (动作) → 角色A 对白 → (动作) → 角色B 对白 → ... → 场景结束
 
