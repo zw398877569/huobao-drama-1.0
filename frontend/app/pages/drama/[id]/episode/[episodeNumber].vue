@@ -932,17 +932,13 @@
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
-              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['chars'] ?? ''" @change="imageConfigIds['chars'] = $event.target.value ? Number($event.target.value) : null">
-                <option value="" disabled>📷 默认模型</option>
-                <template v-for="g in imageConfigSelectOptions" :key="g.group">
-                  <optgroup :label="g.group">
-                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </optgroup>
-                </template>
-              </select>
+              <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'chars' ? null : 'chars'" :title="'切换图片模型: ' + currentModelLabel">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                {{ currentModelLabel }}
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
               <span v-if="imageConfigIds['chars']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCharImages">
@@ -982,17 +978,13 @@
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
-              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['scenes'] ?? ''" @change="imageConfigIds['scenes'] = $event.target.value ? Number($event.target.value) : null">
-                <option value="" disabled>📷 默认模型</option>
-                <template v-for="g in imageConfigSelectOptions" :key="g.group">
-                  <optgroup :label="g.group">
-                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </optgroup>
-                </template>
-              </select>
+              <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'scenes' ? null : 'scenes'" :title="'切换图片模型: ' + currentModelLabel">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                {{ currentModelLabel }}
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
               <span v-if="imageConfigIds['scenes']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1031,17 +1023,13 @@
           <div v-else-if="prodTab === 'props'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ keyProps.length }} 个道具</span>
-              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['props'] ?? ''" @change="imageConfigIds['props'] = $event.target.value ? Number($event.target.value) : null">
-                <option value="" disabled>📷 默认模型</option>
-                <template v-for="g in imageConfigSelectOptions" :key="g.group">
-                  <optgroup :label="g.group">
-                    <option v-for="opt in g.items" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-                  </optgroup>
-                </template>
-              </select>
+              <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'props' ? null : 'props'" :title="'切换图片模型: ' + currentModelLabel">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                {{ currentModelLabel }}
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
               <span v-if="imageConfigIds['props']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchPropImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1672,6 +1660,38 @@
         </div>
       </div>
 
+      <!-- Model selector popover -->
+      <div v-if="modelPopoverTab" class="model-popover-overlay" @click.self="closeModelPopover">
+        <div class="model-popover-card">
+          <div class="model-popover-head">
+            <span class="model-popover-title">选择图片模型</span>
+            <button class="btn btn-ghost btn-icon" @click="closeModelPopover">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="model-popover-body">
+            <div v-if="!imageConfigSelectOptions.length" class="model-popover-empty">暂无图片模型配置，请先在设置中添加</div>
+            <template v-else>
+              <div v-for="group in imageConfigSelectOptions" :key="group.group" class="model-popover-group">
+                <div class="model-popover-group-label">{{ group.group }}</div>
+                <button
+                  v-for="opt in group.items"
+                  :key="opt.value"
+                  :class="['model-popover-item', { active: imageConfigIds[modelPopoverTab] === opt.value }]"
+                  @click="imageConfigIds[modelPopoverTab] = opt.value; closeModelPopover()"
+                >
+                  <span class="model-popover-item-name">{{ opt.label }}</span>
+                  <svg v-if="imageConfigIds[modelPopoverTab] === opt.value" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+          <div class="model-popover-foot">
+            <button class="btn btn-sm" @click="imageConfigIds[modelPopoverTab] = null; closeModelPopover()">恢复默认</button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="showBottomBubble" class="step-bubble">
         <button
           v-if="panel === 'script'"
@@ -2011,6 +2031,29 @@ const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
 // 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
 const imageConfigIds = ref<Record<string, number | null>>({})
+// 模型选择器弹窗：哪个 tab 打开了选择器（null = 关闭）
+const modelPopoverTab = ref<string | null>(null)
+
+// 获取当前选中模型的显示标签
+const currentModelLabel = computed(() => {
+  const configId = imageConfigIds.value[prodTab.value]
+  if (!configId) return lockedImageConfigLabel.value || '未配置'
+  const cfg = imageConfigs.value.find(c => c.id === configId)
+  if (!cfg) return '未配置'
+  // 解析 model 字段（可能是 JSON 数组或单字符串）
+  let modelStr = ''
+  try {
+    const m = JSON.parse(cfg.model || '[]')
+    modelStr = Array.isArray(m) ? (m[0] || '') : (m || '')
+  } catch { modelStr = cfg.model || '' }
+  return modelStr || cfg.name
+})
+
+// 关闭模型选择器
+function closeModelPopover() {
+  modelPopoverTab.value = null
+}
+
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
 const hasAnyAsset = computed(() => chars.value.length || scenes.value.length || keyProps.value.length)
 
@@ -4284,5 +4327,116 @@ onMounted(() => { refresh() })
 
 .preset-chip:hover {
   background: var(--hover, #2a2a2a);
+}
+
+/* Model selector */
+.model-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(27, 41, 64, 0.12));
+  background: var(--bg-0, #fff);
+  color: var(--text-1, #1a1a2e);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.model-btn:hover {
+  border-color: var(--accent, #6366f1);
+  background: var(--accent-bg, rgba(99, 102, 241, 0.08));
+}
+.model-popover-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  animation: fadeIn 0.15s ease;
+}
+.model-popover-card {
+  background: var(--bg-0, #fff);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.15s ease;
+}
+.model-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border, rgba(27, 41, 64, 0.08));
+}
+.model-popover-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-0, #1a1a2e);
+}
+.model-popover-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.model-popover-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-3, #6b7280);
+  font-size: 13px;
+}
+.model-popover-group {
+  margin-bottom: 12px;
+}
+.model-popover-group:last-child {
+  margin-bottom: 0;
+}
+.model-popover-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3, #6b7280);
+  padding: 4px 8px 6px;
+}
+.model-popover-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1, #1a1a2e);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+.model-popover-item:hover {
+  background: var(--accent-bg, rgba(99, 102, 241, 0.08));
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+}
+.model-popover-item.active {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  color: #fff;
+}
+.model-popover-foot {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border, rgba(27, 41, 64, 0.08));
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>
