@@ -51,18 +51,22 @@ export function useConfigLoading(deps: Deps) {
 
   // image config 选择器选项：按 provider 分组，展开 model 字段为独立选项
   // R3 review: 空 config 时返回空数组, 前端用 v-if 隐藏 select, 显示 "未配置" tag
-  // 2026-09-12: 支持 model 字段为 JSON 数组(多模型)或单字符串
+  // 2026-09-12: model 字段后端已返回数组，无需再 JSON.parse
   const imageConfigSelectOptions = computed(() => {
     if (!imageConfigs.value.length) return []
     const byProvider = new Map<string, Array<{ label: string; value: number }>>()
     for (const c of imageConfigs.value) {
-      // 解析 model 字段: 可能是 JSON 数组或单字符串
+      // 解析 model 字段：后端已返回数组，但兼容一下原始字符串情况
       let models: string[] = []
-      try {
-        const m = JSON.parse(c.model || '[]')
-        models = Array.isArray(m) ? m : (m ? [m] : [])
-      } catch {
-        models = c.model ? [c.model] : []
+      if (Array.isArray(c.model)) {
+        models = c.model.filter((m: any) => typeof m === 'string' && m.trim())
+      } else if (typeof c.model === 'string' && c.model) {
+        try {
+          const parsed = JSON.parse(c.model)
+          models = Array.isArray(parsed) ? parsed.filter((m: any) => typeof m === 'string') : [c.model]
+        } catch {
+          models = [c.model]
+        }
       }
       if (!models.length) continue
 
