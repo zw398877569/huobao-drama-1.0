@@ -49,28 +49,31 @@ export function useConfigLoading(deps: Deps) {
   const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)))
   const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
-  // image config 选择器选项：按 provider 分组
+  // image config 选择器选项：按 provider 分组，展开 model 字段为独立选项
   // R3 review: 空 config 时返回空数组, 前端用 v-if 隐藏 select, 显示 "未配置" tag
-  // 2026-09-12
+  // 2026-09-12: 支持 model 字段为 JSON 数组(多模型)或单字符串
   const imageConfigSelectOptions = computed(() => {
     if (!imageConfigs.value.length) return []
-    const byProvider = new Map<string, any[]>()
+    const byProvider = new Map<string, Array<{ label: string; value: number }>>()
     for (const c of imageConfigs.value) {
-      const arr = byProvider.get(c.provider) || []
-      arr.push(c)
-      byProvider.set(c.provider, arr)
+      // 解析 model 字段: 可能是 JSON 数组或单字符串
+      let models: string[] = []
+      try {
+        const m = JSON.parse(c.model || '[]')
+        models = Array.isArray(m) ? m : (m ? [m] : [])
+      } catch {
+        models = c.model ? [c.model] : []
+      }
+      if (!models.length) continue
+
+      // 同一 provider 下的所有模型共用同一个 configId
+      const existing = byProvider.get(c.provider) || []
+      const items = models.map(m => ({ label: m, value: c.id }))
+      byProvider.set(c.provider, [...existing, ...items])
     }
     const groups: Array<{ group: string; items: Array<{ label: string; value: number }> }> = []
-    for (const [provider, configs] of byProvider.entries()) {
-      groups.push({
-        group: provider,
-        items: configs.map(c => {
-          let modelName = ''
-          try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
-          const label = modelName ? `${c.name} · ${modelName}` : c.name
-          return { label, value: c.id }
-        }),
-      })
+    for (const [provider, items] of byProvider.entries()) {
+      groups.push({ group: provider, items })
     }
     return groups
   })
