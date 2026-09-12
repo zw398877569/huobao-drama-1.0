@@ -50,7 +50,10 @@ export function useConfigLoading(deps: Deps) {
   const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
   // image config 选择器选项：按 provider 分组
+  // R3 review: 空 config 时返回空数组, 前端用 v-if 隐藏 select, 显示 "未配置" tag
+  // 2026-09-12
   const imageConfigSelectOptions = computed(() => {
+    if (!imageConfigs.value.length) return []
     const byProvider = new Map<string, any[]>()
     for (const c of imageConfigs.value) {
       const arr = byProvider.get(c.provider) || []

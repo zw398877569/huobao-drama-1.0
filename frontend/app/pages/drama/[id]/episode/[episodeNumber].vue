@@ -932,7 +932,7 @@
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
-              <select class="model-select" :value="imageConfigIds['chars'] ?? ''" @change="imageConfigIds['chars'] = $event.target.value ? Number($event.target.value) : null">
+              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['chars'] ?? ''" @change="imageConfigIds['chars'] = $event.target.value ? Number($event.target.value) : null">
                 <option value="" disabled>📷 默认模型</option>
                 <template v-for="g in imageConfigSelectOptions" :key="g.group">
                   <optgroup :label="g.group">
@@ -941,7 +941,8 @@
                 </template>
               </select>
               <span v-if="imageConfigIds['chars']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCharImages">
@@ -981,7 +982,7 @@
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
-              <select class="model-select" :value="imageConfigIds['scenes'] ?? ''" @change="imageConfigIds['scenes'] = $event.target.value ? Number($event.target.value) : null">
+              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['scenes'] ?? ''" @change="imageConfigIds['scenes'] = $event.target.value ? Number($event.target.value) : null">
                 <option value="" disabled>📷 默认模型</option>
                 <template v-for="g in imageConfigSelectOptions" :key="g.group">
                   <optgroup :label="g.group">
@@ -990,7 +991,8 @@
                 </template>
               </select>
               <span v-if="imageConfigIds['scenes']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1029,7 +1031,7 @@
           <div v-else-if="prodTab === 'props'" class="prod-content">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ keyProps.length }} 个道具</span>
-              <select class="model-select" :value="imageConfigIds['props'] ?? ''" @change="imageConfigIds['props'] = $event.target.value ? Number($event.target.value) : null">
+              <select v-if="imageConfigSelectOptions.length" class="model-select" :value="imageConfigIds['props'] ?? ''" @change="imageConfigIds['props'] = $event.target.value ? Number($event.target.value) : null">
                 <option value="" disabled>📷 默认模型</option>
                 <template v-for="g in imageConfigSelectOptions" :key="g.group">
                   <optgroup :label="g.group">
@@ -1038,7 +1040,8 @@
                 </template>
               </select>
               <span v-if="imageConfigIds['props']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else-if="lockedImageConfigLabel" class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">未配置图片模型</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchPropImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
