@@ -2008,8 +2008,6 @@ const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
 // 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
 const imageConfigIds = ref<Record<string, number | null>>({})
-// 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
-const imageConfigIds = ref<Record<string, number | null>>({})
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
 const hasAnyAsset = computed(() => chars.value.length || scenes.value.length || keyProps.value.length)
 
