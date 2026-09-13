@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
+import { parseConfigIdWithModel } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -13,7 +14,9 @@ app.post('/', async (c) => {
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
   try {
-    let configId: number | undefined = body.config_id
+    // 防御性：兼容 "<configId>:<modelName>" 复合格式（多模型选择器）；目前前端用纯数字 ID，但保留解析以防未来改
+    const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body.config_id)
+    let configId: number | undefined = explicitConfigId
     if (body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
@@ -33,7 +36,7 @@ app.post('/', async (c) => {
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,
       prompt: body.prompt,
-      model: body.model,
+      model: body.model || explicitModel,
       referenceMode: body.reference_mode,
       imageUrl: body.image_url,
       firstFrameUrl: body.first_frame_url,

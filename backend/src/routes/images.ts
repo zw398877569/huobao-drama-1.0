@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
+import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -14,7 +15,9 @@ app.post('/', async (c) => {
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
   try {
-    let configId: number | undefined = body.config_id
+    // 防御性：兼容 "<configId>:<modelName>" 复合格式（多模型选择器）；目前前端 genShotFrame 没传 config_id，但保留解析以防未来改
+    const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body.config_id)
+    let configId: number | undefined = explicitConfigId
     if (body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
@@ -39,7 +42,7 @@ app.post('/', async (c) => {
       sceneId: body.scene_id,
       characterId: body.character_id,
       prompt: safePrompt,
-      model: body.model,
+      model: body.model || explicitModel,
       size: body.size,
       referenceImages: body.reference_images,
       frameType: body.frame_type,

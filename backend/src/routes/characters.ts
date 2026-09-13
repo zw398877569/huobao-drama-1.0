@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
+import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
@@ -90,9 +91,10 @@ app.post('/:id/generate-image', async (c) => {
   const prompt = await sanitizeImagePrompt(rawPrompt)
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
-    // config_id 优先于 episode 锁定配置
-    const effectiveConfigId = body?.config_id || ep.imageConfigId
-    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined })
+    // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model
+    const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body?.config_id)
+    const effectiveConfigId = explicitConfigId ?? ep.imageConfigId
+    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined, model: explicitModel })
     logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
   } catch (err: any) {
@@ -139,9 +141,10 @@ app.post('/batch-generate-images', async (c) => {
     ].filter(Boolean).join(', ')
     const prompt = await sanitizeImagePrompt(rawPrompt)
     try {
-      // config_id 优先于 episode 锁定配置
-      const effectiveConfigId = body?.config_id || ep.imageConfigId
-      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined })
+      // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model
+      const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body?.config_id)
+      const effectiveConfigId = explicitConfigId ?? ep.imageConfigId
+      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: effectiveConfigId ?? undefined, model: explicitModel })
       results.push(genId)
     } catch {}
   }

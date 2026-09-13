@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest, now } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
+import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
@@ -53,9 +54,10 @@ app.post('/:id/generate-image', async (c) => {
   try {
     logTaskStart('SceneImage', 'generate', { sceneId: id, episodeId: ep.id, dramaId: scene.dramaId, location: scene.location })
     db.update(schema.scenes).set({ status: 'processing', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
-    // config_id 优先于 episode 锁定配置 (支持制作 tab 临时切换模型)
-    const effectiveConfigId = body?.config_id || ep.imageConfigId
-    const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: effectiveConfigId ?? undefined })
+    // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model
+    const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body?.config_id)
+    const effectiveConfigId = explicitConfigId ?? ep.imageConfigId
+    const genId = await generateImage({ sceneId: id, dramaId: scene.dramaId, prompt, configId: effectiveConfigId ?? undefined, model: explicitModel })
     logTaskSuccess('SceneImage', 'generate', { sceneId: id, generationId: genId })
     return success(c, { image_generation_id: genId })
   } catch (err: any) {

@@ -118,6 +118,42 @@ export function getConfigById(id: number): AIConfig | null {
 }
 
 /**
+ * 解析路由入参中的 config_id：
+ *   - 数字 / 数字字符串         → { configId }
+ *   - "8:gpt-image-2" 复合格式  → { configId: 8, model: "gpt-image-2" }
+ *   - null / 空 / 非数字        → {}
+ *
+ * 用于支持多模型配置：同一 ai_service_configs 行可挂多个 model，
+ * 前端模型选择器把 value 编为 "<configId>:<modelName>" 让用户精确选到具体 model，
+ * 而不仅仅是 config 行。后端需要拆分 model 传给 generateImage / generateVideo，
+ * 不然 getConfigById("8:gpt-image-2") 会查不到行（只匹配纯数字主键）。
+ *
+ * 返回的 model 用于覆盖 config.model（后者只取 models[0]），
+ * 落库时确保是用户选中的那个 model 名。
+ */
+export function parseConfigIdWithModel(value: unknown): { configId?: number; model?: string } {
+  if (value === null || value === undefined || value === '') return {}
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? { configId: value } : {}
+  }
+  if (typeof value !== 'string') return {}
+  // 复合格式：按第一个冒号切（model 名只含 -/_ 等，不含 :）
+  const colonIdx = value.indexOf(':')
+  if (colonIdx > 0) {
+    const idStr = value.slice(0, colonIdx).trim()
+    const modelStr = value.slice(colonIdx + 1).trim()
+    const id = Number(idStr)
+    const out: { configId?: number; model?: string } = {}
+    if (Number.isFinite(id) && id > 0) out.configId = id
+    if (modelStr) out.model = modelStr
+    return out
+  }
+  // 纯数字字符串
+  const id = Number(value)
+  return Number.isFinite(id) && id > 0 ? { configId: id } : {}
+}
+
+/**
  * 检测 prompt 是否包含非英文字符
  */
 export function hasNonEnglishChars(text: string): boolean {
