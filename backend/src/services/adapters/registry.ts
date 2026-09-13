@@ -29,6 +29,9 @@ export const imageAdapters: Record<string, ImageProviderAdapter> = {
   ali: new AliImageAdapter(),
   agnes: new AgnesImageAdapter(),
   'nano-banana': new NanoBananaImageAdapter(),
+  // Grsai 与 nano-banana 共享 /v1/api/generate 端点(同 Grsai 服务商),
+  // gpt-image-2 / gpt-image-2.5 等模型只是 model 字段不同,复用 adapter。
+  grsai: new NanoBananaImageAdapter(),
   // Chatfire - 待确认 API 格式，暂用 OpenAI
   chatfire: new OpenAIImageAdapter(),
 }
