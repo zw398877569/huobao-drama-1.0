@@ -27,18 +27,23 @@ export function useConfigLoading(deps: Deps) {
 
   const voiceSelectOptions = computed(() => voiceProfiles.value.map(v => ({ label: `${v.label} · ${v.traits}`, value: v.id })))
 
-  const videoConfigSelectOptions = computed(() => videoConfigs.value.map(c => {
-    let modelName = ''
-    try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
-    const label = modelName ? `${modelName} (${c.provider})` : `${c.name} (${c.provider})`
-    return { label, value: c.id }
-  }))
+  const videoConfigSelectOptions = computed(() => videoConfigs.value
+    // 跳过停用配置：和 image 一致,避免选了之后被后端拒
+    .filter(c => c.is_active)
+    .map(c => {
+      let modelName = ''
+      try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
+      const label = modelName ? `${modelName} (${c.provider})` : `${c.name} (${c.provider})`
+      return { label, value: c.id }
+    }))
 
   function configLabel(config: any) {
     if (!config) return '未配置'
     let modelName = ''
     try { const m = JSON.parse(config.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = config.model || '' }
-    return modelName ? `${config.name} · ${modelName} (${config.provider})` : `${config.name} (${config.provider})`
+    // inactive 配置加后缀提示,免得选了之后被后端 getConfigById 拒掉还以为是别的问题
+    const suffix = config.is_active === false ? ' · 已停用' : ''
+    return modelName ? `${config.name} · ${modelName} (${config.provider})${suffix}` : `${config.name} (${config.provider})${suffix}`
   }
 
   const lockedImageConfigId = computed(() => ctx.episode.value?.image_config_id || ctx.episode.value?.imageConfigId || null)
@@ -57,6 +62,9 @@ export function useConfigLoading(deps: Deps) {
     if (!imageConfigs.value.length) return []
     const byProvider = new Map<string, Array<{ label: string; value: string }>>()
     for (const c of imageConfigs.value) {
+      // 跳过停用配置：避免选了之后请求被后端 getConfigById 拒掉
+      // 用户在设置页关掉的配置不应该出现在「制作 tab」模型选择弹窗里
+      if (!c.is_active) continue
       // 解析 model 字段：后端已返回数组，但兼容一下原始字符串情况
       let models: string[] = []
       if (Array.isArray(c.model)) {
