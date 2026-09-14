@@ -314,11 +314,22 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
     }),
     execute: async ({ storyboards }) => {
       const ts = now()
+      // 兜底 clamp duration 到 [4, 15] (MiniMax-H3 支持范围). Agent prompt 写了 5-15s
+      // 但 LLM 不一定听话, 之前见过输出 2/3/20 直接报 400. Adapter 层也有 clamp 但不
+      // 持久化, 这里直接 mutate 让 DB 落库就是规范的. 已有数据不会自动改, 需要重新拆解.
+      let durationClamped = 0
+      for (const sb of storyboards) {
+        if (sb.duration != null) {
+          const clamped = Math.max(4, Math.min(15, Math.floor(sb.duration)))
+          if (clamped !== sb.duration) { sb.duration = clamped; durationClamped++ }
+        }
+      }
       logTaskProgress('StoryboardTool', 'save-begin', {
         episodeId,
         dramaId,
         count: storyboards.length,
         shotNumbers: storyboards.map(sb => sb.shot_number).join(','),
+        durationClamped,
       })
       const existingStoryboardIds = db.select().from(schema.storyboards)
         .where(eq(schema.storyboards.episodeId, episodeId)).all()
@@ -431,6 +442,10 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       duration: z.number().optional(),
     }),
     execute: async ({ storyboard_id, ...fields }) => {
+      // 兜底 clamp duration (同 save_storyboards)
+      if (fields.duration != null) {
+        fields.duration = Math.max(4, Math.min(15, Math.floor(fields.duration)))
+      }
       const [storyboard] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboard_id)).all()
       if (!storyboard) return { error: `Storyboard ${storyboard_id} not found` }
       // 单镜头增量时同样兜底: dialogue 缺前缀用 script_content 补回
