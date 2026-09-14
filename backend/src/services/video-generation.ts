@@ -439,7 +439,7 @@ async function pollVideoTask(id: number, config: AIConfig, videoId: string, task
         })
         ;(globalThis as any).__lastPollStatus = result.status
       }
-      const pollResp = adapter.parsePollResponse(result)
+      const pollResp = await adapter.parsePollResponse(result)
 
       if (pollResp.status === 'completed' && pollResp.videoUrl) {
         logTaskSuccess('VideoTask', 'poll-complete', { id, taskId, videoUrl: pollResp.videoUrl })

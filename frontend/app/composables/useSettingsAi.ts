@@ -35,7 +35,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
 
   const providers = [
     'autodl-comfyui', 'nano-banana', 'agnes', 'ali', 'chatfire',
-    'gemini', 'grsai', 'minimax', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
+    'gemini', 'grsai', 'minimax', 'minimax-hailuo', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
   ]
   const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
 
@@ -61,7 +61,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
       grsai: { label: 'GPT 推荐', baseUrl: 'https://grsai.dakka.com.cn/v1', models: ['gpt-image-2'] },
     },
     video: {
-      'minimax-official': { label: 'MiniMax官方推荐', baseUrl: 'https://api.minimax.cn', models: ['MiniMax-H3'] },
+      'minimax-hailuo': { label: 'MiniMax Hailuo官方推荐', baseUrl: 'https://api.minimax.cn', models: ['MiniMax-Hailuo-2.3', 'MiniMax-Hailuo-02'] },
+      'minimax-official': { label: 'MiniMax H3官方推荐', baseUrl: 'https://api.minimax.cn', models: ['MiniMax-H3'] },
       volcengine: { label: '火宝视频', baseUrl: 'https://api.chatfire.site/volcengine', models: ['doubao-seedance-1-5-pro-251215'] },
       vidu: { label: 'Vidu 推荐', baseUrl: 'https://api.vidu.com', models: ['viduq3-turbo'] },
       ali: { label: '阿里推荐', baseUrl: 'https://dashscope.aliyuncs.com', models: ['wan2.6-i2v-flash'] },
@@ -108,6 +109,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     'nano-banana': '/v1',
     grsai: '/v1',
     'minimax-official': '',
+    'minimax-hailuo': '',
   }
 
   const endpointHint = computed(() => {

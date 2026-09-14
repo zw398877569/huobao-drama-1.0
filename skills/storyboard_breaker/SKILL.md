@@ -90,7 +90,8 @@ description: 分镜拆解专业规范
 
 | Provider | Adapter 文件 | duration 范围 | resolution 选项 | ratio 必填性 | 备注 |
 |---|---|---|---|---|---|
-| **MiniMax-H3 (官方 V2)** | `minimax-official-video.ts` | **4-15s** | `480P` / `768P` / `2K` (默认 `768P`) | t2va 必填且非 adaptive; i2va/r2va 可填 adaptive | 当前主用 |
+| **MiniMax Hailuo V1** | `minimax-hailuo-video.ts` | **6 / 10s** (snap 不到 6/10 就近) | `512P` / `768P` (默认) / `1080P` | T2V/I2V/FL2V 都有, **不支持 multiple 多图参考** (fallback 选首张) | 用户 token plan 当前支持的 video gen; 成功响应只给 file_id, 要再调 /v1/files/retrieve 拿下载 URL (parsePollResponse 内部做) |
+| **MiniMax-H3 (官方 V2)** | `minimax-official-video.ts` | **4-15s** | `480P` / `768P` / `2K` (默认 `768P`) | t2va 必填且非 adaptive; i2va/r2va 可填 adaptive | 当前也保留 (后续可能用到) |
 | **autodl-comfyui H3 v5** | `autodl-comfyui-workflow.ts` | **1-10s** | `480p竖/横` / `768p竖/横` / `1080p横` | 不接 ratio, 接 resolution | 多图参考 ≤ 9 |
 | **autodl-comfyui H3 v5_15s** | 同上 | **1-15s** | `480p竖/横` / `768p竖/横` (无 1080) | 同上 | |
 | **autodl-comfyui H3 zm_u24** | 同上 | **1-15s** | `480p竖/横` / `768p竖/横` / `480p(1:1)` / `768p(1:1)` | 不接 ratio, 接 resolution | 升级画质 |
