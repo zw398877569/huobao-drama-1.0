@@ -591,7 +591,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   ✗ 禁止用 cinematic / dramatic / beautiful / epic / masterpiece / stunning / breathtaking 等抽象形容词,用具体光线/色调/构图/动作描写代替
   ✗ 禁止 video_prompt 出现"切黑/转场/下一镜"等后期拼接指令(转场由拼接阶段负责)
   ✗ 禁止把 action + result + dialogue 混在一句话(分开填三个字段)
-  ✗ 禁止 duration 超过 15 秒或低于 5 秒
+  ✗ 禁止 duration 超过 15 秒或低于 5 秒 (推荐区间, 实际硬约束是 4-15 — 落库前 storyboard-tools 会 clamp 到这个范围, 低于 4 自动调到 4, 高于 15 自动调到 15)
 
   已有 existing storyboards 时:仅在用户明确要求增量修改时参考;默认按当前剧本重新完整生成并保存整组分镜。
 

@@ -7,7 +7,17 @@ description: 分镜拆解专业规范
 
 ## 拆解原则
 
-每个镜头聚焦**单一动作**，描述要详尽具体。每个镜头时长 10-15 秒。
+每个镜头聚焦**单一动作**，描述要详尽具体。每个镜头时长推荐 **5-10 秒**（节奏紧凑、镜头信息密度合适）。
+
+## 硬约束（数据层 + API 都会拒）
+
+- `duration` 单位是**秒**（integer）
+- **合法范围: 4-15 秒**（MiniMax-H3 官方 API 限制，超出会 400）
+  - 落库前会强制 clamp 到这个范围：`< 4` → 4，`> 15` → 15
+  - 所以你 `save_storyboards` / `update_storyboard` 时即便给 2 或 20，DB 落库是 4 或 15
+- 推荐区间 **5-10 秒** 是节奏建议，不是硬约束
+- 即使要短镜头也别低于 4 秒（MiniMax-H3 不支持）；要长镜头拆成两个 15 秒以内的镜头
+- 同集总时长 = Σ duration 秒；不要塞超过 60s 的内容到一集
 
 ## 镜头要素
 
@@ -73,4 +83,14 @@ description: 分镜拆解专业规范
 - `image_prompt` 要突出单帧构图、角色外观、环境和光线
 - `video_prompt` 要突出时间推进、动作变化、镜头语言
 - `bgm_prompt` 和 `sound_effect` 用简洁短语即可，但不能空泛到只有“紧张”“悲伤”
+
+## duration 字段历史 (避免再踩坑)
+
+- 2026-09-14 之前: skill 只说「10-15 秒」, agent prompt 说「5-15s」, 但没硬约束, LLM 经常输出 2/3/20
+- 2026-09-14 commit `c5b1f1e`:
+  - adapter `minimax-official-video.ts` 加 `clamp(4, 15)` (请求时)
+  - `storyboard-tools.ts` 的 `save_storyboards` / `update_storyboard` 入参 mutate clamp (落库前)
+  - 即便 LLM 越界输出, DB 落库和 API 请求都是合规的
+  - skill 文档同步更新, 把硬约束写明, 避免 agent 不参考本 skill 又再越界
+
 - 若存在旁白，统一写入 `dialogue`，格式为 `旁白：内容`
