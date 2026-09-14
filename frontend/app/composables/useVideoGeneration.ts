@@ -38,7 +38,7 @@ export function useVideoGeneration(deps: Deps) {
     return failedComposeMessages.value[id]
   }
 
-  async function genVid(sb: any) {
+  async function genVid(sb: any, configId?: number | string | null) {
     let prompt = sb.video_prompt || sb.videoPrompt || ''
     // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
     const first = getFirstFrame(sb)
@@ -47,12 +47,14 @@ export function useVideoGeneration(deps: Deps) {
     if (first && prompt) {
       prompt += '；保持首帧画面构图一致，镜头运动从首帧状态开始'
     }
-    const params = {
+    const params: Record<string, any> = {
       storyboard_id: sb.id,
       drama_id: ctx.dramaId,
       prompt,
       duration: Number(sb.duration || 5),
     }
+    // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
+    if (configId != null) params.config_id = configId
     if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
     else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
     else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
@@ -112,11 +114,11 @@ export function useVideoGeneration(deps: Deps) {
     toast.error('视频生成超时')
   }
 
-  function batchVideos() {
+  function batchVideos(configId?: number | string | null) {
     const pendingIds = ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
     pendingIds.forEach(id => {
       const sb = ctx.sbs.value.find(item => item.id === id)
-      if (sb) genVid(sb)
+      if (sb) genVid(sb, configId)
     })
     if (pendingIds.length) {
       pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]

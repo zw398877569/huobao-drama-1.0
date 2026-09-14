@@ -1494,8 +1494,13 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
+              <button class="btn btn-sm model-btn" @click="videoModelPopoverOpen = !videoModelPopoverOpen" :title="'切换视频模型: ' + currentVideoModelLabel">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                {{ currentVideoModelLabel }}
+              </button>
+              <span v-if="videoConfigIds['videos']" class="tag" style="font-size:10px">自定义</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchVideos">
+                <button class="btn btn-sm" @click="batchVideos(videoConfigId)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
@@ -1534,7 +1539,7 @@
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb)">
+                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
@@ -1660,7 +1665,7 @@
         </div>
       </div>
 
-      <!-- Model selector popover — 图片模型(image 用),视频模型走 video 子 tab 自己的 ModelSelector -->
+      <!-- 图片模型选择弹窗 (chars/scenes/props 子 tab 共享) -->
       <ModelSelector
         :show="!!modelPopoverTab"
         title="选择图片模型"
@@ -1668,6 +1673,17 @@
         :model-value="modelPopoverTab ? (imageConfigIds[modelPopoverTab] ?? null) : null"
         @update:model-value="(v) => { if (modelPopoverTab) imageConfigIds[modelPopoverTab] = v }"
         @close="closeModelPopover"
+      />
+
+      <!-- 视频模型选择弹窗 (videos 子 tab) -->
+      <ModelSelector
+        :show="videoModelPopoverOpen"
+        title="选择视频模型"
+        :options="videoConfigSelectOptions"
+        :model-value="videoConfigIds['videos'] ?? null"
+        empty-text="暂无视频模型配置，请先在设置中添加"
+        @update:model-value="(v) => videoConfigIds['videos'] = v"
+        @close="closeVideoModelPopover"
       />
 
       <div v-if="showBottomBubble" class="step-bubble">
@@ -1907,6 +1923,7 @@ const {
   videoConfigLabel: lockedVideoConfigLabel.value,
   positiveShotTokens,
   imageConfigId: computed(() => imageConfigIds.value[prodTab.value] ?? null),
+  videoConfigId: computed(() => videoConfigIds.value['videos'] ?? null),
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)
@@ -2009,7 +2026,13 @@ const {
 const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
 // 制作 tab 临时覆盖的图片配置 id（null = 用 episode 锁定），key 为 prodTab 值
-const imageConfigIds = ref<Record<string, number | null>>({})
+// 制作 tab 临时覆盖的图片配置 value (null = 用 episode 锁定), key 为 prodTab 值
+// value 格式: "<configId>:<modelName>" 复合格式 (Phase 2a 后多模型展开)
+const imageConfigIds = ref<Record<string, string | null>>({})
+// 制作 tab 临时覆盖的视频配置 value (key 为 'videos'), 格式同上
+const videoConfigIds = ref<Record<string, string | null>>({})
+// 视频子 tab 的 ModelSelector 状态 (null = 关闭), 与 modelPopoverTab 独立
+const videoModelPopoverOpen = ref(false)
 // 模型选择器弹窗：哪个 tab 打开了选择器（null = 关闭）
 const modelPopoverTab = ref<string | null>(null)
 
@@ -2035,9 +2058,37 @@ const currentModelLabel = computed(() => {
   return modelStr || cfg.name
 })
 
-// 关闭模型选择器
+// 关闭图片模型选择器
 function closeModelPopover() {
   modelPopoverTab.value = null
+}
+
+// 视频子 tab 当前选中模型的显示标签 (解析 "<id>:<model>" 复合格式)
+const currentVideoModelLabel = computed(() => {
+  const stored = videoConfigIds.value['videos']
+  if (!stored) return lockedVideoConfigLabel.value || '未配置'
+  const configId = parseModelValue(stored)
+  if (!configId) return '未配置'
+  const cfg = videoConfigs.value.find(c => c.id === configId)
+  if (!cfg) return '未配置'
+  // 解析 model 字段
+  let models: string[] = []
+  if (Array.isArray(cfg.model)) {
+    models = cfg.model.filter((m: any) => typeof m === 'string')
+  } else if (typeof cfg.model === 'string' && cfg.model) {
+    try {
+      const m = JSON.parse(cfg.model)
+      models = Array.isArray(m) ? m.filter((x: any) => typeof x === 'string') : [cfg.model]
+    } catch { models = [cfg.model] }
+  }
+  // 从 stored 的 "<id>:<model>" 取 model 部分作为 label (用户具体选的那个)
+  const [, modelName] = stored.split(':')
+  return modelName || models[0] || cfg.name
+})
+
+// 关闭视频模型选择器
+function closeVideoModelPopover() {
+  videoModelPopoverOpen.value = false
 }
 
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行

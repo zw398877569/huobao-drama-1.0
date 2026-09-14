@@ -27,15 +27,39 @@ export function useConfigLoading(deps: Deps) {
 
   const voiceSelectOptions = computed(() => voiceProfiles.value.map(v => ({ label: `${v.label} · ${v.traits}`, value: v.id })))
 
-  const videoConfigSelectOptions = computed(() => videoConfigs.value
-    // 跳过停用配置：和 image 一致,避免选了之后被后端拒
-    .filter(c => c.is_active)
-    .map(c => {
-      let modelName = ''
-      try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
-      const label = modelName ? `${modelName} (${c.provider})` : `${c.name} (${c.provider})`
-      return { label, value: c.id }
-    }))
+  // video config 选择器选项: 按 provider 分组, 展开 model 字段为独立选项
+  // 每个选项的 value 是 "configId:modelName" 格式 (与 image 一致), 用于精确匹配
+  // 2D group 结构为将来 ComfyUI workflow 分组预留 (Q3=y)
+  const videoConfigSelectOptions = computed(() => {
+    if (!videoConfigs.value.length) return []
+    const byProvider = new Map<string, Array<{ label: string; value: string }>>()
+    for (const c of videoConfigs.value) {
+      // 跳过停用配置: 和 image 一致, 避免选了之后被后端 getConfigById 拒
+      if (!c.is_active) continue
+      // 解析 model 字段: 后端已返回数组, 但兼容一下原始字符串情况
+      let models: string[] = []
+      if (Array.isArray(c.model)) {
+        models = c.model.filter((m: any) => typeof m === 'string' && m.trim())
+      } else if (typeof c.model === 'string' && c.model) {
+        try {
+          const parsed = JSON.parse(c.model)
+          models = Array.isArray(parsed) ? parsed.filter((m: any) => typeof m === 'string') : [c.model]
+        } catch {
+          models = [c.model]
+        }
+      }
+      if (!models.length) continue
+      // 每个模型生成独立选项, value 为 "configId:modelName"
+      const existing = byProvider.get(c.provider) || []
+      const items = models.map(m => ({ label: m, value: `${c.id}:${m}` }))
+      byProvider.set(c.provider, [...existing, ...items])
+    }
+    const groups: Array<{ group: string; items: Array<{ label: string; value: string }> }> = []
+    for (const [provider, items] of byProvider.entries()) {
+      groups.push({ group: provider, items })
+    }
+    return groups
+  })
 
   function configLabel(config: any) {
     if (!config) return '未配置'
