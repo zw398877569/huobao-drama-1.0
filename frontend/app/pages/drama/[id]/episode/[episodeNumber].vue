@@ -2598,8 +2598,8 @@ onMounted(() => { refresh() })
 .refresh-btn:hover { background: #fff; color: var(--text-0); }
 
 /* ===== Main Content ===== */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; border-radius: 30px; }
-.content-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0; }
+.main { flex: 0 1 auto; display: flex; flex-direction: column; overflow: auto; min-width: 0; min-height: 0; border-radius: 30px; }
+.content-panel { flex: 0 1 auto; display: flex; flex-direction: column; overflow: visible; position: relative; min-height: 0; }
 .stage-subnav {
   display: flex;
   align-items: center;
