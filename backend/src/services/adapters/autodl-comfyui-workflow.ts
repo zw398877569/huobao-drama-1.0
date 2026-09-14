@@ -33,6 +33,25 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   /** H3 多图参考生视频 15 秒版 (Ref2V) — duration 1-15s, 最多 9 张参考图 */
   static readonly WORKFLOW_REF2V_15S = 'minimax_h3_lightx2v_v5_15s'
 
+  /** Ref2V 升级画质版 (zm_u24) — duration 1-15s, 多图参考 + 可选音频 */
+  static readonly WORKFLOW_REF2V_QUALITY = 'minimax_h3_zm_u24'
+  /** Ref2V 高速版 (zm_u08) — duration 1-15s, 多图参考 + 可选音频 */
+  static readonly WORKFLOW_REF2V_SPEED = 'minimax_h3_zm_u08'
+  /** Ref2V 多图+多音频 (image_audio_to_video_v2) — duration 1-10s, 支持 1080p */
+  static readonly WORKFLOW_REF2V_AUDIO = 'minimax_h3_image_audio_to_video_v2'
+  /** Ref2V 多图+多音频 15s 版 — duration 1-15s, 仅 480p/768p */
+  static readonly WORKFLOW_REF2V_AUDIO_15S = 'minimax_h3_image_audio_to_video_v2_15s'
+
+  /** 所有 Ref2V 变体 — record.model 显式选择时识别 */
+  private static readonly REF2V_VARIANTS = [
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+  ]
+
   /** Ref2V 1-10s 用 v5; 11-15s 自动切到 v5_15s */
   private static readonly REF2V_MAX_SHORT_S = 10
 
@@ -129,7 +148,19 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
     let firstFrame: string | undefined
     let lastFrame: string | undefined
 
-    if (mode === 'multiple' && refCount >= 1) {
+    // 用户显式选了具体 workflow (通过 record.model,前端 model 弹窗选了 zm_u24/u08/audio 等) 时,
+    // 强制走 Ref2V body 构造。audio 字段暂未接入(后续 Phase 3b 加 audioUrls schema 再说)。
+    // 仅当 mode 是 multiple/single 时显式选择才生效 — FL2V/T2V 模式不接 Ref2V 变体
+    const explicitModel = record.model
+    const isExplicitRef2V =
+      !!explicitModel && (AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(explicitModel)
+
+    if (isExplicitRef2V && (mode === 'multiple' || mode === 'single')) {
+      workflowId = explicitModel!
+      refs = mode === 'multiple'
+        ? this.parseRefImages(record.referenceImageUrls)
+        : [record.imageUrl!]
+    } else if (mode === 'multiple' && refCount >= 1) {
       // 多图参考: 走 Ref2V 工作流 (按 duration 自动选 v5 / v5_15s)
       workflowId = this.pickRef2VWorkflowId(record.duration)
       refs = this.parseRefImages(record.referenceImageUrls)
@@ -150,13 +181,23 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
 
     const supports1080p =
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ||
+      // image_audio_to_video_v2 文档支持 1080p横竖
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO
     const body: any = {
       prompt: record.prompt || '',
     }
 
-    // duration 上限看具体路由: T2V/FL2V/Ref2V(v5) 1-10; Ref2V(v5_15s) 1-15
-    const durationCap = workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ? 15 : 10
+    // duration 上限看具体路由:
+    //   T2V/FL2V/Ref2V(v5)/image_audio_to_video_v2 = 1-10
+    //   Ref2V(v5_15s)/zm_u24/zm_u08/image_audio_to_video_v2_15s = 1-15
+    const is15s = (
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S
+    )
+    const durationCap = is15s ? 15 : 10
     if (record.duration) {
       body.duration = Math.max(1, Math.min(durationCap, Math.floor(record.duration)))
     }
