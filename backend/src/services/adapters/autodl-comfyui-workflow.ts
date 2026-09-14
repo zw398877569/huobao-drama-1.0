@@ -20,6 +20,7 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+import { logTaskWarn } from '../../utils/task-logger.js'
 
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
@@ -155,7 +156,15 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
     const isExplicitRef2V =
       !!explicitModel && (AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(explicitModel)
 
-    if (isExplicitRef2V && (mode === 'multiple' || mode === 'single')) {
+    // 用户显式选了 Ref2V 变体但 mode 不匹配 (first_last / none) 时, 会被下面逻辑强行
+    // fallback 到 FL2V/T2V — 这是因为新加的 zm_u24/u08/audio 等 Ref2V 变体都不接
+    // first_frame/last_frame 输入, 没图时 Ref2V API 也没法调。
+    // 这种 fallback 是故意的 (保持 batch 流不中断), 但要 log 一条 model-mode-mismatch
+    // 方便排查「为什么我选了 zm_u24 但实际跑了 FL2V」。
+    let modelModeMismatch: 'first_last' | 'no_reference_images' | null = null
+    const userPickedRef2V = isExplicitRef2V
+
+    if (userPickedRef2V && (mode === 'multiple' || mode === 'single')) {
       workflowId = explicitModel!
       refs = mode === 'multiple'
         ? this.parseRefImages(record.referenceImageUrls)
@@ -174,9 +183,23 @@ export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
       workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V
       firstFrame = record.firstFrameUrl || undefined
       lastFrame = record.lastFrameUrl || undefined
+      if (userPickedRef2V) modelModeMismatch = 'first_last'
     } else {
       // 其他: 文生视频
       workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V
+      if (userPickedRef2V) modelModeMismatch = 'no_reference_images'
+    }
+
+    if (modelModeMismatch) {
+      // 用户在 model 弹窗选了 Ref2V 变体 (zm_u24/u08/audio 等), 但 storyboard 没有
+      // 相应的参考模式 — adapter 静默 fallback 到 FL2V/T2V。记录原因便于排查。
+      logTaskWarn('VideoTask', 'model-mode-mismatch', {
+        videoGenId: record.id,
+        requestedModel: explicitModel,
+        actualWorkflow: workflowId,
+        reason: modelModeMismatch,
+        referenceMode: mode,
+      })
     }
 
     const supports1080p =
