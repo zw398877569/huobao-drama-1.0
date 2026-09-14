@@ -2453,6 +2453,7 @@ onMounted(() => { refresh() })
   gap: 10px;
   min-height: 0;
   flex: 1;
+  align-items: start;
 }
 
 /* ===== Sidebar ===== */
