@@ -15,10 +15,11 @@ app.post('/', async (c) => {
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
   try {
-    // 防御性：兼容 "<configId>:<modelName>" 复合格式（多模型选择器）；目前前端 genShotFrame 没传 config_id，但保留解析以防未来改
+    // 防御性：兼容 "<configId>:<modelName>" 复合格式（多模型选择器）
     const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body.config_id)
+    // 优先级: 用户弹窗显式选的 > episode 锁定的 image_config_id > getActiveConfig fallback
     let configId: number | undefined = explicitConfigId
-    if (body.storyboard_id) {
+    if (configId === undefined && body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
         const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()

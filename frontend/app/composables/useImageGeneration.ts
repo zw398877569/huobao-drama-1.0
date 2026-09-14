@@ -394,13 +394,15 @@ export function useImageGeneration(deps: Deps) {
     const key = framePendingKey(sb.id, frameType)
     try {
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
-      const body = {
+      const body: Record<string, any> = {
         storyboard_id: sb.id,
         drama_id: ctx.dramaId,
         prompt,
         frame_type: frameType,
         reference_images: referenceImages.length ? referenceImages : undefined,
       }
+      // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
+      if (imageConfigId?.value != null) body.config_id = imageConfigId.value
       await imageAPI.generate(body)
       toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
       await refresh()
