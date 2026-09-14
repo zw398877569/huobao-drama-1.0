@@ -16,8 +16,10 @@ app.post('/', async (c) => {
   try {
     // 防御性：兼容 "<configId>:<modelName>" 复合格式（多模型选择器）；目前前端用纯数字 ID，但保留解析以防未来改
     const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body.config_id)
+    // 优先级: 用户在视频模型弹窗显式选的 > episode 锁定的 video_config_id > getActiveConfig fallback
+    // (前端 Phase 2 之后, 弹窗选择是用户当前明确的意图, 不应被 episode 旧锁定覆盖)
     let configId: number | undefined = explicitConfigId
-    if (body.storyboard_id) {
+    if (configId === undefined && body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
         const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
