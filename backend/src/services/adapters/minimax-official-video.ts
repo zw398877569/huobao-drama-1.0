@@ -11,7 +11,8 @@
  * - 端点前缀 /v2 不是 /v1
  * - response 用 { task: { id, status, content: { url } } } 包装, 不是顶层字段
  * - content 数组 role 支持 first_frame / last_frame / reference_image (i2va/FL2V/r2va 互斥)
- * - duration 与 ratio 是顶层字段, 不是塞进 prompt 文本
+ * - resolution 必填 (enum: 480P / 768P / 2K), ratio 可选 (default adaptive)
+ * - duration 必填 (4-15 秒)
  */
 import type {
   VideoProviderAdapter,
@@ -25,6 +26,11 @@ import { joinProviderUrl } from './url'
 
 export class MiniMaxOfficialVideoAdapter implements VideoProviderAdapter {
   readonly provider = 'minimax-official'
+
+  /** 默认分辨率 — MiniMax-H3 支持 768P / 2K, 取 768P 控制成本 (后续可挂 record.resolution 让用户挑) */
+  private static readonly DEFAULT_RESOLUTION = '768P'
+  /** ratio 在 t2va 必填且不能是 adaptive, i2va/r2va 可选 (api 内部按 adaptive 处理) */
+  private static readonly VALID_RATIOS = new Set(['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'])
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const baseUrl = config.baseUrl || 'https://api.minimax.cn'
@@ -60,11 +66,18 @@ export class MiniMaxOfficialVideoAdapter implements VideoProviderAdapter {
     }
     // mode === 'none' (或未识别): 只发 text (T2V)
 
+    // ratio: t2va (无图) 必填且不能是 adaptive, i2va/r2va (有 first_frame/last_frame) 走 adaptive
+    const isImageBased = record.referenceMode === 'single' || record.referenceMode === 'first_last' ||
+      (record.referenceMode === 'multiple' && !!record.referenceImageUrls)
+    const ratio = isImageBased ? 'adaptive' : (record.aspectRatio && record.aspectRatio !== 'adaptive' ? record.aspectRatio : '16:9')
+
     const body: any = {
       model: record.model || config.model || 'MiniMax-H3',
       content,
+      // resolution 必填, enum: 480P / 768P / 2K; MiniMax-H3 支持 768P/2K, 默认 768P
+      resolution: '768P',
       duration: record.duration || 5,
-      ratio: record.aspectRatio || '16:9',
+      ratio,
     }
 
     return {
