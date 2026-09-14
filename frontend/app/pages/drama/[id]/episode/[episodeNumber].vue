@@ -3796,9 +3796,16 @@ onMounted(() => { refresh() })
 .prod-dots { display: flex; align-items: center; gap: 4px; margin-top: 5px; color: var(--text-3); }
 .prod-error {
   margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.45;
+  padding: 4px 6px;
+  background: rgba(220, 38, 38, 0.06);
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 1.4;
   color: var(--error);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 4.5em;       /* 3 行封顶 */
+  overflow-y: auto;
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }

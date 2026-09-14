@@ -71,12 +71,17 @@ export class MiniMaxOfficialVideoAdapter implements VideoProviderAdapter {
       (record.referenceMode === 'multiple' && !!record.referenceImageUrls)
     const ratio = isImageBased ? 'adaptive' : (record.aspectRatio && record.aspectRatio !== 'adaptive' ? record.aspectRatio : '16:9')
 
+    // duration 必填, MiniMax-H3 仅支持 4-15 秒, 缺省 5, 越界 clamp 到合法范围
+    // (用户 storyboard 可能填 2/3/20 等, 不 clamp 直接报 400)
+    const requestedDuration = record.duration || 5
+    const duration = Math.max(4, Math.min(15, Math.floor(requestedDuration)))
+
     const body: any = {
       model: record.model || config.model || 'MiniMax-H3',
       content,
       // resolution 必填, enum: 480P / 768P / 2K; MiniMax-H3 支持 768P/2K, 默认 768P
       resolution: '768P',
-      duration: record.duration || 5,
+      duration,
       ratio,
     }
 
