@@ -98,8 +98,15 @@ export function getAudioConfigById(id?: number | null): AIConfig {
 export function getConfigById(id: number): AIConfig | null {
   const [row] = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.id, id)).all()
-  if (!row || !row.isActive) {
-    logTaskWarn('AIConfig', 'config-by-id-missing', { configId: id })
+  if (!row) {
+    // ID 根本不存在 (数据库没有这行) — 与「存在但被关掉」是两种不同场景,分开记便于排查
+    logTaskWarn('AIConfig', 'config-not-found', { configId: id })
+    return null
+  }
+  if (!row.isActive) {
+    // 行存在但 isActive=false — 用户在设置页关掉的配置被代码或前端选了。
+    // 记 provider 方便定位是哪个服务的配置被关掉。
+    logTaskWarn('AIConfig', 'config-inactive', { configId: id, provider: row.provider })
     return null
   }
   const models = row.model ? JSON.parse(row.model) : []
