@@ -1909,6 +1909,11 @@ const positiveShotTokens = computed(() =>
 )
 onMounted(() => { loadStylesForShot() })
 
+// 视频/图片 config 显式 override 的 computed — 顶层 const, 模板 click handler 可访问
+// (放到 useImageGeneration deps 里的话只在 composable 闭包内, template scope 拿不到 → click 时传 undefined → config_id 漏)
+const imageConfigId = computed(() => imageConfigIds.value[prodTab.value] ?? null)
+const videoConfigId = computed(() => videoConfigIds.value['videos'] ?? null)
+
 // Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
 const {
   pendingCharImageIds, pendingSceneImageIds, pendingPropImageIds, pendingShotFrameKeys,
@@ -1926,8 +1931,9 @@ const {
   sleep,
   videoConfigLabel: lockedVideoConfigLabel.value,
   positiveShotTokens,
-  imageConfigId: computed(() => imageConfigIds.value[prodTab.value] ?? null),
-  videoConfigId: computed(() => videoConfigIds.value['videos'] ?? null),
+  // imageConfigId / videoConfigId 在 setup 顶层定义 (见下面), 模板直接访问
+  imageConfigIdRef: imageConfigId,
+  videoConfigIdRef: videoConfigId,
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)
