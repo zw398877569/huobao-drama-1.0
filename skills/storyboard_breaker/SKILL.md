@@ -84,6 +84,33 @@ description: 分镜拆解专业规范
 - `video_prompt` 要突出时间推进、动作变化、镜头语言
 - `bgm_prompt` 和 `sound_effect` 用简洁短语即可，但不能空泛到只有“紧张”“悲伤”
 
+## 全 provider 时长/分辨率/比例速查表
+
+下面是从 `backend/src/services/adapters/*-video.ts` 源码 + API 文档汇总的硬约束。**这是各 provider 实际能接受的取值范围,不是建议**。落库前 storyboard-tools 会做兜底 clamp。
+
+| Provider | Adapter 文件 | duration 范围 | resolution 选项 | ratio 必填性 | 备注 |
+|---|---|---|---|---|---|
+| **MiniMax-H3 (官方 V2)** | `minimax-official-video.ts` | **4-15s** | `480P` / `768P` / `2K` (默认 `768P`) | t2va 必填且非 adaptive; i2va/r2va 可填 adaptive | 当前主用 |
+| **autodl-comfyui H3 v5** | `autodl-comfyui-workflow.ts` | **1-10s** | `480p竖/横` / `768p竖/横` / `1080p横` | 不接 ratio, 接 resolution | 多图参考 ≤ 9 |
+| **autodl-comfyui H3 v5_15s** | 同上 | **1-15s** | `480p竖/横` / `768p竖/横` (无 1080) | 同上 | |
+| **autodl-comfyui H3 zm_u24** | 同上 | **1-15s** | `480p竖/横` / `768p竖/横` / `480p(1:1)` / `768p(1:1)` | 不接 ratio, 接 resolution | 升级画质 |
+| **autodl-comfyui H3 zm_u08** | 同上 | **1-15s** | 同上 | 同上 | 高速版 |
+| **autodl-comfyui H3 image_audio_v2** | 同上 | **1-10s** | `480p竖/横` / `768p竖/横` / `1080p竖/横` | 不接 | 多图+多音频 |
+| **autodl-comfyui H3 image_audio_v2_15s** | 同上 | **1-15s** | `480p竖/横` / `768p竖/横` | 不接 | 多图+多音频 15s 版 |
+| **阿里 wan2.6-i2v-flash** | `ali-video.ts` | **5-15s** | `720P` / `1080P` (按 ratio 自动) | 9:16 → 720P; 其它 → 1080P | 当前推荐 preset |
+| **volcengine (doubao-seedance)** | `volcengine-video.ts` | **4-12s** | unknown | ratio 必填 | 已有内部 clamp |
+| **minimax-video (chatfire 代理)** | `minimax-video.ts` | **4-10s** (估算) | unknown | ratio 写进 prompt | 走 chatfire 代理到 MiniMax V1, 实际范围依赖 chatfire 实现 |
+| **Agnes** | `agnes-video.ts` | 帧数 `duration*24` ≤ 441 (≈18s) | 720P | ratio 9:16 / 16:9 二选一 | 走帧数, 24fps 换算 |
+| **Vidu** | `vidu-video.ts` | unknown | unknown | unknown | 待补 |
+| **MiniMax-H3-Max (极速版)** | 同 official | **5-15s** | `480P` / `768P` (无 2K) | 同 official | 不支持 2K, 不支持多模态参考 |
+| **T2V / 文本生视频** | 全部 | 走上面 provider 对应行 | 同上 | ratio 必填且非 adaptive | 没有 first_frame / last_frame 时 mode 走 none |
+
+**怎么用**:
+1. 拆镜时 `duration` 写到 4-15 之间即可, 落到 5-10 是最稳的
+2. storyboard-tools 自动 clamp 超界值, adapter 也再保一道
+3. 切换 provider 不会破坏数据 (因为 storyboard.duration 在表里, 切换只影响请求字段)
+4. ratio / resolution 字段由用户在生成时按当前选中的 model 决定, 不影响 storyboard 数据
+
 ## duration 字段历史 (避免再踩坑)
 
 - 2026-09-14 之前: skill 只说「10-15 秒」, agent prompt 说「5-15s」, 但没硬约束, LLM 经常输出 2/3/20

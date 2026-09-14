@@ -17,7 +17,10 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     let promptText = record.prompt || ''
-    promptText += `  --ratio ${record.aspectRatio || '16:9'}  --dur ${record.duration || 5}`
+    // chatfire 代理的 MiniMax V1 API 实际范围不清楚, 用 4-10 兜底 (最常见的 MiniMax v1 范围).
+    // 落库前 storyboard-tools 已 clamp 到 4-15, 这里再保一道防止上游没配 clamp.
+    const duration = Math.max(4, Math.min(10, Math.floor(record.duration || 5)))
+    promptText += `  --ratio ${record.aspectRatio || '16:9'}  --dur ${duration}`
 
     const content: any[] = [{ type: 'text', text: promptText }]
 

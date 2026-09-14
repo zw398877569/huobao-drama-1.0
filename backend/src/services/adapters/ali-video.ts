@@ -30,7 +30,9 @@ export class AliVideoAdapter implements VideoProviderAdapter {
       },
       parameters: {
         resolution: this.normalizeResolution(record.aspectRatio ?? '16:9'),
-        duration: record.duration || 5,
+        // 阿里 wan2.6-i2v-flash 等支持 5-15 秒. 落库前 storyboard-tools 已 clamp 到 4-15,
+        // 这里再保一道防止上游没配 clamp (例如 旧数据 / 直调 API). 整数.
+        duration: Math.max(5, Math.min(15, Math.floor(record.duration || 5))),
         watermark: false,
         seed: Math.floor(Math.random() * 2147483647),
       },
