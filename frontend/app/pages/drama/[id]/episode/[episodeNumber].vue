@@ -2452,7 +2452,7 @@ onMounted(() => { refresh() })
   grid-template-columns: 244px minmax(0, 1fr);
   gap: 10px;
   min-height: 0;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: start;
 }
 
