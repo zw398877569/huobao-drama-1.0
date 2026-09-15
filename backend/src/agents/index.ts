@@ -941,7 +941,13 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
    - 轴1【剧情目的】：每镜选 1 个功能(交代/情绪/悬念/紧张/反转/线索)
    - 轴2【情绪强度】：情绪越强景别越近
    - 轴3【节奏控制】：动静结合，关键处停顿
-   - 轴4【时长】：远景 3-5s / 中景 3-4s / 近景 2-3s / 特写 1-2s
+   - 轴4【时长】（按 scene 密度决定,不是按景别）：
+      本镜所属 scene 的 intention.shotDensity 决定 duration 区间:
+        low (铺垫/余韵/悬念) → 10-15s,一镜讲清空间+情绪,适合开场/转场/留白
+        medium (揭露/对峙) → 5-8s,反应镜头 + 关键信息,留够节奏但不要冗长
+        high (反转/高潮/情感爆发) → 3-5s,快切密集,多角度冲击,情绪要压缩
+      每镜自检:duration 必须落在本 scene 的 recommendedDuration.min/max 区间内,允许微调但不超界
+      fallback:scene.intention.shotDensity 缺失 → 默认 medium (5-10s)
 3. 输出 shot_plan（只含结构字段，不含 prompt）
 4. 调 generate_shot_prompts 把结构字段传给 code 侧生成完整 17 字段并保存
 
@@ -950,7 +956,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - 禁止凭空创造新 scene_id，只从 read_storyboard_context 返回的 scenes 中选
 - 禁止 character_ids 引用未返回的角色
-- 禁止 duration > 15s 或 < 5s
+- 禁止 duration 超 scene 推荐区间 (low:10-15 / medium:5-8 / high:3-5)。code 端会按密度 clamp,但尽量一次到位避免被压
 - 场景开头第一镜必须是全景(交代地点)
 - 同一场景内遵循"全景→中景→近景"顺序
 - 输出 shot_plan 必须是合法 JSON 数组，不要包裹其他文字
@@ -967,7 +973,8 @@ shot_plan 字段说明
   movement (string) — 运镜(固定/推镜/拉镜等)
   location (string) — 地点
   time (string) — 时间
-  duration (number) — 时长(秒)
+  duration (number) — 时长(秒)。本镜 scene 的 intention.shotDensity 决定区间:
+    low → 10-15, medium → 5-8, high → 3-5。超界 code 端按密度区间 clamp 后入库,再叠 [4,15] 安全网
   action (string) — 动作描述
   dialogue (string) — 对白
   description (string) — 画面描述

@@ -219,6 +219,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
               visualStrategy: intentionResult.visualStrategy,
               cameraSpeed: template.cameraSpeed || '',
               shortDramaTips: template.shortDramaTips || '',
+              shotDensity: template.shotDensity,
+              recommendedDuration: template.recommendedDuration,
             };
 
             return {
@@ -235,6 +237,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
               visualStrategy: '请手动设定或稍后分析',
               cameraSpeed: fallbackTemplate.cameraSpeed || '',
               shortDramaTips: fallbackTemplate.shortDramaTips || '',
+              shotDensity: fallbackTemplate.shotDensity,
+              recommendedDuration: fallbackTemplate.recommendedDuration,
             };
             return {
               ...scene,
@@ -719,6 +723,17 @@ export async function runGenerateShotPrompts(params: {
     validateStoryboardBindings(episodeId, sp.scene_id, sp.character_ids)
     const scene = sceneMap.get(sp.scene_id)
     const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
+
+    // 密度驱动 duration 二次 clamp (planner prompt 给 density 区间, LLM 可能越界)
+    // 按 sp.intent_function 查模板拿到 shotDensity + recommendedDuration,
+    //   没匹配 (function 名拼错或不在 8 套内) → fallback medium (5-10s)
+    const intentTemplate = INTENTION_TEMPLATES[sp.intent_function as DramaticFunctionKey]
+    const density = intentTemplate?.shotDensity || 'medium'
+    const durRange = intentTemplate?.recommendedDuration || { min: 5, max: 10 }
+    const rawDur = sp.duration || durRange.min
+    const densityClamped = Math.max(durRange.min, Math.min(durRange.max, Math.floor(rawDur)))
+    // 再叠 [4,15] 终极安全网 (video API 硬约束)
+    sp.duration = Math.max(4, Math.min(15, densityClamped))
 
     // 角色外观兜底
     const charDesc = charRefs.map(c => {

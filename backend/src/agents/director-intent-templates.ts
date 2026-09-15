@@ -26,6 +26,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '演员面部特写聚焦于眼神变化或手部动作；在揭示瞬间有明确的指向性动作（如手指指向、身体后仰）',
     shortDramaTips: '竖屏构图：人物居中偏上（留出顶部空间给字幕）；避免横向大景别，聚焦面部表情细节',
     cameraSpeed: '推镜速度：中速（2-4秒）；急切：instant',
+    shotDensity: 'medium',
+    recommendedDuration: { min: 5, max: 8 },
     examples: [
       '主角意识到被背叛的瞬间，眼神从信任转为震惊，揭示信任崩塌的真相',
       '关键证据出现——一张照片摆在桌上，颠覆了之前的所有判断',
@@ -45,6 +47,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '双方身体朝向彼此但保持安全距离（约1米），手部动作紧张（握拳、指指点点），眼神接触强烈',
     shortDramaTips: '竖屏构图：采用"双人中近景"而非全景，确保两人在画面中都清晰可见；对话时轮流特写，留白处不放重要信息',
     cameraSpeed: '切割：instant；环绕：慢速（5-8秒绕一圈）；手持：轻晃幅度≤5°',
+    shotDensity: 'medium',
+    recommendedDuration: { min: 5, max: 8 },
     examples: [
       '两人在狭窄走廊面对面爆发争吵，剑拔弩张，镜头不断来回切换两人特写',
       '审问者与嫌疑人四目对视，无声的心理博弈，灯光逐渐变暗',
@@ -64,6 +68,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色做出违背预期的动作（如好人举枪自杀，反派扶起枪），或环境发生突变（门突然打开、道具突然出现）',
     shortDramaTips: '竖屏构图：反转点前镜头稳定正常，反转时加入轻微抖动或快速缩放；关键反转物放在画面中心区域',
     cameraSpeed: '静止：0；快速摇晃：极快（<0.5秒）；慢动作：0.5x',
+    shotDensity: 'high',
+    recommendedDuration: { min: 3, max: 5 },
     examples: [
       '看似被害者的角色突然露出微笑，原来一切都是伪装——前一秒还在求饶，后一秒嘴角上扬',
       '英雄救美后却摘下面具露出反派身份——英雄抱离危险区域，面具落下显露出狰狞面容',
@@ -83,6 +89,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色在场景中正常活动，逐步引入关键元素但不立即使用（如先看到墙上挂钟，后面才显示时间特殊）',
     shortDramaTips: '竖屏构图：避免横向长镜头，将关键元素置于画面上中部（避开底部状态栏区域）；铺垫节奏要稍快，防止观众流失',
     cameraSpeed: '平移：慢速（5秒跨过整个房间）；跟随：匀速，无明显加速减速',
+    shotDensity: 'low',
+    recommendedDuration: { min: 10, max: 15 },
     examples: [
       '主角进入废弃宅院，一步步探索房间，发现墙上的旧照片（此时未说明意义）',
       '展示未来战斗前的人物日常训练（镜头扫过训练器材，但未出现战斗画面）',
@@ -102,6 +110,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色激烈运动，大幅度动作（奔跑、打斗、摔砸），近距离接触（拳脚相加、拥抱），情感爆发式的肢体语言（跪地、捶打胸口）',
     shortDramaTips: '竖屏构图：高潮镜头人物居中，避免顶部/底部被系统UI遮挡；快速切换镜头控制在0.5-1秒，节奏紧凑',
     cameraSpeed: '推镜：极快（<1秒）；手持晃动：幅度大且无规律；旋转：高速（1秒一圈）；剪辑间隔：0.5-1秒',
+    shotDensity: 'high',
+    recommendedDuration: { min: 3, max: 5 },
     examples: [
       '生死决斗最后一刻的反杀动作——刀锋划过，对手倒地，主角喘息特写',
       '主角终于说出憋在心里的告白——手伸向对方嘴唇被挡住，声音哽咽，眼泪滑落',
@@ -121,6 +131,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色静止或缓慢移动（坐、站、行走），常以背影出现，与环境的对比突出内心状态（独坐空屋、站在路口、走向远方）',
     shortDramaTips: '竖屏构图：余韵镜头可以适度宽幅拍摄，但在竖屏显示时要保留上下黑边或做模糊拉伸处理；长镜头注意不要超过15秒（竖屏用户耐心有限）',
     cameraSpeed: '固定：0；极缓慢：10-20秒完成推拉',
+    shotDensity: 'low',
+    recommendedDuration: { min: 10, max: 15 },
     examples: [
       '战斗结束后一人独坐废墟，看着远方——固定机位，风吹动衣服，背景余烬闪烁',
       '离别后的空房间，阳光洒在空椅子上——镜头缓慢从椅子拉近到窗外，暗示人已离开',
@@ -140,6 +152,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色表现出警觉、困惑或不安，视线投向画面外未知之处（侧身回头、屏住呼吸、缓慢后退）',
     shortDramaTips: '竖屏构图：悬念关键点放在画面中央区域，不被遮挡；使用"框中框"构图（通过门窗框架拍摄），增加层次感；黑屏过渡时添加轻微音效提升紧张感',
     cameraSpeed: '缓慢接近：5-10秒横跨画面；切断：instant',
+    shotDensity: 'low',
+    recommendedDuration: { min: 10, max: 15 },
     examples: [
       '深夜听到楼下传来奇怪的脚步声，镜头停在不明的门把手上——门把手开始缓慢转动，突然黑屏',
       '收到一封没有寄信人的信，镜头特写在"我知道你做过什么"这句话上——信纸突然抖动，画面变黑',
@@ -159,6 +173,8 @@ export const INTENTION_TEMPLATES = {
     blocking: '角色有强烈的肢体释放动作——哭泣、呐喊、摔东西、拥抱、跪地、捶打胸口；手部细节（颤抖、抓住衣物、捂脸）',
     shortDramaTips: '竖屏构图：情感爆发时人物面部必须占据画面2/3以上，保证眼泪表情清晰可见；微距镜头注意不要过度放大导致细节丢失；背景可以虚化处理以突出主体',
     cameraSpeed: '轻微手持：幅度≤3°；缓慢旋转：5-8秒完成一圈；焦点拉移：2-3秒完成',
+    shotDensity: 'high',
+    recommendedDuration: { min: 3, max: 5 },
     examples: [
       '主角多年压抑终于崩溃大哭——泪水满面，双手捂住脸，肩膀剧烈抽泣，背景音渐渐远去',
       '失去至亲时的撕心裂肺的呼喊——张大嘴，身体后仰，双手拍打地面，泪如雨下',
@@ -180,4 +196,6 @@ export interface IntentionResult {
   visualStrategy: string;       // 视觉策略描述
   cameraSpeed?: string;         // [可选] 运镜速度描述，由 prompt 引导 LLM 输出
   shortDramaTips?: string;      // [可选] 竖屏特别提示，由 prompt 引导 LLM 输出
+  shotDensity?: 'low' | 'medium' | 'high'; // [可选] 镜头密度，按戏剧功能模板标注
+  recommendedDuration?: { min: number; max: number }; // [可选] 推荐 duration 区间(秒)
 }

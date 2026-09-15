@@ -108,18 +108,24 @@ export async function analyzeSceneIntentionInternal(
       parsed = {
         intention: rawContent.substring(0, 200) || '推导失败',
         function: '铺垫' as DramaticFunction,
+        shotDensity: 'low',
+        recommendedDuration: { min: 10, max: 15 },
         visual_strategy: rawContent.substring(200, 500) || '未获得有效回复',
         cameraSpeed: '',
         shortDramaTips: '',
       };
     }
 
+    const fn: DramaticFunction = DRAMATIC_FUNCTIONS.includes(parsed.function) ? parsed.function as DramaticFunction : '铺垫' as DramaticFunction;
+    const tmpl = INTENTION_TEMPLATES[fn];
     return {
       intention: parsed.intention || '推导失败，请检查AI配置',
-      function: DRAMATIC_FUNCTIONS.includes(parsed.function) ? parsed.function as DramaticFunction : '铺垫' as DramaticFunction,
+      function: fn,
       visualStrategy: parsed.visual_strategy || '未获得有效回复',
       cameraSpeed: parsed.cameraSpeed || '',
       shortDramaTips: parsed.shortDramaTips || '',
+      shotDensity: tmpl?.shotDensity,
+      recommendedDuration: tmpl?.recommendedDuration,
     };
   } catch (error: any) {
     console.warn('SceneIntention AI call failed, using fallback:', error.message);
@@ -134,6 +140,8 @@ function fallbackAnalyzeIntention(location: string, time: string, characters: st
     return {
       intention: '展现激烈冲突或危险时刻',
       function: '高潮' as DramaticFunction,
+      shotDensity: 'high',
+      recommendedDuration: { min: 3, max: 5 },
       visualStrategy: '快速剪辑，手持摄影，紧张的光线变化，强调动作力度',
     };
   }
@@ -142,6 +150,8 @@ function fallbackAnalyzeIntention(location: string, time: string, characters: st
     return {
       intention: '关键信息的揭示时刻',
       function: '揭露' as DramaticFunction,
+      shotDensity: 'medium',
+      recommendedDuration: { min: 5, max: 8 },
       visualStrategy: '特写镜头，聚焦面部表情变化，逐渐拉近以增强紧张感',
     };
   }
@@ -150,13 +160,17 @@ function fallbackAnalyzeIntention(location: string, time: string, characters: st
     return {
       intention: '人物之间的直接对抗',
       function: '对峙' as DramaticFunction,
+      shotDensity: 'medium',
+      recommendedDuration: { min: 5, max: 8 },
       visualStrategy: '过肩镜头，交替特写，表现权力关系和情绪张力',
     };
   }
 
   return {
     intention: '普通叙事场景',
-      function: '铺垫' as DramaticFunction,
+    function: '铺垫' as DramaticFunction,
+    shotDensity: 'low',
+    recommendedDuration: { min: 10, max: 15 },
     visualStrategy: '标准景别，平光照明，中性运镜',
   };
 }
