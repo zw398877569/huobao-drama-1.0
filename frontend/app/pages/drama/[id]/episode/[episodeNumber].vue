@@ -2453,7 +2453,7 @@ onMounted(() => { refresh() })
   gap: 10px;
   min-height: 0;
   flex: 0 1 auto;
-  align-items: start;
+  align-items: stretch;
   max-height: calc(100vh - 86px);  /* 86 = topbar 58 + padding 14*2 + gap 12 */
   overflow: hidden;
 }
@@ -2602,7 +2602,7 @@ onMounted(() => { refresh() })
 .refresh-btn:hover { background: #fff; color: var(--text-0); }
 
 /* ===== Main Content ===== */
-.main { flex: 0 1 auto; display: flex; flex-direction: column; overflow: auto; min-width: 0; min-height: 0; border-radius: 30px; }
+.main { flex: 1 1 auto; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; border-radius: 30px; }
 .content-panel { flex: 1 1 auto; display: flex; flex-direction: column; overflow: auto; position: relative; min-height: 0; max-height: calc(100vh - 100px); }
 .stage-subnav {
   display: flex;
