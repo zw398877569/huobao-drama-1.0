@@ -2600,7 +2600,7 @@ onMounted(() => { refresh() })
 
 /* ===== Main Content ===== */
 .main { flex: 0 1 auto; display: flex; flex-direction: column; overflow: auto; min-width: 0; min-height: 0; border-radius: 30px; }
-.content-panel { flex: 0 1 auto; display: flex; flex-direction: column; overflow: visible; position: relative; min-height: 0; }
+.content-panel { flex: 0 1 auto; display: flex; flex-direction: column; overflow: auto; position: relative; min-height: 0; max-height: calc(100vh - 100px); }
 .stage-subnav {
   display: flex;
   align-items: center;
