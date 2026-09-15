@@ -2464,8 +2464,9 @@ onMounted(() => { refresh() })
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: hidden auto;  /* 长内容 sidebar 自己滚, 之前是 hidden 会撑出 viewport */
   min-height: 0;
+  max-height: calc(100vh - 86px);  /* 不超过 body 高度 (topbar + padding + gap) */
   border-radius: 28px;
 }
 .back-btn {
