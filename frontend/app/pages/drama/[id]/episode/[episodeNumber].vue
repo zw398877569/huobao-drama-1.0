@@ -3642,7 +3642,7 @@ onMounted(() => { refresh() })
 .prod-tab.active .prod-tab-badge { background: var(--accent-bg); color: var(--accent-text); }
 
 /* Production content */
-.prod-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 320px); }
+.prod-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 260px); }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .model-select {
   font-size: 11px; padding: 3px 6px; border-radius: 6px;
