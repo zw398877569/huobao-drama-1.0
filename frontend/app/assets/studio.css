@@ -216,10 +216,10 @@ select.input { appearance: none; cursor: pointer; background-image: url("data:im
 .card-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 
 /* === Scrollbar === */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-track { background: rgba(140, 158, 184, 0.12); border-radius: 99px; }
+::-webkit-scrollbar-thumb { background: rgba(86, 108, 150, 0.42); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(86, 108, 150, 0.68); }
 
 /* === Animations === */
 @keyframes spin { to { transform: rotate(360deg); } }
