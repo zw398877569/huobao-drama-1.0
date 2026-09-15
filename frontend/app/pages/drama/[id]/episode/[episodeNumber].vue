@@ -2454,6 +2454,8 @@ onMounted(() => { refresh() })
   min-height: 0;
   flex: 0 1 auto;
   align-items: start;
+  max-height: calc(100vh - 86px);  /* 86 = topbar 58 + padding 14*2 + gap 12 */
+  overflow: hidden;
 }
 
 /* ===== Sidebar ===== */
