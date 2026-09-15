@@ -12,7 +12,7 @@ ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 
 # ── Stage 1: Build frontend ──────────────────────────────────
-FROM node:20-slim AS frontend-build
+FROM node:24-slim AS frontend-build
 
 # Re-declare ARGs (Docker ARG scope is per-stage, unless pre-declared)
 ARG NPM_REGISTRY
@@ -25,7 +25,7 @@ COPY frontend/ ./
 RUN npm run generate
 
 # ── Stage 2: Build backend native modules ────────────────────
-FROM node:20-slim AS backend-build
+FROM node:24-slim AS backend-build
 
 ARG NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
@@ -46,7 +46,7 @@ COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev
 
 # ── Stage 3: Production image (lean) ────────────────────────
-FROM node:20-slim
+FROM node:24-slim
 
 ARG NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
