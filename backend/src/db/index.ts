@@ -406,6 +406,9 @@ ensureColumn('storyboards', 'safety_notes', 'TEXT')
 // 视频生成负面提示词: storyboards/image_generations 都有,video_generations 漏了 (2026-08-27)
 // 修复后 agnes-video adapter 的 negative_prompt 才不会在重生成/重试时丢失
 ensureColumn('video_generations', 'negative_prompt', 'TEXT')
+// 自由创作来源标记: 'storyboard' = 正式分镜流 (默认), 'free' = 自由创作 tab 生成
+// 列表接口可按 ?source= 过滤
+ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 
 export const db = drizzle(sqlite, { schema })
 export { schema }

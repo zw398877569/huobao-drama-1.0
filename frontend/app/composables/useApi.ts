@@ -98,6 +98,8 @@ export const gridAPI = {
 export const videoAPI = {
   generate: (d: any) => api.post('/videos', d),
   get: (id: number) => api.get(`/videos/${id}`),
+  // 自由创作历史: ?source=free 返回非正式分镜记录 (与正式分镜视频列表隔离)
+  listFree: () => api.get('/videos?source=free'),
 }
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),

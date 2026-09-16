@@ -17,6 +17,8 @@ const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../
 interface GenerateVideoParams {
   storyboardId?: number
   dramaId?: number
+  /** 'storyboard' (默认) = 正式分镜流, 'free' = 自由创作 tab 生成 */
+  source?: 'storyboard' | 'free'
   prompt: string
   model?: string
   referenceMode?: string
@@ -38,9 +40,12 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
 
+  const isFree = (params.source || 'storyboard') === 'free'
+
   const res = db.insert(schema.videoGenerations).values({
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
+    source: params.source || 'storyboard',
     prompt: params.prompt,
     model: params.model || config.model,
     provider: config.provider,
@@ -64,6 +69,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     provider: config.provider,
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
+    source: params.source || 'storyboard',
     referenceMode: params.referenceMode || 'none',
     duration: params.duration || 5,
   })
@@ -76,14 +82,15 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     },
     params,
   })
-  processVideoGeneration(lastId, config).catch(err => {
+  processVideoGeneration(lastId, config, params.source || 'storyboard').catch(err => {
     logTaskError('VideoTask', 'process', { id: lastId, error: err.message })
     console.error(`Video generation ${lastId} failed:`, err)
   })
   return lastId
 }
 
-async function processVideoGeneration(id: number, config: AIConfig) {
+async function processVideoGeneration(id: number, config: AIConfig, source: 'storyboard' | 'free' = 'storyboard') {
+  const isFree = source === 'free'
   const adapter = getVideoAdapter(config.provider)
 
   try {
@@ -113,8 +120,9 @@ async function processVideoGeneration(id: number, config: AIConfig) {
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
 
         // 提示词翻译: 非英文 prompt 先翻译为英文再发给 Agnes
+        // 自由创作模式跳过翻译 — 用户自己控制中英文, 不要静默改写原文
         let finalPrompt: string = vRecord.prompt || ''
-        if (hasNonEnglishChars(finalPrompt)) {
+        if (!isFree && hasNonEnglishChars(finalPrompt)) {
           try {
             logTaskProgress('VideoTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
             finalPrompt = await translatePromptToEnglish(finalPrompt)
@@ -193,7 +201,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
         const isPolicyViolation = resp.status === 400 && errText.includes('content_policy_violation')
 
         if (isPolicyViolation) {
-          if (retryCount === 0) {
+          if (retryCount === 0 && !isFree) {
             retryCount++
             const originalPrompt: string = vRecord.prompt || ''
             const aggressivePrompt = sanitizeImagePromptAggressive(originalPrompt)
@@ -207,6 +215,10 @@ async function processVideoGeneration(id: number, config: AIConfig) {
               .where(eq(schema.videoGenerations.id, id))
               .run()
             continue
+          }
+          // 自由创作模式不重写, 直接失败让用户看到原始错误
+          if (isFree) {
+            logTaskWarn('VideoTask', 'policy-violation-no-rewrite-in-free-mode', { id, status: resp.status })
           }
           throw new Error(`API error ${resp.status}: ${errText}`)
         }

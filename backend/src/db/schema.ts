@@ -271,6 +271,8 @@ export const videoGenerations = sqliteTable('video_generations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   storyboardId: integer('storyboard_id'),
   dramaId: integer('drama_id'),
+  // 'storyboard' = 正式分镜流 (默认), 'free' = 自由创作 tab 生成
+  source: text('source').default('storyboard'),
   provider: text('provider'),
   prompt: text('prompt'),
   model: text('model'),

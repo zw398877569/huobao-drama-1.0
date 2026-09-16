@@ -19,7 +19,8 @@ app.post('/', async (c) => {
     // 优先级: 用户在视频模型弹窗显式选的 > episode 锁定的 video_config_id > getActiveConfig fallback
     // (前端 Phase 2 之后, 弹窗选择是用户当前明确的意图, 不应被 episode 旧锁定覆盖)
     let configId: number | undefined = explicitConfigId
-    if (configId === undefined && body.storyboard_id) {
+    // 自由创作不读 episode 锁定的 videoConfigId — 用户在表单里挑哪个 config 就用哪个
+    if (configId === undefined && body.source !== 'free' && body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
         const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
@@ -30,13 +31,18 @@ app.post('/', async (c) => {
     logTaskStart('VideoAPI', 'generate', {
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,
+      source: body.source === 'free' ? 'free' : 'storyboard',
       referenceMode: body.reference_mode,
       duration: body.duration,
     })
     logTaskPayload('VideoAPI', 'request body', body)
+    // 自由创作模式: source='free' 时不查 episode 锁定的 videoConfigId,
+    // 避免误用正式分镜的配置; 同时 storyboardId/dramaId 保持 null 即可
+    const source: 'storyboard' | 'free' = body.source === 'free' ? 'free' : 'storyboard'
     const id = await generateVideo({
-      storyboardId: body.storyboard_id,
+      storyboardId: source === 'free' ? null : body.storyboard_id,
       dramaId: body.drama_id,
+      source,
       prompt: body.prompt,
       model: body.model || explicitModel,
       referenceMode: body.reference_mode,
@@ -69,15 +75,20 @@ app.get('/:id', async (c) => {
   return success(c, row || null)
 })
 
-// GET /videos — List by storyboard_id or drama_id
+// GET /videos — List by storyboard_id / drama_id / source
 app.get('/', async (c) => {
   const storyboardId = c.req.query('storyboard_id')
   const dramaId = c.req.query('drama_id')
+  // source 过滤: ?source=free 取自由创作记录; ?source=storyboard 取正式分镜; 不传返回所有
+  const source = c.req.query('source')
 
   let rows = db.select().from(schema.videoGenerations).all()
 
   if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
   if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
+  if (source === 'free' || source === 'storyboard') {
+    rows = rows.filter(r => (r.source || 'storyboard') === source)
+  }
 
   return success(c, rows)
 })

@@ -34,6 +34,8 @@ export function useEpisodePipeline(deps: Deps) {
     get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
     set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
   })
+  // 导出区子 tab: 'merge' = 拼接导出 (默认), 'free' = 自由创作
+  const exportTab = ref<'merge' | 'free'>('merge')
   const frameMode = ref('first')
   const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 
@@ -138,6 +140,8 @@ export function useEpisodePipeline(deps: Deps) {
       label: '导出',
       items: [
         { key: 'export:merge', label: '拼接导出', desc: '', icon: 'Download', done: !!ctx.mergeUrl.value },
+        // 自由创作: 不依赖分镜进度, done 始终 false — 不参与 pipeline 总进度
+        { key: 'export:free', label: '自由创作', desc: '', icon: 'Sparkles', done: false },
       ],
     },
   ]))
@@ -190,6 +194,9 @@ export function useEpisodePipeline(deps: Deps) {
     if (ctx.panel.value === 'script') {
       return `script:${['raw', 'rewrite', 'extract', 'voice', 'storyboard'][ctx.scriptStep.value] || 'raw'}`
     }
+    if (ctx.panel.value === 'export') {
+      return `export:${exportTab.value}`
+    }
     return ''
   })
 
@@ -209,6 +216,9 @@ export function useEpisodePipeline(deps: Deps) {
     }
     if (ctx.panel.value === 'script') {
       return `script:${['raw', 'rewrite', 'extract', 'voice', 'storyboard'][ctx.scriptStep.value] || 'raw'}`
+    }
+    if (ctx.panel.value === 'export') {
+      return `export:${exportTab.value}`
     }
     return ''
   })
@@ -230,6 +240,10 @@ export function useEpisodePipeline(deps: Deps) {
     }
     if (section === 'export') {
       ctx.panel.value = 'export'
+      // export:merge / export:free — 设置对应的子 tab
+      if (step === 'free' || step === 'merge') {
+        exportTab.value = step
+      }
     }
   }
 
@@ -278,7 +292,7 @@ export function useEpisodePipeline(deps: Deps) {
 
   return {
     // state
-    prodTab, prodTabIdx, frameMode, frameModeOptions,
+    prodTab, prodTabIdx, exportTab, frameMode, frameModeOptions,
     // counts
     charImgCount, sceneImgCount, propImgCount, ttsEligibleCount, ttsGeneratedCount, shotImgCount, shotVidCount, visualCharTotal, visualChars,
     // gating
