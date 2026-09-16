@@ -18,7 +18,7 @@
  *   - T2V 必填, 由用户选 (adapter 内部固定 768P 之类; 自由创作里给常见档位让用户选)
  *   - I2V/FL2V 由首帧决定, 不需要
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { videoAPI } from '~/composables/useApi'
 import { toast } from 'vue-sonner'
 
@@ -230,7 +230,8 @@ function startPoll(id: number) {
       currentJob.value = record
       const status = (record?.status || '').toLowerCase()
       if (status === 'completed' || status === 'success') {
-        const url = record.local_path || record.video_url
+        // drizzle 返回 camelCase (localPath / videoUrl); 兼容历史 snake_case 兜底
+        const url = record.localPath || record.videoUrl || record.local_path || record.video_url
         if (url) resultUrl.value = url.startsWith('/') ? url : '/' + url
         stopPoll()
         submitting.value = false
@@ -274,12 +275,18 @@ async function loadHistory() {
   }
 }
 
+function videoUrlOf(item: any): string {
+  // drizzle 返回 camelCase; 兜底 snake_case 兼容老数据
+  return item?.localPath || item?.videoUrl || item?.local_path || item?.video_url || ''
+}
+
 function previewFromHistory(item: any) {
-  const url = item.local_path || item.video_url
+  const url = videoUrlOf(item)
   if (url) {
     resultUrl.value = url.startsWith('/') ? url : '/' + url
     currentJob.value = item
     errorMsg.value = ''
+    nextTick(() => playPreview())
   }
 }
 
@@ -291,8 +298,23 @@ function statusTag(item: any): { label: string, cls: string } {
 }
 
 onMounted(() => {
-  loadHistory()
+  loadHistory().then(() => {
+    // 自动把最近一条完成的记录载入预览, 用户进入面板立刻能看到结果
+    const latest = history.value.find(h => (h.status || '').toLowerCase() === 'completed' || (h.status || '').toLowerCase() === 'success')
+    if (latest && !resultUrl.value) previewFromHistory(latest)
+  })
 })
+
+// 预览视频引用 + 点击播放
+const previewRef = ref<HTMLVideoElement | null>(null)
+const isPlaying = ref(false)
+function playPreview() {
+  const v = previewRef.value
+  if (!v) return
+  v.play().then(() => { isPlaying.value = true }).catch(() => { isPlaying.value = false })
+}
+function pausePreview() { previewRef.value?.pause(); isPlaying.value = false }
+function togglePreview() { isPlaying.value ? pausePreview() : playPreview() }
 
 // ======== 重置 ========
 function resetForm() {
@@ -432,11 +454,33 @@ function resetForm() {
       <div class="free-preview-box">
         <div class="free-section-label small">预览</div>
         <div v-if="resultUrl" class="free-preview-video">
-          <video :src="resultUrl" controls />
-          <a :href="resultUrl" download class="btn btn-primary mt-1">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            下载视频
-          </a>
+          <div class="free-preview-stage" @click="togglePreview">
+            <video
+              ref="previewRef"
+              :src="resultUrl"
+              preload="metadata"
+              playsinline
+              @play="isPlaying = true"
+              @pause="isPlaying = false"
+              @ended="isPlaying = false"
+            />
+            <button
+              v-if="!isPlaying"
+              class="free-preview-play"
+              type="button"
+              :aria-label="'播放视频'"
+              @click.stop="playPreview"
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+            </button>
+          </div>
+          <div class="free-preview-toolbar">
+            <span v-if="currentJob?.id" class="dim" style="font-size:11px">#{{ currentJob.id }} · {{ currentJob.model || '' }}</span>
+            <a :href="resultUrl" download class="btn btn-primary ml-auto">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              下载视频
+            </a>
+          </div>
         </div>
         <div v-else-if="submitting" class="free-preview-placeholder">
           <div class="free-spinner" />
@@ -580,7 +624,41 @@ function resetForm() {
   gap: 10px;
 }
 .free-preview-video { display: flex; flex-direction: column; gap: 8px; }
-.free-preview-video video { width: 100%; max-height: 320px; background: #000; border-radius: var(--radius); }
+.free-preview-stage {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 16 / 9;
+}
+.free-preview-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+.free-preview-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: transform 0.15s, background 0.15s;
+}
+.free-preview-play:hover { transform: scale(1.08); background: rgba(0, 0, 0, 0.72); }
+.free-preview-toolbar { display: flex; align-items: center; gap: 8px; }
 .free-preview-placeholder {
   min-height: 200px;
   display: flex;
