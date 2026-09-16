@@ -476,8 +476,8 @@ function resetForm() {
           </div>
           <div class="free-preview-toolbar">
             <span v-if="currentJob?.id" class="dim" style="font-size:11px">#{{ currentJob.id }} · {{ currentJob.model || '' }}</span>
-            <a :href="resultUrl" download class="btn btn-primary ml-auto">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <a :href="resultUrl" :download="`free-creation-${currentJob?.id || 'video'}.mp4`" class="btn btn-primary btn-download ml-auto">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               下载视频
             </a>
           </div>
@@ -505,10 +505,21 @@ function resetForm() {
         </div>
         <div v-if="!history.length" class="free-history-empty dim">暂无</div>
         <div v-else class="free-history-list">
-          <div v-for="item in history" :key="item.id" class="free-history-row" @click="previewFromHistory(item)">
+          <div v-for="item in history" :key="item.id" class="free-history-row">
             <span class="mono dim" style="font-size:10px">#{{ item.id }}</span>
-            <span class="truncate" style="flex:1;font-size:11px" :title="item.prompt">{{ item.prompt?.slice(0, 40) || '—' }}</span>
+            <span class="truncate history-prompt" :title="item.prompt" @click="previewFromHistory(item)">{{ item.prompt?.slice(0, 40) || '—' }}</span>
             <span :class="['tag', statusTag(item).cls]" style="font-size:10px">{{ statusTag(item).label }}</span>
+            <!-- 仅完成项显示下载按钮 -->
+            <a
+              v-if="videoUrlOf(item)"
+              :href="videoUrlOf(item).startsWith('/') ? videoUrlOf(item) : '/' + videoUrlOf(item)"
+              :download="`free-creation-${item.id}.mp4`"
+              class="history-download"
+              title="下载视频"
+              @click.stop
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </a>
           </div>
         </div>
       </div>
@@ -713,10 +724,23 @@ function resetForm() {
   gap: 6px;
   padding: 5px 6px;
   border-radius: 4px;
-  cursor: pointer;
   transition: background 0.1s;
 }
 .free-history-row:hover { background: var(--bg-hover); }
+.history-prompt { cursor: pointer; }
+.history-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  color: var(--text-3);
+  transition: all 0.12s;
+}
+.history-download:hover { background: var(--accent-bg); color: var(--accent-text); }
+.btn-download { font-weight: 600; box-shadow: var(--shadow-sm); }
 
 .tag { padding: 1px 6px; border-radius: 99px; font-size: 10px; font-weight: 600; }
 .tag-success { background: rgba(40, 167, 69, 0.15); color: #28a745; }
