@@ -1075,9 +1075,10 @@
               <span class="tag mono">{{ ttsGeneratedCount }}/{{ ttsEligibleCount }} 已生成</span>
               <span class="tag">{{ lockedAudioConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchShotTTS">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
-                  批量生成
+                <button class="btn btn-sm" :disabled="pendingTTSIds.length > 0" @click="batchShotTTS">
+                  <Loader2 v-if="pendingTTSIds.length > 0" :size="11" class="animate-spin" />
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+                  {{ pendingTTSIds.length > 0 ? '生成中…' : '批量生成' }}
                 </button>
               </div>
             </div>
@@ -1115,7 +1116,10 @@
                 </div>
                 <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
                   <div v-else class="dim" style="font-size:12px">尚未生成语音文件</div>
-                  <button class="btn btn-sm ml-auto" @click="genShotTTS(sb)">生成配音</button>
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingTTS(sb.id) || hasTTS(sb)" @click="genShotTTS(sb)">
+                    <Loader2 v-if="isPendingTTS(sb.id)" :size="11" class="animate-spin" />
+                    {{ isPendingTTS(sb.id) ? '生成中…' : (hasTTS(sb) ? '重新生成' : '生成配音') }}
+                  </button>
                 </div>
               </div>
             </div>

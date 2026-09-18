@@ -1,4 +1,5 @@
 import { storyboardAPI } from '~/composables/useApi'
+import { ref } from 'vue'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {
@@ -10,6 +11,14 @@ type Deps = {
 
 export function useShotTTS(deps: Deps) {
   const { ctx, refresh } = deps
+
+  // 单镜配音生成 pending 状态 — 模板用 isPendingTTS(sb.id) 绑 :disabled + 改按钮文字
+  // v17 修 button disabled 时漏了 TTS (修了 useImageGeneration/useVideoGeneration/useGridTool)
+  // 这里补上, 避免用户连点触发重复请求 / 看不到正在生成反馈
+  const pendingTTSIds = ref<number[]>([])
+  function isPendingTTS(id: number) {
+    return pendingTTSIds.value.includes(id)
+  }
 
   // Pattern that matches speaker prefixes for which we should NOT generate TTS
   // (pure ambient audio / SFX / BGM — these need no voiceover).
@@ -77,11 +86,16 @@ export function useShotTTS(deps: Deps) {
   }
 
   async function genShotTTS(sb: any) {
+    if (!isPendingTTS(sb.id)) pendingTTSIds.value.push(sb.id)
     try {
       await storyboardAPI.generateTTS(sb.id)
       toast.success(`镜头 #${sb.storyboard_number || sb.storyboardNumber || sb.id} 配音已生成`)
       await refresh()
-    } catch (e: any) { toast.error(e.message) }
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      pendingTTSIds.value = pendingTTSIds.value.filter(item => item !== sb.id)
+    }
   }
 
   async function batchShotTTS() {
@@ -93,12 +107,21 @@ export function useShotTTS(deps: Deps) {
       toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
       return
     }
-    const results = await Promise.allSettled(pending.map(sb => storyboardAPI.generateTTS(sb.id)))
-    const okCount = results.filter(r => r.status === 'fulfilled').length
-    const failCount = results.length - okCount
-    if (okCount) toast.success(`已生成 ${okCount} 条镜头配音`)
-    if (failCount) toast.error(`${failCount} 条镜头配音生成失败`)
-    await refresh()
+    // 批量配音一次性 push 所有 id 进 pending, 模板批量按钮绑 isBatchTTSPending 整体置灰
+    const pendingIds = pending.map(sb => sb.id)
+    for (const id of pendingIds) {
+      if (!isPendingTTS(id)) pendingTTSIds.value.push(id)
+    }
+    try {
+      const results = await Promise.allSettled(pending.map(sb => storyboardAPI.generateTTS(sb.id)))
+      const okCount = results.filter(r => r.status === 'fulfilled').length
+      const failCount = results.length - okCount
+      if (okCount) toast.success(`已生成 ${okCount} 条镜头配音`)
+      if (failCount) toast.error(`${failCount} 条镜头配音生成失败`)
+      await refresh()
+    } finally {
+      pendingTTSIds.value = pendingTTSIds.value.filter(item => !pendingIds.includes(item))
+    }
   }
 
   return {
@@ -106,6 +129,7 @@ export function useShotTTS(deps: Deps) {
     getDialogueSpeakerRaw, getDialogueText, getDialogueBodyNormalized, isTTSIgnorable,
     hasDialogue, hasTTS, getTTSUrl,
     getTTSSegments, getDialogueSpeaker,
+    pendingTTSIds, isPendingTTS,
     genShotTTS, batchShotTTS,
   }
 }
