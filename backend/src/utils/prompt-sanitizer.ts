@@ -17,6 +17,7 @@ import { getActiveConfig, getTextChatCompletionsUrl } from '../services/ai.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { logTaskError, logTaskProgress, logTaskWarn } from './task-logger.js'
 import { DEFAULT_IMAGE_SAFETY_SUFFIX } from '../services/image-generation.js'
+import { stripReasoningBlocks } from '../services/ai.js'
 
 const LLM_TIMEOUT_MS = 8_000
 
@@ -174,7 +175,7 @@ const FALLBACK_REPLACEMENTS = [
   [/剑影/g, '光影'],
 ]
 
-const SUFFIX_MARKERS = ['电影剧照', '艺术化构图', '戏剧张力']
+const SUFFIX_MARKERS = ['cinematic still', 'artistic composition', 'dramatic tension']
 
 function hasSafetySuffix(prompt) {
   return SUFFIX_MARKERS.every(marker => prompt.includes(marker))
@@ -208,19 +209,18 @@ const SYSTEM_INSTRUCTION = [
   'C. 血色 / 鲜血 / 血红 / 染血 → 深红 / 绯红。',
   'D. 中毒 / 受伤 / 武器 / 血腥 / 死亡 / 师徒暧昧 / 昏迷 / 濒死 / 窒息 / 自尽 全部要中性化,',
   '   例如:昏迷不醒→安静地闭目养神;毒气攻心、肤色滚烫→面部泛着柔和的红润光晕;刀光剑影→光影交错。',
-  'E. 末尾追加 ", 电影剧照, 戏剧张力, 艺术化构图"。',
-  'F. 输出中文,逗号分隔短句,总长不超过 240 字。',
-  'G. 严禁输出任何解释、前缀、引号、markdown 代码块,严禁输出 <think> 思考块,只输出改写后的 prompt 字符串本身。',
+  'E. 末尾追加 ", cinematic still, dramatic tension, artistic composition"。',
+  'F. Output IN ENGLISH, comma-separated short phrases, max 240 chars.',
+  'G. Do NOT output explanations, prefixes, quotes, or markdown code blocks. Do NOT output <think> thinking blocks. Output only the rewritten prompt string.',
 ].join('\n')
 
 function extractPromptFromLLM(raw) {
   if (!raw) return null
   let text = raw.trim()
 
-  // 1) 剥掉推理模型的思考块(DeepSeek/MiniMax-M3/QwQ 等都会输出 <think>...</think>)
-  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '')
-  text = text.replace(/<reflection>[\s\S]*?<\/reflection>/gi, '')
-  text = text.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+  // 1) 剥掉推理模型的思考块 — 复用 ai.ts 公共 stripReasoningBlocks,
+  //    跟 translateImagePromptToEnglish / translateVideoPromptToEnglish 同源 (避免一处防护一处漏)
+  text = stripReasoningBlocks(text)
 
   // 2) 剥掉 markdown 代码块包裹
   text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')

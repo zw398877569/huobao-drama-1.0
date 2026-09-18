@@ -13,7 +13,7 @@ import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
 // 避免直接说"no weapons / no blood"（这种否定式有时候反而会强化主题词）。
 // 真正的根治仍需要 LLM 改写器（按敏感词动态重写 prompt），
 // 那是后话 — 至少这个 suffix 把"血腥/医疗/武打"类 false positive 概率压下来。
-export const DEFAULT_IMAGE_SAFETY_SUFFIX = ', 电影剧照, 戏剧张力, 艺术化构图'
+export const DEFAULT_IMAGE_SAFETY_SUFFIX = ', cinematic still, dramatic tension, artistic composition'
 
 interface GenerateImageParams {
   storyboardId?: number
