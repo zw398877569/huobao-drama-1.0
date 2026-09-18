@@ -948,6 +948,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
         high (反转/高潮/情感爆发) → 3-5s,快切密集,多角度冲击,情绪要压缩
       每镜自检:duration 必须落在本 scene 的 recommendedDuration.min/max 区间内,允许微调但不超界
       fallback:scene.intention.shotDensity 缺失 → 默认 medium (5-10s)
+   - 轴5【道具时序约束】(防止剧情道具提前泄露):
+      角色身上的「情节道具」只能在所属 scene 的 description 里被显式提到时,才能在本镜出现;
+      character.description 里描述的情节瞬间 (例如「前爪按红色按钮」这种特定剧情动作/物体) 不算
+      「角色固有道具」,首镜 frame/正文严禁默认带入;违反 = 剧情时序错乱,观众看不懂为什么某镜有某物
 3. 输出 shot_plan（只含结构字段，不含 prompt）
 4. 调 generate_shot_prompts 把结构字段传给 code 侧生成完整 17 字段并保存
 
