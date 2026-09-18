@@ -1116,7 +1116,7 @@
                 </div>
                 <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
                   <div v-else class="dim" style="font-size:12px">尚未生成语音文件</div>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingTTS(sb.id) || hasTTS(sb)" @click="genShotTTS(sb)">
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingTTS(sb.id)" @click="genShotTTS(sb)">
                     <Loader2 v-if="isPendingTTS(sb.id)" :size="11" class="animate-spin" />
                     {{ isPendingTTS(sb.id) ? '生成中…' : (hasTTS(sb) ? '重新生成' : '生成配音') }}
                   </button>
