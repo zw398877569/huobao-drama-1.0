@@ -5,7 +5,6 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   if (body) opts.body = JSON.stringify(body)
 
   const start = performance.now()
-  console.log(`%c[API] %c${method} %c${path}`, 'color:#888', 'color:#4fc3f7;font-weight:bold', 'color:#ccc', body || '')
 
   try {
     const resp = await fetch(`${BASE}${path}`, opts)
@@ -13,16 +12,13 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
     const ms = Math.round(performance.now() - start)
 
     if (!resp.ok || (json.code && json.code >= 400)) {
-      console.log(`%c[API] %c${method} ${path} %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
       throw new Error(json.message || `${resp.status}`)
     }
 
-    console.log(`%c[API] %c${method} ${path} %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#66bb6a', 'color:#66bb6a;font-weight:bold', 'color:#888')
     return json.data ?? json
   } catch (err: any) {
     if (!err.message?.match(/^\d{3}$/)) {
       const ms = Math.round(performance.now() - start)
-      console.log(`%c[API] %c${method} ${path} %cERROR %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', err.message)
     }
     throw err
   }
