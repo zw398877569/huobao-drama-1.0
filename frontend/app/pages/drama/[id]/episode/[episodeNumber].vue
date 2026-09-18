@@ -1269,7 +1269,7 @@
                   <!-- Thumbnails -->
                   <div class="frame-thumbs">
                     <div class="frame-thumb-wrap">
-                      <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
+                      <div class="frame-thumb" :class="{ 'frame-thumb-pending': isPendingShotFrame(sb.id, 'first_frame') }" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
                         <img
                           v-if="getFirstFrame(sb)"
                           :src="'/' + getFirstFrame(sb)"
@@ -1280,14 +1280,19 @@
                           <Loader2 v-if="isPendingShotFrame(sb.id, 'first_frame')" :size="14" class="animate-spin" />
                           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         </div>
-                        <span v-if="getFirstFrame(sb)" class="frame-re">
+                        <!-- 已有图 + pending 时加蒙层, 让用户看到「正在重新生成」 -->
+                        <div v-if="isPendingShotFrame(sb.id, 'first_frame') && getFirstFrame(sb)" class="frame-thumb-overlay">
+                          <Loader2 :size="22" class="animate-spin" />
+                          <span>重新生成中…</span>
+                        </div>
+                        <span v-if="getFirstFrame(sb) && !isPendingShotFrame(sb.id, 'first_frame')" class="frame-re">
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                         </span>
                       </div>
                       <span class="frame-thumb-label">{{ isPendingShotFrame(sb.id, 'first_frame') ? '首帧生成中' : '首帧' }}</span>
                     </div>
                     <div v-if="frameMode === 'first_last'" class="frame-thumb-wrap">
-                      <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'last_frame') && genShotFrame(sb, 'last_frame')">
+                      <div class="frame-thumb" :class="{ 'frame-thumb-pending': isPendingShotFrame(sb.id, 'last_frame') }" @click.stop="!isPendingShotFrame(sb.id, 'last_frame') && genShotFrame(sb, 'last_frame')">
                         <img
                           v-if="getLastFrame(sb)"
                           :src="'/' + getLastFrame(sb)"
@@ -1298,7 +1303,12 @@
                           <Loader2 v-if="isPendingShotFrame(sb.id, 'last_frame')" :size="14" class="animate-spin" />
                           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         </div>
-                        <span v-if="getLastFrame(sb)" class="frame-re">
+                        <!-- 已有图 + pending 时加蒙层 -->
+                        <div v-if="isPendingShotFrame(sb.id, 'last_frame') && getLastFrame(sb)" class="frame-thumb-overlay">
+                          <Loader2 :size="22" class="animate-spin" />
+                          <span>重新生成中…</span>
+                        </div>
+                        <span v-if="getLastFrame(sb) && !isPendingShotFrame(sb.id, 'last_frame')" class="frame-re">
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                         </span>
                       </div>
@@ -3800,6 +3810,15 @@ onMounted(() => { refresh() })
   display: none; align-items: center; justify-content: center;
 }
 .frame-thumb:hover .frame-re { display: flex; }
+.frame-thumb-pending { cursor: wait; }
+.frame-thumb-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px;
+  color: #fff; font-size: 11px; font-weight: 600;
+  pointer-events: none;
+}
 .frame-scroll { flex: 1; overflow-y: auto; padding: 10px 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bg-3); flex-shrink: 0; }
 .dot.ok { background: var(--success); }

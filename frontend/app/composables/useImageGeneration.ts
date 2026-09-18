@@ -51,7 +51,9 @@ export function useImageGeneration(deps: Deps) {
   }
 
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
-  function buildShotReferenceAssets(sb: any) {
+  // 2026-09-18 fix: 加 excludeFirstFrame 参数, 重新生成 first_frame 时不引用旧 first_frame
+  //   (避免把"待替换的旧图"作为参考让 LLM 复制旧图的错误)
+  function buildShotReferenceAssets(sb: any, excludeFirstFrame = false) {
     const assets: any[] = []
     const pushAsset = (asset: any) => {
       if (!asset?.path || assets.some(a => a.path === asset.path) || assets.length >= 6) return
@@ -86,7 +88,9 @@ export function useImageGeneration(deps: Deps) {
       pushAsset({ path: ref, kind: 'reference', label: '参考图' })
     }
 
-    const first = getFirstFrame(sb)
+    // 重新生成 first_frame 时跳过 first_frame 引用 (避免参考待替换的旧图)
+    // last_frame 引用 first_frame 仍合法 (保持视觉连贯)
+    const first = excludeFirstFrame ? null : getFirstFrame(sb)
     const last = getLastFrame(sb)
     if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' })
     if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' })
@@ -390,7 +394,8 @@ export function useImageGeneration(deps: Deps) {
 
   async function genShotFrame(sb: any, frameType: string) {
     const prompt = buildShotImagePrompt(sb, frameType)
-    const referenceImages = getShotReferenceImages(sb)
+    // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
+    const referenceImages = buildShotReferenceAssets(sb, frameType === 'first_frame').map(a => a.path)
     const key = framePendingKey(sb.id, frameType)
     try {
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
