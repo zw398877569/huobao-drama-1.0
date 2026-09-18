@@ -2022,6 +2022,7 @@ const {
   getDialogueSpeakerRaw, getDialogueText, isTTSIgnorable,
   hasDialogue, hasTTS, getTTSUrl,
   getTTSSegments, getDialogueSpeaker,
+  pendingTTSIds, isPendingTTS,
   genShotTTS, batchShotTTS,
 } = useShotTTS({
   ctx: { sbs },
