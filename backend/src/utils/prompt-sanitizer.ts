@@ -17,7 +17,7 @@ import { getActiveConfig, getTextChatCompletionsUrl } from '../services/ai.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { logTaskError, logTaskProgress, logTaskWarn } from './task-logger.js'
 import { DEFAULT_IMAGE_SAFETY_SUFFIX } from '../services/image-generation.js'
-import { stripReasoningBlocks } from '../services/ai.js'
+import { stripReasoningBlocks, hasNonEnglishChars } from '../services/ai.js'
 
 const LLM_TIMEOUT_MS = 8_000
 
@@ -254,6 +254,56 @@ function extractPromptFromLLM(raw) {
   return text.trim()
 }
 
+/**
+ * 英文版 LLM 输出提取器 — 跟 extractPromptFromLLM 配套, 用于 rawPrompt 是英文的场景。
+ *
+ * 为什么需要拆版本:
+ *   - SYSTEM_INSTRUCTION F 现在要求 sanitize LLM 输出英文 (commit 199f04e 改的)
+ *   - 旧 extractPromptFromLLM 步骤 3/5 是中文专用过滤, 处理英文 LLM 输出会因「找不到中文字符」
+ *     直接返回 null → sanitizeImagePromptLLM fallback null → 走本地正则路径
+ *   - 本地正则 FALLBACK_REPLACEMENTS 全是中文模式 (剑/刀/燃烧...), 对英文敏感词(blood/weapon/fire)
+ *     改不掉 → 上游 API 可能 content_policy_violation
+ *   - 拆英文版后, 英文 prompt 能真正用上 LLM 智能改写; 中文版保留给未来扩展 (万一 F 改回输出中文)
+ *
+ * 行为差异 (相对中文版):
+ *   - 去掉「≥8 中文字符 + 占比 ≥30%」过滤 (英文 LLM 输出没有中文字符)
+ *   - 去掉「!/[一-龥]/.test(text) 必须含中文」检查
+ *   - 元评论前缀识别按英文 pattern (Note/Output/Prompt/Here/Final/Rewritten 等)
+ *   - 引号剥离改英文双引号 (中文版覆盖了「」『』, 英文版只覆盖 "")
+ */
+function extractPromptFromLLMEnglish(raw: string) {
+  if (!raw) return null
+  let text = stripReasoningBlocks(raw.trim())
+
+  // 剥掉 markdown 代码块包裹 (跟中文版一致)
+  text = text.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')
+
+  // 英文版：挑最长非元评论段落
+  // 启发式：英文 LLM 偶尔会输出 "Note: ..." / "Output: ..." / "Here's the rewritten prompt:"
+  // 这类元评论行, 长度短且有特殊前缀, 用 pattern 过滤掉
+  const paragraphs = text
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+  if (paragraphs.length === 0) return null
+
+  const META_COMMENT_PREFIX = /^(Note|Output|Result|Prompt|Here|Translation|Final|Rewritten|Reworded)\s*[:：]/i
+  const candidates = paragraphs.filter(p => !META_COMMENT_PREFIX.test(p))
+  // 候选池: 有非元评论段落就用, 否则兜底用所有段落 (模型可能整段都是元评论)
+  const pool = candidates.length > 0 ? candidates : paragraphs
+  // 取最长那段
+  text = pool.reduce((a, b) => b.length > a.length ? b : a, '')
+
+  // 剥常见前缀 (英文版不复用中文版的「改写后的」/「final answer」等中文 pattern, 用英文版等价物)
+  text = text.replace(/^(rewritten\s+prompt\s*[:：]\s*|prompt\s*[:：]\s*|output\s*[:：]\s*|final\s+answer\s*[:：]\s*)/i, '')
+  // 剥首尾双引号 (英文版只覆盖 ", 中文版覆盖了「」『』中文引号)
+  text = text.replace(/^["]+|["]+$/g, '')
+
+  // 英文 token 密度低, 长度上限从 600 字提到 800 (200 字 ≈ 100-130 英文 token)
+  if (text.length > 800) text = text.slice(0, 800)
+  return text.trim()
+}
+
 // 检测 LLM 改写后是否仍有 agnes 容易拒掉的关键词
 function containsResidualPolicyRisk(text) {
   // 武器/武侠 + 暴力/燃烧类,任一命中即认为有残留风险
@@ -308,7 +358,11 @@ async function sanitizeImagePromptLLM(rawPrompt) {
     }
     const data = await resp.json()
     const content = data?.choices?.[0]?.message?.content
-    const rewritten = extractPromptFromLLM(typeof content === 'string' ? content : '')
+    // 按 rawPrompt 语言分流: 中文 → 旧版 (中文 LLM 输出专用, 保留行为); 英文 → 新版 (英文 LLM 输出专用)
+    const extractedRaw = typeof content === 'string' ? content : ''
+    const rewritten = hasNonEnglishChars(rawPrompt)
+      ? extractPromptFromLLM(extractedRaw)
+      : extractPromptFromLLMEnglish(extractedRaw)
     if (!rewritten) {
       logTaskWarn('PromptSanitizer', 'llm-rewrite-empty', {
         provider: config.provider,
