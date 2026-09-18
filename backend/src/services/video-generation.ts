@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById, translatePromptToEnglish, hasNonEnglishChars } from './ai.js'
+import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -125,7 +125,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         if (!isFree && hasNonEnglishChars(finalPrompt)) {
           try {
             logTaskProgress('VideoTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
-            finalPrompt = await translatePromptToEnglish(finalPrompt)
+            finalPrompt = await translateVideoPromptToEnglish(finalPrompt)
             logTaskProgress('VideoTask', 'translated-prompt', { id, translated: finalPrompt.slice(0, 80) })
           } catch (err: any) {
             logTaskWarn('VideoTask', 'translation-failed', { id, error: err.message })

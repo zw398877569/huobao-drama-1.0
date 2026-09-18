@@ -168,61 +168,149 @@ export function hasNonEnglishChars(text: string): boolean {
 }
 
 /**
- * 将非英文 prompt 翻译为英文（调用 text provider）
+ * 剥掉推理模型输出的思考/反思/推理块 — 多个 provider (DeepSeek/MiniMax-M3/QwQ 等) 都会输出
+ * <think>...</think> / <reflection>...</reflection> / <reasoning>...</reasoning>。
+ * 这些块不应该进入发给上游图片/视频 API 的 prompt (会污染画面 / 触发审核 / 浪费 token)。
+ *
+ * 集中放在 helper, 让 translateImagePromptToEnglish / translateVideoPromptToEnglish
+ * 与 utils/prompt-sanitizer.ts#extractPromptFromLLM 共用同一份剥离规则, 避免一处防护一处漏。
  */
-export async function translatePromptToEnglish(prompt: string): Promise<string> {
+export function stripReasoningBlocks(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<reflection>[\s\S]*?<\/reflection>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    .trim()
+}
+
+/**
+ * 通用 prompt 翻译入口 — 调用 text provider LLM, 完成防护 (think 块剥离 / reasoning 禁用 / 截断降级)。
+ *
+ * @param userPrompt — 待翻译的原始 prompt
+ * @param systemPrompt — 调用方提供的翻译指令 (image vs video 不同, 见下方两个包装函数)
+ * @returns 清洗后的英文翻译; 任何失败路径 (无 text config / HTTP 错 / 空内容 / 截断) 都 fallback 原 prompt,
+ *   保证上游生图链路不被打断。
+ */
+async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): Promise<string> {
   const config = getActiveConfig('text')
   if (!config) {
     logTaskWarn('PromptTranslation', 'text-config-missing', { reason: 'skipping translation, using original prompt' })
-    return prompt
+    return userPrompt
   }
 
   const url = getTextChatCompletionsUrl(config)
-  const payload = {
-    model: config.model || 'agnes-2.0-flash',
-    messages: [
-      {
-        role: 'system',
-        content: (
-          'You are translating a video generation prompt for an AI video model. '
-          + 'Preserve the three H3 sections exactly with their English headers: '
-          + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
-          + 'Keep XML-style tags intact: <n>0-3s</n> timecodes, <location>X</location>, '
-          + '<role>X</role>, <voice>X</voice>. '
-          + 'IMPORTANT: Dialogue inside 开口:\'...\' or <d>...</d> tags must stay in the '
-          + 'ORIGINAL language — do NOT translate the spoken words. Translate only the '
-          + 'surrounding action/description. Also strip speaker name prefix (e.g. "年轻人:" '
-          + 'before the line should be removed, keep only the spoken words). '
-          + 'Output ONLY the English translation, no commentary.'
-        ),
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.apiKey}`,
       },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0,
-    max_tokens: 800,
+      body: JSON.stringify({
+        model: config.model || 'agnes-2.0-flash',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0,
+        // 800 在中文角色 prompt + think overhead 下必截。提到 2000 给足缓冲。
+        max_tokens: 2000,
+        // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染翻译结果 (与 prompt-sanitizer.ts:296 一致)
+        extra_body: { reasoning: { enabled: false } },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch (err: any) {
+    logTaskWarn('PromptTranslation', 'http-threw', { error: err?.message || String(err) })
+    return userPrompt
   }
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(30_000),
-  })
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '')
     logTaskWarn('PromptTranslation', 'translation-failed', { status: resp.status, error: errText.slice(0, 200) })
-    return prompt // fallback to original
+    return userPrompt
   }
 
   const data = await resp.json() as any
-  const translated = data?.choices?.[0]?.message?.content?.trim()
-  if (!translated) {
+  const choice = data?.choices?.[0]
+  const raw = choice?.message?.content?.trim() || ''
+  if (!raw) {
     logTaskWarn('PromptTranslation', 'empty-translation', { reason: 'no content in response' })
-    return prompt
+    return userPrompt
   }
-  return translated
+  // 截断防护: max_tokens 触顶时不要用半截翻译 (后半段可能是中文残留 + 拼回去反而更糟)
+  if (choice?.finish_reason === 'length') {
+    logTaskWarn('PromptTranslation', 'truncated-fallback', {
+      provider: config.provider,
+      model: config.model,
+      rawLen: raw.length,
+    })
+    return userPrompt
+  }
+  // 二次防护: 即使模型没被 reasoning 禁用参数拦住 (provider 不支持), 也手动剥 think 块
+  const cleaned = stripReasoningBlocks(raw)
+  if (!cleaned) {
+    logTaskWarn('PromptTranslation', 'all-think-stripped', { reason: 'cleaned output empty' })
+    return userPrompt
+  }
+  return cleaned
+}
+
+/**
+ * 图片 prompt 翻译 — 用于角色图 / 场景图 / 道具图 / 分镜首尾帧。
+ *
+ * 跟视频不同, 图片 prompt 完全没有「中文对白」或「H3 三段式」需要保留,
+ * 目标就是干净纯英文视觉描述, 给英文 diffusion 模型 (Grsai GPT/Nano Banana/Hailuo) 用。
+ *
+ * 旧 translatePromptToEnglish (video 专用 system) 误被 image 路径复用时, 模型因看不到
+ * H3 / XML 等预期结构而困惑, 触发 chain-of-thought 输出 <think> 块泄露到最终 prompt
+ * (2026-09-18 bug report) — 拆函数后两边 system prompt 各管各的, 不会再误触发 reasoning。
+ */
+export async function translateImagePromptToEnglish(prompt: string): Promise<string> {
+  const systemPrompt = (
+    'You are translating an AI image generation prompt into fluent English. '
+    + 'Preserve all concrete visual details: face / appearance / outfit / scene / lighting / color '
+    + '/ camera angle / style tokens (cinematic, anamorphic, shallow DOF, etc.). '
+    + 'Output ONLY the English translation — no commentary, no explanation, no thinking blocks. '
+    + 'Do NOT preserve any Chinese in the output; the entire result should be English.'
+  )
+  return callTextLLMForPrompt(prompt, systemPrompt)
+}
+
+/**
+ * 视频 prompt 翻译 — 用于 storyboard video generation (H3 三段式 video_prompt)。
+ *
+ * 必须保留:
+ *   - H3 三段式英文 header: 'Integrated multimodal description:', 'Overall soundscape:',
+ *     'Non-diegetic music:'
+ *   - XML 标签: <n>0-3s</n> 时间戳, <location>X</location>, <role>X</role>, <voice>X</voice>
+ *   - 中文对白 (开口:'...' / <d>...</d> 内部) — 不能翻译成英文, 演员要照原语言念
+ *   - 删掉 speaker 前缀 (如 "年轻人:" 应被剥掉, 只保留台词)
+ */
+export async function translateVideoPromptToEnglish(prompt: string): Promise<string> {
+  const systemPrompt = (
+    'You are translating a video generation prompt for an AI video model. '
+    + 'Preserve the three H3 sections exactly with their English headers: '
+    + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
+    + 'Keep XML-style tags intact: <n>0-3s</n> timecodes, <location>X</location>, '
+    + '<role>X</role>, <voice>X</voice>. '
+    + 'CRITICAL: Dialogue inside 开口:\'...\' or <d>...</d> tags MUST stay in the '
+    + 'ORIGINAL language — do NOT translate the spoken words. Translate only the '
+    + 'surrounding action/description. Strip speaker name prefix (e.g. "年轻人:" '
+    + 'before the line should be removed, keep only the spoken words). '
+    + 'Output ONLY the English translation, no commentary, no thinking blocks.'
+  )
+  return callTextLLMForPrompt(prompt, systemPrompt)
+}
+
+/**
+ * @deprecated 拆分为 translateImagePromptToEnglish / translateVideoPromptToEnglish 后保留 1 个 commit 周期,
+ * 下个 commit 删。当前转发到 image 版保持 image 路径行为不变 (旧实现本身就有这个行为)。
+ *
+ * 之所以保留 fallback 而不是直接删: 调用方不止 image/video (video-generation.ts 也用过),
+ * 留个 grep 余地让外部 caller (如果有) 自己迁移。
+ */
+export async function translatePromptToEnglish(prompt: string): Promise<string> {
+  return translateImagePromptToEnglish(prompt)
 }

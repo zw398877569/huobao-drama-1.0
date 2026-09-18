@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById, hasNonEnglishChars, translatePromptToEnglish } from './ai.js'
+import { getActiveConfig, getConfigById, hasNonEnglishChars, translateImagePromptToEnglish } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
 import { getImageAdapter } from './adapters/registry'
@@ -121,7 +121,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
         if (finalPrompt && hasNonEnglishChars(finalPrompt)) {
           try {
             logTaskProgress('ImageTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
-            finalPrompt = await translatePromptToEnglish(finalPrompt)
+            finalPrompt = await translateImagePromptToEnglish(finalPrompt)
             logTaskProgress('ImageTask', 'translated-prompt', { id, translated: finalPrompt.slice(0, 80) })
           } catch (err: any) {
             logTaskWarn('ImageTask', 'translation-failed', { id, error: err.message })
