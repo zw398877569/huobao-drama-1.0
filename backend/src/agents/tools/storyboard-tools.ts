@@ -784,7 +784,15 @@ export async function runGenerateShotPrompts(params: {
 
     const dialogueInline = sp.dialogue ? ` 开口:'${escapeXml(sp.dialogue)}'` : ''
     const resultInline = sp.result ? ` Ends with ${sp.result}.` : ''
-    const integrated = `延续上一镜末帧构图. ${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
+    // 角色 6 维外貌注入 — 对齐 planner prompt 5 规则「video_prompt 中提到角色时必须复制 6 维描述」,
+    //   之前只 imagePrompt 注入了 ${charDesc}, videoPrompt 漏了, H3 模型只能靠 first_frame 参考图保持一致性 → 换脸/换体型
+    //   修复: integrated 段开头插入 charRoles (角色名 + 外貌), 让 H3 模型在动起来之前明确知道角色长什么样
+    // 注意: 用 escapeXml 转义以防 character.appearance 里有 < / > / ' 等特殊字符
+    const charRoles = charRefs.map(c => {
+      const look = c.appearance || c.description || c.personality || '人物'
+      return `${escapeXml(c.name)}外貌:${escapeXml(look)}`
+    }).join('；')
+    const integrated = `延续上一镜末帧构图. ${charRoles}. ${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
     // H3 官方规范 (skills/storyboard_breaker/h3-official-prompt/fl2va.md):
     //   - Overall soundscape: 无环境音/音效时显式写 'N/A',不要 'none'
     //   - Non-diegetic music: 描述必须用配器/速度/节奏/动态变化,
