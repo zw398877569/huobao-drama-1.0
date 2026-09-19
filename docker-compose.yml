@@ -11,4 +11,4 @@ services:
       - NODE_ENV=production
       - PORT=5679
     restart: unless-stopped
-# deploy-trigger: 2026-09-18T08:28:32Z
+# deploy-trigger: 2026-09-19T08:39:45Z
