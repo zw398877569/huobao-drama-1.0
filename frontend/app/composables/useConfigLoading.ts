@@ -1,4 +1,5 @@
 import { aiConfigAPI, voicesAPI } from '~/composables/useApi'
+import { getModelLabel } from '~/composables/useSettingsAi'
 import type { Ref } from 'vue'
 
 type Deps = {
@@ -51,7 +52,9 @@ export function useConfigLoading(deps: Deps) {
       if (!models.length) continue
       // 每个模型生成独立选项, value 为 "configId:modelName"
       const existing = byProvider.get(c.provider) || []
-      const items = models.map(m => ({ label: m, value: `${c.id}:${m}` }))
+      // autodl 的 workflow id 很难记, dropdown 显示中文标签 + raw id
+      // 其他 provider 的 id 已经是产品友好名, getModelLabel 会原样返回
+      const items = models.map(m => ({ label: getModelLabel(m, c.provider), value: `${c.id}:${m}` }))
       byProvider.set(c.provider, [...existing, ...items])
     }
     const groups: Array<{ group: string; items: Array<{ label: string; value: string }> }> = []

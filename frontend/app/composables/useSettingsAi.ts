@@ -1,5 +1,35 @@
 import { aiConfigAPI } from '~/composables/useApi'
 
+/**
+ * autodl-comfyui 工作流 id → 中文展示标签
+ * 与 backend/src/services/adapters/autodl-comfyui-workflow.ts 的 WORKFLOW_* 常量对应
+ * 新增/删除工作流时同步更新（详见 docs/comfyui-workflows.md）
+ */
+export const AUTODL_COMFYUI_MODEL_LABELS: Record<string, string> = {
+  minimax_h3_lightx2v_no_pic: 'T2V 文生视频（无参考图）',
+  minimax_h3_lightx2v: 'FL2V 首尾帧生视频',
+  minimax_h3_lightx2v_v5: 'Ref2V 多图参考（1-10s）',
+  minimax_h3_lightx2v_v5_15s: 'Ref2V 多图参考（1-15s）',
+  minimax_h3_zm_u24: 'Ref2V 画质升级版 zm_u24（1-15s）',
+  minimax_h3_zm_u08: 'Ref2V 高速版 zm_u08（1-15s）',
+  minimax_h3_image_audio_to_video_v2: 'Ref2V 多图+多音频 v2（1-10s）',
+  minimax_h3_image_audio_to_video_v2_15s: 'Ref2V 多图+多音频 v2（1-15s）',
+}
+
+/**
+ * 给前端 dropdown / 弹窗展示用的模型标签
+ * - autodl-comfyui provider 走上面的中文映射
+ * - 其他 provider（MiniMax-Hailuo、Vidu、火山等）的 model id 本身已经是产品友好名，直接返回
+ * - 没匹配上的 id 也直接返回，避免误显示
+ */
+export function getModelLabel(id: string, provider?: string): string {
+  if (provider === 'autodl-comfyui') {
+    const zh = AUTODL_COMFYUI_MODEL_LABELS[id]
+    if (zh) return `${zh} · ${id}`
+  }
+  return id
+}
+
 export function useSettingsAi(loadAgents: () => Promise<void>) {
   // Dialog + edit state
   const cfgDialog = ref(false)
