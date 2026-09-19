@@ -71,14 +71,15 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
         label: 'AutoDL H3 推荐',
         baseUrl: 'https://autodl.art/api/v1',
         models: [
-          'minimax_h3_lightx2v_no_pic',     // T2V 文生视频
-          'minimax_h3_lightx2v',             // FL2V 首尾帧
-          'minimax_h3_lightx2v_v5',          // Ref2V 多图参考 1-10s
-          'minimax_h3_lightx2v_v5_15s',      // Ref2V 多图参考 1-15s
-          'minimax_h3_zm_u24',               // Ref2V 升级画质 1-15s
-          'minimax_h3_zm_u08',               // Ref2V 高速版 1-15s
-          'minimax_h3_image_audio_to_video_v2',      // Ref2V 多图+多音频 1-10s (支持 1080p)
-          'minimax_h3_image_audio_to_video_v2_15s',  // Ref2V 多图+多音频 1-15s
+          'minimax_h3_lightx2v_no_pic',                       // T2V    文生视频（无参考图）              1-10s   480p/768p
+          'minimax_h3_lightx2v',                               // FL2V   首尾帧生视频                    1-10s   480p/768p
+          'minimax_h3_lightx2v_v5',                            // Ref2V  多图参考默认版                  1-10s   480p/768p/1080p
+          'minimax_h3_lightx2v_v5_15s',                        // Ref2V  多图参考 15s 长版               1-15s   480p/768p/1080p
+          'minimax_h3_zm_u24',                                 // Ref2V  画质升级版 (zm_u24)             1-15s   480p/768p
+          'minimax_h3_zm_u08',                                 // Ref2V  高速版 (zm_u08)                 1-15s   480p/768p
+          'minimax_h3_image_audio_to_video_v2',                // Ref2V  多图+多音频（口型/配乐驱动）     1-10s   480p/768p/1080p
+          'minimax_h3_image_audio_to_video_v2_15s',            // Ref2V  多图+多音频 15s 长版            1-15s   480p/768p
+          // 详细中文说明见 backend/src/services/adapters/autodl-comfyui-workflow.ts 的 JSDoc 与 docs/comfyui-workflows.md
         ],
       },
     },

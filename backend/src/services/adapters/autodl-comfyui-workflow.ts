@@ -10,6 +10,8 @@
  * - resolution 字段是 autodl 自己的命名 (480p竖/480p横/1080p横/768p竖/768p横/1080p竖)
  * - 响应格式: { code: "Success", data: { status, results: [{url, type, ...}], task_id } }
  * - 单 provider 路由到 4 个 workflow_id (T2V / FL2V / Ref2V / Ref2V-15s)
+ *
+ * 工作流中文目录见 docs/comfyui-workflows.md
  */
 import type {
   VideoProviderAdapter,
@@ -25,22 +27,74 @@ import { logTaskWarn } from '../../utils/task-logger.js'
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
 
-  /** H3 文生视频 (T2V) — duration 1-10s */
+  /**
+T2V 文生视频（无参考图）
+时长 1-10s，分辨率 480p/768p（不支持 1080p）
+输入：仅 prompt
+路由：referenceMode=none 且无 first/last frame
+场景：完全没参考图、只能靠文字描述画面的分镜
+*/
   static readonly WORKFLOW_T2V = 'minimax_h3_lightx2v_no_pic'
-  /** H3 首尾帧生视频 (FL2V) — duration 1-10s */
+  /**
+FL2V 首尾帧生视频
+时长 1-10s，分辨率 480p/768p（不支持 1080p）
+输入：prompt + first_frame URL + last_frame URL
+路由：referenceMode=first_last 或同时提供 firstFrameUrl+lastFrameUrl
+场景：镜头有明确起止画面、需要平滑过渡
+*/
   static readonly WORKFLOW_FL2V = 'minimax_h3_lightx2v'
-  /** H3 多图参考生视频 (Ref2V) — duration 1-10s, 最多 9 张参考图 */
+  /**
+Ref2V 多图参考（1-10s）
+时长 1-10s，分辨率 480p/768p/1080p（横竖都支持）
+输入：prompt + 最多 9 张 ref_image_0..8 URL
+路由：referenceMode=multiple/single 且 duration ≤ 10
+场景：短镜头（≤10s）需要角色/场景一致性
+*/
   static readonly WORKFLOW_REF2V = 'minimax_h3_lightx2v_v5'
-  /** H3 多图参考生视频 15 秒版 (Ref2V) — duration 1-15s, 最多 9 张参考图 */
+  /**
+Ref2V 多图参考（1-15s）
+时长 1-15s，分辨率 480p/768p/1080p（横竖都支持）
+输入：prompt + 最多 9 张参考图
+路由：referenceMode=multiple/single 且 11 ≤ duration ≤ 15
+场景：长镜头（11-15s）需要多图参考
+*/
   static readonly WORKFLOW_REF2V_15S = 'minimax_h3_lightx2v_v5_15s'
 
-  /** Ref2V 升级画质版 (zm_u24) — duration 1-15s, 多图参考 + 可选音频 */
+  /**
+Ref2V 升级画质版（zm_u24）
+时长 1-15s，分辨率 480p/768p（不支持 1080p）
+输入：prompt + 最多 9 张参考图（支持音频输入）
+路由：用户在前端 model 弹窗显式选择
+场景：强调成片质量、可接受稍长生成时间
+注意：仅 mode=multiple/single 生效；模式不匹配会被 adapter 静默 fallback 到 FL2V/T2V 并写 model-mode-mismatch 日志
+*/
   static readonly WORKFLOW_REF2V_QUALITY = 'minimax_h3_zm_u24'
-  /** Ref2V 高速版 (zm_u08) — duration 1-15s, 多图参考 + 可选音频 */
+  /**
+Ref2V 高速版（zm_u08）
+时长 1-15s，分辨率 480p/768p（不支持 1080p）
+输入：prompt + 最多 9 张参考图（支持音频输入）
+路由：用户显式选择
+场景：迭代阶段、需要快速出图验证构图/节奏
+注意：同 zm_u24，模式不匹配会被 fallback
+*/
   static readonly WORKFLOW_REF2V_SPEED = 'minimax_h3_zm_u08'
-  /** Ref2V 多图+多音频 (image_audio_to_video_v2) — duration 1-10s, 支持 1080p */
+  /**
+Ref2V 多图+多音频 v2（1-10s）
+时长 1-10s，分辨率 480p/768p/1080p（横竖都支持）
+输入：prompt + 最多 9 张参考图 + 多段音频（音频驱动画面）
+路由：用户显式选择
+场景：角色台词/旁白对口型、配乐驱动画面节奏
+注意：当前前端未接 audioUrls schema，audio 字段为空（Phase 3b 再加）
+*/
   static readonly WORKFLOW_REF2V_AUDIO = 'minimax_h3_image_audio_to_video_v2'
-  /** Ref2V 多图+多音频 15s 版 — duration 1-15s, 仅 480p/768p */
+  /**
+Ref2V 多图+多音频 v2 15s 版
+时长 1-15s，分辨率 仅 480p/768p（不支持 1080p）
+输入：prompt + 最多 9 张参考图 + 多段音频
+路由：用户显式选择
+场景：长镜头（11-15s）需要音频驱动
+注意：同 audio v2 的限制
+*/
   static readonly WORKFLOW_REF2V_AUDIO_15S = 'minimax_h3_image_audio_to_video_v2_15s'
 
   /** 所有 Ref2V 变体 — record.model 显式选择时识别 */
