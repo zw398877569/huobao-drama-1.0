@@ -454,7 +454,14 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
   轴3【节奏控制】:高密度信息 → 用切黑/停顿/慢推 替代 连切;不要"全程加速",在关键点制造停顿
 
-  轴4【时长影响】:不同镜头时长传递不同信息量。远景稍长(3-5s 交代空间)，特写极短(1-3s 强调表情)
+  轴4【时长】(五因子粒度模型, 跟 storyboard_planner 同源):
+    factor-1 景别 baseline(主心骨, 越近越短): ECU 2-3s / CU 3-4s / MS 4-5s / MLS 5-6s / MLS 6-8s / WS 7-9s / WS 8-10s
+    factor-2 密度系数(scale, 不是区间): low(铺垫/余韵/悬念) ×1.2 / medium(揭露/对峙) ×1.0 / high(反转/高潮/情感爆发) ×0.6
+    factor-3 dialogueFloor(防音画错配): floor = ceil(对白字数 / 4.5) + 1
+    factor-4 运镜速度系数(O1 修复): 快速 ×0.7 / 固定 ×1.0 / 缓慢 ×1.3
+    P3 短对白(<10字) 压缩到 ≤8s(避免空转)
+    最终: clamp(baseline × density × move, floor, 15s)
+    注意: 单镜头重新生成场景不做 Σ 收敛 / 钩子空间 / 场景过渡 bonus (这 3 个需要全 shot_plan 上下文, 留给 batch 路径 runGenerateShotPrompts)
 
 记忆口诀:先定剧情目的，再让情绪决定景别，再让节奏决定切换方式，最后让时长决定信息效率。
 
@@ -576,7 +583,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
   1) read_storyboard_context → 读剧本 + 角色列表(每个角色的 appearance) + 场景列表(每个 scene 已含 intention.intention / intention.function / intentionTemplate / intention.cameraSpeed / intention.shortDramaTips)
   2) 对每个 scene 提炼 scene_intention 的功能(揭露/对峙/反转/铺垫/高潮/余韵/悬念/情感爆发),作为本 scene 所有镜头的叙事锚
-  3) 按"全景→中景→近景"开场,逐镜填 17 个字段;时长按"远景 3-5s / 中景 3-4s / 近景 2-3s / 特写 1-2s"分配
+  3) 按"全景→中景→近景"开场,逐镜填 17 个字段;时长按五因子粒度模型算(见轴4)
   4) 每镜自检 4 轴决策框架(剧情目的→情绪→节奏→时长),并核对人物 6 维 + 场景 6 维
   5) save_storyboards 保存
 
@@ -591,7 +598,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   ✗ 禁止用 cinematic / dramatic / beautiful / epic / masterpiece / stunning / breathtaking 等抽象形容词,用具体光线/色调/构图/动作描写代替
   ✗ 禁止 video_prompt 出现"切黑/转场/下一镜"等后期拼接指令(转场由拼接阶段负责)
   ✗ 禁止把 action + result + dialogue 混在一句话(分开填三个字段)
-  ✗ 禁止 duration 超过 15 秒或低于 5 秒 (推荐区间, 实际硬约束是 4-15 — 落库前 storyboard-tools 会 clamp 到这个范围, 低于 4 自动调到 4, 高于 15 自动调到 15)
+  ✗ 禁止 duration 超过 15 秒或低于 4 秒 (H3 模型硬约束 — 落库前 storyboard-tools 会 clamp 到 [4, 15] 范围, 低于 4 自动调到 4, 高于 15 自动调到 15)
 
   已有 existing storyboards 时:仅在用户明确要求增量修改时参考;默认按当前剧本重新完整生成并保存整组分镜。
 
@@ -602,6 +609,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   触发:user message 含"重新生成本镜头(id=N)"或类似增量指令
   - 只能调 update_storyboard 修改指定 storyboard_id,不要触碰其他任何镜头
   - 17 字段全部重新生成(同全量模式的 4 轴 + 6 维约束 + 单镜头 + 首帧延续 + 对白嵌入)
+  - duration 按轴4 五因子粒度模型计算(景别 baseline × 密度 × 运镜 → dialogueFloor → [4,15] 安全网)
   - 首帧延续参考上一镜末帧状态(result / atmosphere)
   - dialogue 字段的对白仍必须按时间顺序嵌入 video_prompt 的对应时间段
   - 不要新增/删除其他 storyboard,只改这一镜
