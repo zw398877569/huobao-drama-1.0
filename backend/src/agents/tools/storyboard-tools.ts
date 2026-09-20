@@ -772,7 +772,10 @@ function convergeShotDurations(
   return durations.map((d, i) => {
     const hookMin = getHookMin(i, durations.length, isCliffhanger(i))
     if (hookMin > 0) return Math.max(d, hookMin)  // 钩子镜不缩
-    return Math.max(1, Math.round(d * scale))
+    // QA ISSUE-002 (msg-20260920-006): 之前用 Math.max(1, ...) 兜底, 缩放后非钩子镜可能跌到 1-3s
+    //   违反 H3 VIDEO_MIN_DURATION=4 硬约束. EP=5 Σ=258s scale≈0.43 大概率触发.
+    //   修复: 兜底用 VIDEO_MIN_DURATION=4, 钩子镜仍保留 hook_min 不被缩
+    return Math.max(VIDEO_MIN_DURATION, Math.round(d * scale))
   })
 }
 
@@ -933,11 +936,15 @@ export async function runGenerateShotPrompts(params: {
     //   之前只 imagePrompt 注入了 ${charDesc}, videoPrompt 漏了, H3 模型只能靠 first_frame 参考图保持一致性 → 换脸/换体型
     //   修复: integrated 段开头插入 charRoles (角色名 + 外貌), 让 H3 模型在动起来之前明确知道角色长什么样
     // 注意: 用 escapeXml 转义以防 character.appearance 里有 < / > / ' 等特殊字符
+    // QA ISSUE-003 (msg-20260920-006): charRefs 为空时 charRoles='', integrated 开头会变
+    //   '延续上一镜末帧构图. . ${segs}...', 多一个 '. ', 格式丑但不崩.
+    //   修复: 用 charRolesPrefix 判断, 空时不加这个 '. '
     const charRoles = charRefs.map(c => {
       const look = c.appearance || c.description || c.personality || '人物'
       return `${escapeXml(c.name)}外貌:${escapeXml(look)}`
     }).join('；')
-    const integrated = `延续上一镜末帧构图. ${charRoles}. ${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
+    const charRolesPrefix = charRoles ? `${charRoles}. ` : ''
+    const integrated = `延续上一镜末帧构图. ${charRolesPrefix}${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
     // H3 官方规范 (skills/storyboard_breaker/h3-official-prompt/fl2va.md):
     //   - Overall soundscape: 无环境音/音效时显式写 'N/A',不要 'none'
     //   - Non-diegetic music: 描述必须用配器/速度/节奏/动态变化,
