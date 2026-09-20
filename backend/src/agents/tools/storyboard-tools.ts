@@ -16,6 +16,24 @@ import { validateEventDensity } from '../../services/prompt-validation'
 import { checkPromptSafety } from '../../services/prompt-safety'
 import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
+import {
+  getBaselineFor,
+  getDensityScale,
+  getMoveScale,
+  FALLBACK_DENSITY_SCALE,
+  computeDialogueFloor,
+  SHORT_DIALOGUE_THRESHOLD,
+  SHORT_DIALOGUE_MAX,
+  VIDEO_MIN_DURATION,
+  VIDEO_MAX_DURATION,
+  HOOK_OPENING_MIN,
+  HOOK_CLOSING_MIN,
+  HOOK_CLIFFHANGER_MIN,
+  CLIFFHANGER_TAGS,
+  SCENE_TRANSITION_BONUS,
+  DEFAULT_EPISODE_TARGET_SECONDS,
+  EPISODE_TARGET_TOLERANCE,
+} from '../../constants/shot-type-baseline'
 
 // H3 三段式 video_prompt 的 5D 字段映射(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS P4)
 // planner 输出中文 / 自由文本,这里统一映射到 H3 英文 enum
@@ -636,6 +654,130 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
   return { readStoryboardContext, saveStoryboards, updateStoryboard, generateGridPrompt, generateShotPrompts }
 }
 
+// ── Phase 2 时长决策 helper functions (msg-20260920-003) ──────────────
+// 不混入主循环, 每个函数独立可测. 上游常量: ../../constants/shot-type-baseline.ts
+
+/**
+ * 五因子粒度模型 → candidate duration (秒)
+ *  factor-1: 景别 baseline (getBaselineFor)
+ *  factor-2: 密度系数 (getDensityScale from intentTemplate.durationCoefficient)
+ *  factor-4: 运镜速度系数 (getMoveScale from sp.movement)
+ *  → baseline.min × density × move
+ *  factor-3: dialogueFloor = ceil(对白字数 / 4.5) + 1
+ *  → candidate = max(floor, scaled)
+ *  P3: 短对白 (<10字) 压缩到 ≤ 8s
+ *  最终: [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] clamp
+ */
+function computeShotDuration(
+  sp: { shot_type: string; dialogue?: string; movement?: string },
+  intentTemplate: { durationCoefficient?: number; shotDensity?: string } | undefined,
+): number {
+  const baseline = getBaselineFor(sp.shot_type)
+  const densityScale = intentTemplate?.durationCoefficient ?? FALLBACK_DENSITY_SCALE
+  const moveScale = getMoveScale(sp.movement)
+  // 对白按 char count (去空白), 中文 4.5 字/秒常识
+  const dialogueChars = (sp.dialogue || '').replace(/\s/g, '').length
+  const scaled = baseline.min * densityScale * moveScale
+  const floor = computeDialogueFloor(dialogueChars)
+  let candidate = Math.max(floor, scaled)
+  // P3: 短对白压缩 (< 10 字 → ≤ 8s, 避免空转)
+  if (dialogueChars > 0 && dialogueChars < SHORT_DIALOGUE_THRESHOLD) {
+    candidate = Math.min(candidate, SHORT_DIALOGUE_MAX)
+  }
+  return Math.round(candidate)
+}
+
+/**
+ * 钩子保留 (O3)
+ *  idx=0 → HOOK_OPENING_MIN (3s, 开场钩子)
+ *  idx=last → HOOK_CLIFFHANGER_MIN (10s, 仅 cliffhanger) 或 HOOK_CLOSING_MIN (8s)
+ *  其他 → 0 (不强制)
+ */
+function getHookMin(idx: number, total: number, isCliffhanger: boolean): number {
+  if (idx === 0) return HOOK_OPENING_MIN
+  if (idx === total - 1) {
+    return isCliffhanger ? HOOK_CLIFFHANGER_MIN : HOOK_CLOSING_MIN
+  }
+  return 0
+}
+
+/**
+ * 场景过渡 bonus (O2)
+ *  每个 scene 第一个镜 +0.5s (观众认知切换需要缓冲)
+ */
+function applySceneTransitionBonus(candidate: number, isFirstInScene: boolean): number {
+  return isFirstInScene ? candidate + SCENE_TRANSITION_BONUS : candidate
+}
+
+/**
+ * scene 内第一镜索引集合 (Phase 2 C, 用于场景过渡 bonus)
+ *  shot_plan 按 shot_number 顺序, 同一 scene_id 第一次出现算 first
+ */
+function buildFirstInSceneIndices(
+  shot_plan: Array<{ scene_id: number }>
+): Set<number> {
+  const seenScenes = new Set<number>()
+  const firstIndices = new Set<number>()
+  shot_plan.forEach((sp, i) => {
+    if (!seenScenes.has(sp.scene_id)) {
+      seenScenes.add(sp.scene_id)
+      firstIndices.add(i)
+    }
+  })
+  return firstIndices
+}
+
+/**
+ * cliffhanger 判定 (Phase 2 C placeholder, Phase 3 scene-classifier 会替换为更复杂逻辑)
+ *  检查 scene 的 intention.function 字段是否命中 CLIFFHANGER_TAGS
+ *  scene.intention 不存在 → false (无 cliffhanger)
+ *  Phase 3: lib/scene-classifier.ts 会加 fallback 推断 (结构位置后 30% + description 冲突词 + 场景对峙)
+ */
+function isCliffhangerScene(
+  sceneId: number,
+  sceneMap: Map<number, { intention?: { function?: string } | null }>
+): boolean {
+  const fn = sceneMap.get(sceneId)?.intention?.function
+  return fn ? CLIFFHANGER_TAGS.includes(fn as typeof CLIFFHANGER_TAGS[number]) : false
+}
+
+/**
+ * episode target 来源 (Phase 2 C placeholder, Phase 3 estimator 替换)
+ *  当前 episodes 表没有 target_duration 字段, fallback DEFAULT_EPISODE_TARGET_SECONDS (100s)
+ *  Phase 3 lib/episode-duration-estimator.ts 接入后会先查 episodes.target_duration 字段再 fallback
+ *  这里保留 placeholder 接口便于 Phase 3 直接替换
+ */
+function getEpisodeTargetSeconds(episodeId: number): number {
+  // Phase 2 C: 无 target_duration 字段, fallback 100s (AI 漫剧主流 P50)
+  // Phase 3: 替换为 readEpisodeTarget(episodeId) (查 estimator + 字段)
+  void episodeId  // 占位, Phase 3 启用
+  return DEFAULT_EPISODE_TARGET_SECONDS
+}
+
+/**
+ * Σ 收敛 (Phase 2 C)
+ *  当 Σ > target × tolerance, 按比例缩放非钩子镜头
+ *  钩子镜 (idx=0, idx=last 且 cliffhanger) 强制 ≥ hookMin 不被缩
+ *  返回新的 durations 数组 (新数组, 不修改入参)
+ */
+function convergeShotDurations(
+  durations: number[],
+  episodeTargetSeconds: number,
+  isCliffhanger: (idx: number) => boolean,
+): number[] {
+  const total = durations.reduce((a, b) => a + b, 0)
+  const maxAllowed = episodeTargetSeconds * EPISODE_TARGET_TOLERANCE
+  if (total <= maxAllowed) return durations.slice()  // 不超, 不缩
+  const scale = maxAllowed / total
+  return durations.map((d, i) => {
+    const hookMin = getHookMin(i, durations.length, isCliffhanger(i))
+    if (hookMin > 0) return Math.max(d, hookMin)  // 钩子镜不缩
+    return Math.max(1, Math.round(d * scale))
+  })
+}
+
+// ── Phase 2 helper functions 结束 ──────────────────────────────
+
 /**
  * 直接调用（不走 LLM）：将 shot_plan 批量生成 prompt 并写入 DB。
  * 供 /agent/storyboard_breaker/execute 路由使用，绕过 agent 推理层。
@@ -715,25 +857,28 @@ export async function runGenerateShotPrompts(params: {
     db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
   }
 
+  // Phase 2 准备: 算 scene 内第一镜索引 (用于 O2 场景过渡 bonus)
+  const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
+  const episodeTargetSeconds = getEpisodeTargetSeconds(episodeId)
+
   let totalDuration = 0
   const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
   const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
 
-  for (const sp of shot_plan) {
+  for (const [i, sp] of shot_plan.entries()) {
     validateStoryboardBindings(episodeId, sp.scene_id, sp.character_ids)
     const scene = sceneMap.get(sp.scene_id)
     const charRefs = sp.character_ids.map(id => charMap.get(id)).filter((c): c is NonNullable<typeof c> => !!c)
 
-    // 密度驱动 duration 二次 clamp (planner prompt 给 density 区间, LLM 可能越界)
-    // 按 sp.intent_function 查模板拿到 shotDensity + recommendedDuration,
-    //   没匹配 (function 名拼错或不在 8 套内) → fallback medium (5-10s)
+    // 五因子粒度模型 (Phase 2 msg-20260920-003): 景别 baseline × 密度系数 × 运镜系数
+    //   → dialogueFloor clamp → [VIDEO_MIN, VIDEO_MAX] 安全网
+    //   旧逻辑 (密度 clamp 到区间) 已废弃, 密度现在是 scale 系数不是 range
     const intentTemplate = INTENTION_TEMPLATES[sp.intent_function as DramaticFunctionKey]
-    const density = intentTemplate?.shotDensity || 'medium'
-    const durRange = intentTemplate?.recommendedDuration || { min: 5, max: 10 }
-    const rawDur = sp.duration || durRange.min
-    const densityClamped = Math.max(durRange.min, Math.min(durRange.max, Math.floor(rawDur)))
-    // 再叠 [4,15] 终极安全网 (video API 硬约束)
-    sp.duration = Math.max(4, Math.min(15, densityClamped))
+    let candidate = computeShotDuration(sp, intentTemplate)
+    // 场景过渡 bonus (O2)
+    candidate = applySceneTransitionBonus(candidate, firstInSceneIndices.has(i))
+    // [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] 终极安全网 (video API 硬约束)
+    sp.duration = Math.max(VIDEO_MIN_DURATION, Math.min(VIDEO_MAX_DURATION, candidate))
 
     // 角色外观兜底
     const charDesc = charRefs.map(c => {
@@ -863,13 +1008,28 @@ export async function runGenerateShotPrompts(params: {
     }
   }
 
+  // Σ 收敛 (Phase 2 C): 当 Σ 超过 target × tolerance, 按比例缩放非钩子镜头
+  //   注意: 钩子镜 (idx=0, idx=last 且 cliffhanger) 保留时长不被压
+  const convergedDurations = convergeShotDurations(
+    shot_plan.map(sp => sp.duration),
+    episodeTargetSeconds,
+    (idx) => isCliffhangerScene(shot_plan[idx].scene_id, sceneMap as any),
+  )
+  // 把 converged 值写回 shot_plan, 同时重算 totalDuration
+  let convergedTotal = 0
+  shot_plan.forEach((sp, i) => {
+    sp.duration = convergedDurations[i]
+    convergedTotal += sp.duration
+  })
+
   db.update(schema.episodes)
-    .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
+    .set({ duration: Math.ceil(convergedTotal / 60), updatedAt: ts })
     .where(eq(schema.episodes.id, episodeId)).run()
 
   logTaskSuccess('StoryboardTool', 'generate-shot-prompts-complete', {
-    episodeId, count: shot_plan.length, totalDuration,
+    episodeId, count: shot_plan.length, totalDuration: convergedTotal, converged: convergedTotal !== shot_plan.reduce((a, sp) => a + sp.duration, 0),
     densityWarnings: densityWarnings.length, safetyWarnings: safetyWarnings.length,
   })
-  return { count: shot_plan.length, total_duration: totalDuration, density_warnings: densityWarnings.length, safety_warnings: safetyWarnings.length }
+  // total_duration 返回收敛后的 Σ (用户看到的应该是 Σ 收敛后值, 不是循环累加中间值)
+  return { count: shot_plan.length, total_duration: convergedTotal, density_warnings: densityWarnings.length, safety_warnings: safetyWarnings.length }
 }
