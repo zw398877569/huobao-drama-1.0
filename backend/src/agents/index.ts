@@ -941,13 +941,25 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
    - 轴1【剧情目的】：每镜选 1 个功能(交代/情绪/悬念/紧张/反转/线索)
    - 轴2【情绪强度】：情绪越强景别越近
    - 轴3【节奏控制】：动静结合，关键处停顿
-   - 轴4【时长】（按 scene 密度决定,不是按景别）：
-      本镜所属 scene 的 intention.shotDensity 决定 duration 区间:
-        low (铺垫/余韵/悬念) → 10-15s,一镜讲清空间+情绪,适合开场/转场/留白
-        medium (揭露/对峙) → 5-8s,反应镜头 + 关键信息,留够节奏但不要冗长
-        high (反转/高潮/情感爆发) → 3-5s,快切密集,多角度冲击,情绪要压缩
-      每镜自检:duration 必须落在本 scene 的 recommendedDuration.min/max 区间内,允许微调但不超界
-      fallback:scene.intention.shotDensity 缺失 → 默认 medium (5-10s)
+   - 轴4【时长】(四因子联合决定,密度仅作系数,不再是定死区间):
+      factor-1【景别 baseline】(主心骨):越近的镜头反而越短(情绪密度高,短才打)
+        ECU_大特写 2-3s / CU_特写 3-4s / MS_近景 4-5s / MLS_中景 5-6s / MLS_中全景 6-8s / WS_全景 7-9s / WS_远景 8-10s
+      factor-2【密度系数】(scale,不是区间):
+        low(铺垫/余韵/悬念) ×1.2, medium(揭露/对峙) ×1.0, high(反转/高潮/情感爆发) ×0.6
+      factor-3【dialogueFloor 对白下限,防音画错配】:
+        dialogue_chars = 本镜对白字符数, floor = ceil(dialogue_chars / 4.5) + 1
+        最终 candidate = clamp(baseline×density_scale, floor, 15s)
+      factor-4【运镜速度】(O1 补充):
+        快速 ×0.7(运镜快=信息密度高=时长短) / 固定 ×1.0(中性) / 缓慢 ×1.3(运镜慢=留白长=时长长)
+        最终 candidate *= move_scale(应用在 dialogueFloor 之前)
+      软引导:
+        - 单集目标总时长由 estimator 算出(默认 100s,AI 漫剧主流;可选 60s/100s/180s 三档)
+          Σ(所有 candidate) 应不超过 target ×1.1,code 端会按比例缩放收敛
+        - 开场镜 idx=0 强制 ≥3s,结尾镜 idx=last 且 scene 戏剧目的命中「悬念」时强制 ≥10s
+        - 场景切换首镜 isFirstInScene 自动 +0.5s
+        - 若本镜对白 < 10 字,candidate 不要超过 8s(避免空转)
+      每镜自检:duration 必须落在 [floor, 15s] 区间内,且尽量贴近 baseline × scale
+      fallback:scene.intention.shotDensity 缺失 → 默认 medium (×1.0);shot_type 不在 baseline 表 → 用 MS(4-5s)
    - 轴5【道具时序约束】(防止剧情道具提前泄露):
       角色身上的「情节道具」只能在所属 scene 的 description 里被显式提到时,才能在本镜出现;
       character.description 里描述的情节瞬间 (例如「前爪按红色按钮」这种特定剧情动作/物体) 不算
