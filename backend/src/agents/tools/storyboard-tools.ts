@@ -637,8 +637,10 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         // (2026-09-21 fix: 之前 .optional() 不接 null, planner 输出 null 时整个 tool call fail, history 反复重发 body 暴涨)
         character_ids: z.array(z.number()).nullish(),
         shot_type: z.string().nullish(),
-        angle: z.string(),
-        movement: z.string(),
+        // angle/movement/action 也改 .nullish() (2026-09-21 ISSUE-006): 同 dialogue/description 一样会触发 zod validation fail + history 重发
+        angle: z.string().nullish(),
+        movement: z.string().nullish(),
+        // action normalize 已存在 (见 execute 入口), schema 改 nullish 让其激活
         location: z.string().nullish(),
         time: z.string().nullish(),
         duration: z.number(),
@@ -657,6 +659,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         ...sp,
         character_ids: sp.character_ids ?? [],
         shot_type: sp.shot_type ?? '中景',
+        angle: sp.angle ?? '',
+        movement: sp.movement ?? '',
         location: sp.location ?? '',
         time: sp.time ?? '',
         action: sp.action ?? '',
