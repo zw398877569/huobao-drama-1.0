@@ -36,6 +36,8 @@ export const episodes = sqliteTable('episodes', {
   imageConfigId: integer('image_config_id'),
   videoConfigId: integer('video_config_id'),
   audioConfigId: integer('audio_config_id'),
+  // PM 派单 msg-20260920-004 Step 3.D: user-set target duration (s), null = estimator fallback
+  targetDuration: integer('target_duration'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

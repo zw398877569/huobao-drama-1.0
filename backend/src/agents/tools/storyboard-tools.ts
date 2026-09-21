@@ -34,6 +34,10 @@ import {
   DEFAULT_EPISODE_TARGET_SECONDS,
   EPISODE_TARGET_TOLERANCE,
 } from '../../constants/shot-type-baseline'
+import {
+  estimateTargetDuration,
+  type EpisodeSceneData,
+} from '../../lib/episode-duration-estimator'
 
 // H3 三段式 video_prompt 的 5D 字段映射(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS P4)
 // planner 输出中文 / 自由文本,这里统一映射到 H3 英文 enum
@@ -775,10 +779,71 @@ function isCliffhangerScene(
  *  这里保留 placeholder 接口便于 Phase 3 直接替换
  */
 function getEpisodeTargetSeconds(episodeId: number): number {
-  // Phase 2 C: 无 target_duration 字段, fallback 100s (AI 漫剧主流 P50)
-  // Phase 3: 替换为 readEpisodeTarget(episodeId) (查 estimator + 字段)
-  void episodeId  // 占位, Phase 3 启用
-  return DEFAULT_EPISODE_TARGET_SECONDS
+  // PM 派单 msg-20260920-004 Step 3.D 接入:
+  //   1. 先查 episodes.target_duration 字段（如有且不为 null）→ 直接返回
+  //   2. 否则调 estimateTargetDuration() (聚合 storyboards dialogue + sceneIntention)
+  //   3. 再 fallback 100s
+
+  // 1. user-set target duration
+  const episodeRow = db.select({ targetDuration: schema.episodes.targetDuration, dramaId: schema.episodes.dramaId })
+    .from(schema.episodes)
+    .where(eq(schema.episodes.id, episodeId))
+    .get()
+  if (episodeRow?.targetDuration != null && episodeRow.targetDuration > 0) {
+    return episodeRow.targetDuration
+  }
+
+  if (!episodeRow || episodeRow.dramaId == null) {
+    return DEFAULT_EPISODE_TARGET_SECONDS
+  }
+
+  // 2. 聚合 estimator 所需数据
+  //    drama 内所有 episodes (算 episode position penalty)
+  const dramaEpisodes = db.select().from(schema.episodes)
+    .where(eq(schema.episodes.dramaId, episodeRow.dramaId))
+    .all()
+
+  //    本 episode 所有 scenes
+  const scenes = db.select().from(schema.scenes)
+    .where(eq(schema.scenes.episodeId, episodeId))
+    .all()
+
+  //    本 episode 所有 storyboards (聚合 dialogue + intentionFunction per scene)
+  const storyboards = db.select().from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, episodeId))
+    .all()
+
+  const dialogueByScene = new Map<number, string>()
+  const intentionByScene = new Map<number, DramaticFunctionKey>()
+  for (const sb of storyboards) {
+    if (sb.sceneId == null) continue
+    if (sb.dialogue) {
+      dialogueByScene.set(sb.sceneId, (dialogueByScene.get(sb.sceneId) ?? '') + sb.dialogue)
+    }
+    if (sb.sceneIntention) {
+      // first-wins: 取第一个解析成功的 intention (同 scene 多 storyboard 时)
+      if (!intentionByScene.has(sb.sceneId)) {
+        try {
+          const parsed = JSON.parse(sb.sceneIntention) as { function?: string }
+          if (parsed.function) {
+            intentionByScene.set(sb.sceneId, parsed.function as DramaticFunctionKey)
+          }
+        } catch {
+          // 解析失败忽略, 下个 storyboard 再试
+        }
+      }
+    }
+  }
+
+  //    构造 EpisodeSceneData[] (caller 负责组装 dialogue/intentionFunction)
+  const episodeSceneData: EpisodeSceneData[] = scenes.map(s => ({
+    ...s,
+    dialogue: dialogueByScene.get(s.id),
+    intentionFunction: intentionByScene.get(s.id),
+  }))
+
+  // 3. estimator (返回 [60, 240] clamp 后的秒数)
+  return estimateTargetDuration(episodeId, dramaEpisodes, episodeSceneData)
 }
 
 /**

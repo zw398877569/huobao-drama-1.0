@@ -47,6 +47,7 @@ sqlite.exec(`
     image_config_id INTEGER,
     video_config_id INTEGER,
     audio_config_id INTEGER,
+    target_duration INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     deleted_at TEXT
@@ -386,6 +387,7 @@ function ensureColumn(table: string, column: string, definition: string) {
 ensureColumn('episodes', 'image_config_id', 'INTEGER')
 ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
+ensureColumn('episodes', 'target_duration', 'INTEGER')
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 // P0 Scene Intention: derived from scene_intention agent
