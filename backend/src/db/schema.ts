@@ -370,3 +370,20 @@ export const assets = sqliteTable('assets', {
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
 })
+
+
+// cron 任务监控 — 外部 launchd 任务 wrapper 上报 (来自 ~/bin/task-runner.sh)
+// 与项目内任务 (logTask*) 隔离, 独立表, 不影响任何已有表
+export const cronRuns = sqliteTable('cron_runs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  runId: text('run_id').notNull().unique(),
+  name: text('name').notNull(),
+  status: text('status').notNull(),
+  startedAt: integer('started_at').notNull(),
+  endedAt: integer('ended_at'),
+  exitCode: integer('exit_code'),
+  output: text('output'),
+  durationMs: integer('duration_ms'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})

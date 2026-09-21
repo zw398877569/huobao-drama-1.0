@@ -30,6 +30,12 @@
           </svg>
           <span>设置</span>
         </NuxtLink>
+        <NuxtLink to="/tasks" class="nav-link" :class="{ active: route.path === '/tasks' }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span>任务</span>
+        </NuxtLink>
       </nav>
 
       <div class="header-right">

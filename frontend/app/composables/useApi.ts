@@ -97,6 +97,12 @@ export const videoAPI = {
   // 自由创作历史: ?source=free 返回非正式分镜记录 (与正式分镜视频列表隔离)
   listFree: () => api.get('/videos?source=free'),
 }
+// 外部 launchd cron 任务监控 — 来自 ~/bin/task-runner.sh 上报
+export const cronAPI = {
+  list: (params: { date?: string; status?: string; name?: string; limit?: number } = {}) =>
+    api.get('/cron/runs?' + new URLSearchParams(params as any).toString()),
+  get: (runId: string) => api.get(`/cron/runs/${runId}`),
+}
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),
   all: (epId: number) => api.post(`/compose/episodes/${epId}/compose-all`),

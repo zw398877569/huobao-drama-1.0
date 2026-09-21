@@ -24,6 +24,7 @@ import grid from './routes/grid.js'
 import skills from './routes/skills.js'
 import stylePresets from './routes/stylePresets.js'
 import webhooks from './routes/webhooks.js'
+import cron from './routes/cron.js'
 import aiVoices from './routes/aiVoices.js'
 import aiVoicesAsync from './routes/aiVoicesAsync.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
@@ -59,6 +60,7 @@ api.route('/ai-configs', aiConfigs)
 api.route('/ai-providers', aiProviders)
 api.route('/agent-configs', agentConfigs)
 api.route('/agent', agent)
+api.route('/cron', cron)
 api.route('/compose', compose)
 api.route('/merge', merge)
 api.route('/grid', grid)
