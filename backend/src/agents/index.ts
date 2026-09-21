@@ -980,7 +980,6 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - 禁止凭空创造新 scene_id，只从 read_storyboard_context 返回的 scenes 中选
 - 禁止 character_ids 引用未返回的角色
-- 禁止 duration 超 scene 推荐区间 (low:10-15 / medium:5-8 / high:3-5)。code 端会按密度 clamp,但尽量一次到位避免被压
 - 场景开头第一镜必须是全景(交代地点)
 - 同一场景内遵循"全景→中景→近景"顺序
 - 输出 shot_plan 必须是合法 JSON 数组，不要包裹其他文字
@@ -997,8 +996,7 @@ shot_plan 字段说明
   movement (string) — 运镜(固定/推镜/拉镜等)
   location (string) — 地点
   time (string) — 时间
-  duration (number) — 时长(秒)。本镜 scene 的 intention.shotDensity 决定区间:
-    low → 10-15, medium → 5-8, high → 3-5。超界 code 端按密度区间 clamp 后入库,再叠 [4,15] 安全网
+  duration (number) — 时长(秒)。由五因子公式算出（baseline × density × moveScale，取 max 与 dialogueFloor），code 端叠 [4,15] 安全网 + Σ 收敛到 target×1.1
   action (string) — 动作描述
   dialogue (string) — 对白
   description (string) — 画面描述

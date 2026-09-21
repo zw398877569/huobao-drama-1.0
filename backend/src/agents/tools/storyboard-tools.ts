@@ -238,6 +238,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
               cameraSpeed: template.cameraSpeed || '',
               shortDramaTips: template.shortDramaTips || '',
               shotDensity: template.shotDensity,
+              // @deprecated 仅 scene-intention.ts fallback 路径消费 (line 128 tmpl?.recommendedDuration), storyboard-tools 内部不读
               recommendedDuration: template.recommendedDuration,
             };
 
@@ -256,6 +257,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
               cameraSpeed: fallbackTemplate.cameraSpeed || '',
               shortDramaTips: fallbackTemplate.shortDramaTips || '',
               shotDensity: fallbackTemplate.shotDensity,
+              // @deprecated 仅 scene-intention.ts fallback 路径消费, storyboard-tools 内部不读
               recommendedDuration: fallbackTemplate.recommendedDuration,
             };
             return {

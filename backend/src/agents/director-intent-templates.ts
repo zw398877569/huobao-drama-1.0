@@ -28,7 +28,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '推镜速度：中速（2-4秒）；急切：instant',
     shotDensity: 'medium',
     durationCoefficient: 1.0,
-    recommendedDuration: { min: 5, max: 8 },  // @deprecated
+    recommendedDuration: { min: 5, max: 8 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '主角意识到被背叛的瞬间，眼神从信任转为震惊，揭示信任崩塌的真相',
       '关键证据出现——一张照片摆在桌上，颠覆了之前的所有判断',
@@ -50,7 +50,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '切割：instant；环绕：慢速（5-8秒绕一圈）；手持：轻晃幅度≤5°',
     shotDensity: 'medium',
     durationCoefficient: 1.0,
-    recommendedDuration: { min: 5, max: 8 },  // @deprecated
+    recommendedDuration: { min: 5, max: 8 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '两人在狭窄走廊面对面爆发争吵，剑拔弩张，镜头不断来回切换两人特写',
       '审问者与嫌疑人四目对视，无声的心理博弈，灯光逐渐变暗',
@@ -72,7 +72,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '静止：0；快速摇晃：极快（<0.5秒）；慢动作：0.5x',
     shotDensity: 'high',
     durationCoefficient: 0.6,
-    recommendedDuration: { min: 3, max: 5 },  // @deprecated
+    recommendedDuration: { min: 3, max: 5 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '看似被害者的角色突然露出微笑，原来一切都是伪装——前一秒还在求饶，后一秒嘴角上扬',
       '英雄救美后却摘下面具露出反派身份——英雄抱离危险区域，面具落下显露出狰狞面容',
@@ -94,7 +94,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '平移：慢速（5秒跨过整个房间）；跟随：匀速，无明显加速减速',
     shotDensity: 'low',
     durationCoefficient: 1.2,
-    recommendedDuration: { min: 10, max: 15 },  // @deprecated 保留兼容 scene-intention.ts
+    recommendedDuration: { min: 10, max: 15 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '主角进入废弃宅院，一步步探索房间，发现墙上的旧照片（此时未说明意义）',
       '展示未来战斗前的人物日常训练（镜头扫过训练器材，但未出现战斗画面）',
@@ -116,7 +116,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '推镜：极快（<1秒）；手持晃动：幅度大且无规律；旋转：高速（1秒一圈）；剪辑间隔：0.5-1秒',
     shotDensity: 'high',
     durationCoefficient: 0.6,
-    recommendedDuration: { min: 3, max: 5 },  // @deprecated
+    recommendedDuration: { min: 3, max: 5 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '生死决斗最后一刻的反杀动作——刀锋划过，对手倒地，主角喘息特写',
       '主角终于说出憋在心里的告白——手伸向对方嘴唇被挡住，声音哽咽，眼泪滑落',
@@ -138,7 +138,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '固定：0；极缓慢：10-20秒完成推拉',
     shotDensity: 'low',
     durationCoefficient: 1.2,
-    recommendedDuration: { min: 10, max: 15 },  // @deprecated 保留兼容 scene-intention.ts
+    recommendedDuration: { min: 10, max: 15 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '战斗结束后一人独坐废墟，看着远方——固定机位，风吹动衣服，背景余烬闪烁',
       '离别后的空房间，阳光洒在空椅子上——镜头缓慢从椅子拉近到窗外，暗示人已离开',
@@ -160,7 +160,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '缓慢接近：5-10秒横跨画面；切断：instant',
     shotDensity: 'low',
     durationCoefficient: 1.2,
-    recommendedDuration: { min: 10, max: 15 },  // @deprecated 保留兼容 scene-intention.ts
+    recommendedDuration: { min: 10, max: 15 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '深夜听到楼下传来奇怪的脚步声，镜头停在不明的门把手上——门把手开始缓慢转动，突然黑屏',
       '收到一封没有寄信人的信，镜头特写在"我知道你做过什么"这句话上——信纸突然抖动，画面变黑',
@@ -182,7 +182,7 @@ export const INTENTION_TEMPLATES = {
     cameraSpeed: '轻微手持：幅度≤3°；缓慢旋转：5-8秒完成一圈；焦点拉移：2-3秒完成',
     shotDensity: 'high',
     durationCoefficient: 0.6,
-    recommendedDuration: { min: 3, max: 5 },  // @deprecated
+    recommendedDuration: { min: 3, max: 5 },  // @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline
     examples: [
       '主角多年压抑终于崩溃大哭——泪水满面，双手捂住脸，肩膀剧烈抽泣，背景音渐渐远去',
       '失去至亲时的撕心裂肺的呼喊——张大嘴，身体后仰，双手拍打地面，泪如雨下',
@@ -207,5 +207,6 @@ export interface IntentionResult {
   shotDensity?: 'low' | 'medium' | 'high'; // [可选] 镜头密度，按戏剧功能模板标注
   durationCoefficient?: number; // 时长系数 (low=1.2 / medium=1.0 / high=0.6), 由 8 套戏剧功能模板标注, 配合 shot-type-baseline.ts 算 baseline × scale
   /** @deprecated 仅保留兼容 scene-intention.ts 的 hardcoded fallback, 新代码用 durationCoefficient */
-  recommendedDuration?: { min: number; max: number }; // [可选] 推荐 duration 区间(秒)
+  /** @deprecated 仅 scene-intention.ts fallback 用, 新代码用 durationCoefficient × shot-type-baseline.ts */
+  recommendedDuration?: { min: number; max: number };
 }
