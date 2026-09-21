@@ -12,6 +12,37 @@ setGlobalDispatcher(new Agent({
   bodyTimeout: 10 * 60 * 1000,
 }))
 
+// 临时 LLM 请求观察器 (2026-09-21):
+//   拆解偶发 5+ 分钟慢响应, 加日志看请求规模 (prompt 长度 + tools schema 数量 + body 大小)
+//   不打印完整 body (会污染日志); 输出元数据让 USER 决定要不要优化 prompt / tools
+//   TODO 拿到数据后决定保留 / 删除 / 改成 stdout-only
+const origFetch = globalThis.fetch
+// @ts-ignore --globalThis.fetch 类型推断覆盖
+globalThis.fetch = (async (input: any, init?: any) => {
+  const url = typeof input === 'string' ? input : input?.url ?? ''
+  if (url.includes('/chat/completions')) {
+    const ts = new Date().toISOString()
+    let meta: any = { error: 'parse_failed' }
+    try {
+      const bodyStr = typeof init?.body === 'string' ? init.body : ''
+      const b = bodyStr ? JSON.parse(bodyStr) : {}
+      meta = {
+        bodySize: bodyStr.length,
+        model: b.model,
+        msgCount: b.messages?.length ?? 0,
+        systemLen: b.messages?.[0]?.content?.length ?? 0,
+        userLen: b.messages?.[1]?.content?.length ?? 0,
+        toolsCount: b.tools?.length ?? 0,
+        toolsNames: (b.tools ?? []).map((t: any) => t?.function?.name).filter(Boolean),
+        maxTokens: b.max_tokens,
+        temperature: b.temperature,
+      }
+    } catch {}
+    console.log('[LLM-REQ]', ts, url, JSON.stringify(meta))
+  }
+  return origFetch(input, init)
+}) as typeof fetch
+
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
