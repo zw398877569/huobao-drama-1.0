@@ -1,3 +1,17 @@
+// 全局 undici dispatcher (2026-09-21):
+//   LLM API 偶发 5 分钟无响应 → undici headersTimeout 报 UND_ERR_HEADERS_TIMEOUT
+//   (Minimax-M3 拆解剧情 + tools schema 大,首次调用 streaming 响应偏慢).
+//   undici 默认 headersTimeout=300000 (5 分钟). 提高到 10 分钟容忍上游慢响应.
+//   任何 fetch (包括 @ai-sdk/* / Mastra / node-fetch) 自动走这个 dispatcher.
+// undici 是 Node.js 22+ 内置模块, 但 @types/node 25 没暴露 'undici' / 'node:undici' 协议类型.
+// 运行时直接用 Node 内置 undici, 类型用 any 占位. 仅用到 Agent + setGlobalDispatcher.
+// @ts-ignore  --undici-types-missing
+import { Agent, setGlobalDispatcher } from 'undici'
+setGlobalDispatcher(new Agent({
+  headersTimeout: 10 * 60 * 1000,  // 10 分钟
+  bodyTimeout: 10 * 60 * 1000,
+}))
+
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
