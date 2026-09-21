@@ -12,46 +12,37 @@ setGlobalDispatcher(new Agent({
   bodyTimeout: 10 * 60 * 1000,
 }))
 
-// 临时 LLM 请求观察器 (2026-09-21, 开关控制):
-//   拆解偶发 5+ 分钟慢响应, 加日志看请求规模方便优化 prompt / tools.
-//   DEBUG_LLM_REQ env 开关:
-//     'off' (默认)  — 不打印
-//     'meta'        — 只打元数据 (bodySize / systemLen / userLen / toolsCount + names / maxTokens)
-//     'body'        — 打印完整 body (含 prompt / tools schema, 排查 prompt 语义问题用)
-//   meta 能定位: body 太大 / prompt 过长 / tool schema 太多 / maxTokens 漏配.
-//   body 模式额外多打几个补丁: tool schema description 字段具体内容 / prompt 语义问题.
-const DEBUG_LLM_REQ = (process.env.DEBUG_LLM_REQ ?? 'off').toLowerCase()
-const LOG_LLM_REQ = DEBUG_LLM_REQ === 'meta' || DEBUG_LLM_REQ === 'body'
-const LOG_LLM_REQ_BODY = DEBUG_LLM_REQ === 'body'
+// 一次性 LLM 请求 debug 日志 (2026-09-21, 用户要求):
+//   排查拆解偶发 5+ 分钟慢响应. 默认写到 /app/data/llm-debug.log (挂载卷 host D:/aicg1.0/data/).
+//   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug.log
+//   关闭: DEBUG_LLM_FILE= (空值) 或设成 /dev/null, 或问题定位完删这段代码.
+//   问题定位完 DEV 跟 USER 一起决定删除.
+import fs from 'fs'
+const DEBUG_LLM_FILE = process.env.DEBUG_LLM_FILE ?? '/app/data/llm-debug.log'
+const debugStream = DEBUG_LLM_FILE ? fs.createWriteStream(DEBUG_LLM_FILE, { flags: 'a' }) : null
 const origFetch = globalThis.fetch
 // @ts-ignore --globalThis.fetch 类型推断覆盖
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? ''
-  if (LOG_LLM_REQ && url.includes('/chat/completions')) {
+  if (debugStream && url.includes('/chat/completions')) {
     const ts = new Date().toISOString()
-    if (LOG_LLM_REQ_BODY) {
-      // body 模式: 打完整 body (排查 prompt 语义/tool description 具体内容)
-      console.log('[LLM-REQ]', ts, url, '\n  body=', init?.body)
-    } else {
-      // meta 模式: 只打元数据 (防日志污染)
-      let meta: any = { error: 'parse_failed' }
-      try {
-        const bodyStr = typeof init?.body === 'string' ? init.body : ''
-        const b = bodyStr ? JSON.parse(bodyStr) : {}
-        meta = {
-          bodySize: bodyStr.length,
-          model: b.model,
-          msgCount: b.messages?.length ?? 0,
-          systemLen: b.messages?.[0]?.content?.length ?? 0,
-          userLen: b.messages?.[1]?.content?.length ?? 0,
-          toolsCount: b.tools?.length ?? 0,
-          toolsNames: (b.tools ?? []).map((t: any) => t?.function?.name).filter(Boolean),
-          maxTokens: b.max_tokens,
-          temperature: b.temperature,
-        }
-      } catch {}
-      console.log('[LLM-REQ]', ts, url, JSON.stringify(meta))
-    }
+    let meta: any = { error: 'parse_failed' }
+    try {
+      const bodyStr = typeof init?.body === 'string' ? init.body : ''
+      const b = bodyStr ? JSON.parse(bodyStr) : {}
+      meta = {
+        bodySize: bodyStr.length,
+        model: b.model,
+        msgCount: b.messages?.length ?? 0,
+        systemLen: b.messages?.[0]?.content?.length ?? 0,
+        userLen: b.messages?.[1]?.content?.length ?? 0,
+        toolsCount: b.tools?.length ?? 0,
+        toolsNames: (b.tools ?? []).map((t: any) => t?.function?.name).filter(Boolean),
+        maxTokens: b.max_tokens,
+        temperature: b.temperature,
+      }
+    } catch {}
+    debugStream.write(`[LLM-REQ] ${ts} ${url} ${JSON.stringify(meta)}\n`)
   }
   return origFetch(input, init)
 }) as typeof fetch
