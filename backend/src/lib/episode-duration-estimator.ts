@@ -56,6 +56,7 @@ export const CLIMAX_TAGS: ReadonlyArray<DramaticFunctionKey> = [
   '高潮',
   '对峙',
   '反转',
+  '揭露',
   '情感爆发',
 ]
 
