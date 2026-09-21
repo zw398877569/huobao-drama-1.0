@@ -320,7 +320,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         location: z.string().optional(),
         time: z.string().optional(),
         action: z.string().optional(),
-        dialogue: z.string().optional(),
+        dialogue: z.string().nullish(),
         description: z.string().optional(),
         result: z.string().optional(),
         atmosphere: z.string().optional(),
@@ -558,7 +558,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         shot_number: z.number(),
         description: z.string(),
         shot_type: z.string().optional(),
-        dialogue: z.string().optional(),
+        dialogue: z.string().nullish(),
       })),
       rows: z.number(),
       cols: z.number(),
@@ -633,22 +633,41 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       shot_plan: z.array(z.object({
         shot_number: z.number(),
         scene_id: z.number(),
-        character_ids: z.array(z.number()),
-        shot_type: z.string(),
+        // nullable 风险字段: planner 输出 null 时不报 zod validation 错, 由 execute normalize 兜底
+        // (2026-09-21 fix: 之前 .optional() 不接 null, planner 输出 null 时整个 tool call fail, history 反复重发 body 暴涨)
+        character_ids: z.array(z.number()).nullish(),
+        shot_type: z.string().nullish(),
         angle: z.string(),
         movement: z.string(),
-        location: z.string(),
-        time: z.string(),
+        location: z.string().nullish(),
+        time: z.string().nullish(),
         duration: z.number(),
         action: z.string(),
-        dialogue: z.string().optional(),
-        description: z.string(),
-        result: z.string(),
-        atmosphere: z.string(),
-        intent_function: z.string(),
+        dialogue: z.string().nullish(),
+        description: z.string().nullish(),
+        result: z.string().nullish(),
+        atmosphere: z.string().nullish(),
+        intent_function: z.string().nullish(),
       })),
     }),
-    execute: async ({ shot_plan }) => runGenerateShotPrompts({ episodeId, dramaId, shot_plan }),
+    execute: async ({ shot_plan }) => {
+      // normalize nullable → 默认值, 防 null 字符串拼进 prompt + map() TypeError
+      // (2026-09-21 fix: 上 schema 改 nullish 后必须配此兜底, 否则 null 字符串会进 prompt 出图乱)
+      const safeShotPlan = shot_plan.map(sp => ({
+        ...sp,
+        character_ids: sp.character_ids ?? [],
+        shot_type: sp.shot_type ?? '中景',
+        location: sp.location ?? '',
+        time: sp.time ?? '',
+        action: sp.action ?? '',
+        dialogue: sp.dialogue ?? '',
+        description: sp.description ?? '',
+        result: sp.result ?? '',
+        atmosphere: sp.atmosphere ?? '',
+        intent_function: sp.intent_function ?? '铺垫',
+      }))
+      return runGenerateShotPrompts({ episodeId, dramaId, shot_plan: safeShotPlan })
+    },
   })
 
   return { readStoryboardContext, saveStoryboards, updateStoryboard, generateGridPrompt, generateShotPrompts }
