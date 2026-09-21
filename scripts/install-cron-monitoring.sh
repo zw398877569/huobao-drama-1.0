@@ -64,9 +64,10 @@ for entry in "${TARGETS[@]}"; do
   fi
 
   # 用 python3 做精确替换, 避免 sed 在 plist 上多行匹配不稳
-  python3 <<PYEOF
-import re, sys
-p = "$p"
+  PLIST="$p" NAME="$name" python3 <<'PYEOF'
+import re, sys, os
+p = os.environ['PLIST']
+name = os.environ['NAME']
 with open(p, 'r', encoding='utf-8') as f:
     text = f.read()
 m = re.search(r'(<key>ProgramArguments</key>\s*<array>)(.*?)(</array>)', text, re.DOTALL)
@@ -74,17 +75,11 @@ if not m:
     print(f"  WARN: ProgramArguments not found in {p}")
     sys.exit(0)
 prefix, inner, suffix = m.group(1), m.group(2), m.group(3)
+runner = os.path.expanduser('~/bin/task-runner.sh')
 insertion = (
     '        <string>/bin/bash</string>\n'
-    f'        <string>{os.path.expanduser("~/bin/task-runner.sh")}</string>\n'
-    f'        <string>{sys.argv[1]}</string>\n'
-    '        <string>--</string>\n'
-)
-import os as _os
-insertion = (
-    '        <string>/bin/bash</string>\n'
-    f'        <string>{_os.path.expanduser("~/bin/task-runner.sh")}</string>\n'
-    f'        <string>{sys.argv[1]}</string>\n'
+    f'        <string>{runner}</string>\n'
+    f'        <string>{name}</string>\n'
     '        <string>--</string>\n'
 )
 new_inner = insertion + inner
