@@ -3,10 +3,8 @@
 //   (Minimax-M3 拆解剧情 + tools schema 大,首次调用 streaming 响应偏慢).
 //   undici 默认 headersTimeout=300000 (5 分钟). 提高到 10 分钟容忍上游慢响应.
 //   任何 fetch (包括 @ai-sdk/* / Mastra / node-fetch) 自动走这个 dispatcher.
-// undici 是 Node.js 22+ 内置模块, ESM 'undici' import 解析不到 (npm 包不存在).
-// CJS require('undici') 在新 Node 也找不到. 用 process.getBuiltinModule (Node 22.3+ 官方 API).
-// @ts-ignore --process.getBuiltinModule types
-const { Agent, setGlobalDispatcher } = process.getBuiltinModule('undici') as any
+// undici 装成 npm 依赖了 (backend/package.json), 正常 import 即可
+import { Agent, setGlobalDispatcher } from 'undici'
 setGlobalDispatcher(new Agent({
   headersTimeout: 10 * 60 * 1000,  // 10 分钟
   bodyTimeout: 10 * 60 * 1000,
