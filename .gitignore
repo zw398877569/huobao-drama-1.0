@@ -46,3 +46,6 @@ temp/
 
 # Local frontend build artifact symlink (was tracked as a symlink, removed from tracking)
 frontend/dist
+
+# Claude (DEV discipline + per-thread state)
+.claude/
