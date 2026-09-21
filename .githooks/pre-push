@@ -16,15 +16,41 @@ LOCAL=$(git rev-parse --abbrev-ref HEAD)
 REMOTE=$(git rev-parse --symbolic-full-name @{u} 2>/dev/null | sed 's|refs/remotes/||;s|/.*||')
 
 # ── 1. 防 force push ───────────────────────────────────────
-# 拦截所有 force push (无论 --force / -f / --force-with-lease), master 是 default branch
-# 防止 agent 误 reset 别人 commit 后强推, 让用户必须显式 git push --no-verify
-if [ -n "$REMOTE" ]; then
-  if echo "$LOCAL" | grep -qE '^master$|^main$'; then
-    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-      echo "[BLOCK] Working tree has uncommitted changes, refusing push to protected branch '$LOCAL'"
-      echo "  → 先 commit / stash 再 push. 强推需要显式 git push --no-verify (绕过本 hook)"
-      exit 1
+# 用 git pre-push hook 标准 stdin 格式 (每行: local_ref local_sha remote_ref remote_sha)
+# 检测非 fast-forward push (= force push): remote_sha 不是 local_sha 的 ancestor
+# 防止 agent reset 别人 commit 后强推, 必须显式 git push --no-verify
+# 排除新分支场景 (remote_sha 是 40 个零表示远程无此分支)
+ZERO_SHA="0000000000000000000000000000000000000000"
+FORCE_PUSH_FOUND=0
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_sha" != "$remote_sha" ]; then
+    # 跳过新分支 push (remote_sha = ZERO_SHA 表示远程不存在)
+    if [ "$remote_sha" = "$ZERO_SHA" ]; then
+      continue
     fi
+    # 跳过删除分支 (local_sha = ZERO_SHA 表示本地要删除该 ref)
+    if [ "$local_sha" = "$ZERO_SHA" ]; then
+      continue
+    fi
+    # 核心检查: remote_sha 必须是 local_sha 的 ancestor 才算 fast-forward
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      echo "[BLOCK] Force push detected: $local_ref ($local_sha) is not a descendant of $remote_ref ($remote_sha)"
+      echo "  → 非 fast-forward push 会删除远程历史, 必须显式 git push --no-verify (绕过本 hook)"
+      FORCE_PUSH_FOUND=1
+    fi
+  fi
+done < /dev/stdin
+if [ "$FORCE_PUSH_FOUND" = "1" ]; then
+  exit 1
+fi
+
+# ── 2. 防 working tree 未提交改动 ──────────────────────────
+# 防止 push 时丢本地未提交改动
+if [ -n "$REMOTE" ]; then
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "[BLOCK] Working tree has uncommitted changes, refusing push to protected branch '$LOCAL'"
+    echo "  → 先 commit / stash 再 push. 强推需要显式 git push --no-verify (绕过本 hook)"
+    exit 1
   fi
 fi
 
