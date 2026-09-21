@@ -10,38 +10,58 @@ setGlobalDispatcher(new Agent({
   bodyTimeout: 10 * 60 * 1000,
 }))
 
-// 一次性 LLM 请求 debug 日志 (2026-09-21, 用户要求):
-//   排查拆解偶发 5+ 分钟慢响应. 默认写到 /app/data/llm-debug.log (挂载卷 host D:/aicg1.0/data/).
-//   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug.log
-//   关闭: DEBUG_LLM_FILE= (空值) 或设成 /dev/null, 或问题定位完删这段代码.
-//   问题定位完 DEV 跟 USER 一起决定删除.
+// 一次性 LLM 请求 debug 日志 (2026-09-21, 用户要求排查 5+ 分钟慢响应):
+//   写两个文件:
+//     /app/data/llm-debug-meta.log  — 每请求一行 meta (小, <300B)
+//     /app/data/llm-debug-body.log  — 每请求完整 body (多 KB-MB, 含 messages 文本 + tools schema)
+//   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug-{meta,body}.log
+//   关闭: DEBUG_LLM_FILE_META=/DEBUG_LLM_BODY_FILE 设空值, 或问题定位完删代码.
 import fs from 'fs'
-const DEBUG_LLM_FILE = process.env.DEBUG_LLM_FILE ?? '/app/data/llm-debug.log'
-const debugStream = DEBUG_LLM_FILE ? fs.createWriteStream(DEBUG_LLM_FILE, { flags: 'a' }) : null
+const DEBUG_LLM_FILE_META = process.env.DEBUG_LLM_FILE_META ?? '/app/data/llm-debug-meta.log'
+const DEBUG_LLM_FILE_BODY = process.env.DEBUG_LLM_FILE_BODY ?? '/app/data/llm-debug-body.log'
+const metaStream = DEBUG_LLM_FILE_META ? fs.createWriteStream(DEBUG_LLM_FILE_META, { flags: 'a' }) : null
+const bodyStream = DEBUG_LLM_FILE_BODY ? fs.createWriteStream(DEBUG_LLM_FILE_BODY, { flags: 'a' }) : null
 const origFetch = globalThis.fetch
 // @ts-ignore --globalThis.fetch 类型推断覆盖
 globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === 'string' ? input : input?.url ?? ''
-  if (debugStream && url.includes('/chat/completions')) {
-    const ts = new Date().toISOString()
-    let meta: any = { error: 'parse_failed' }
-    try {
-      const bodyStr = typeof init?.body === 'string' ? init.body : ''
-      const b = bodyStr ? JSON.parse(bodyStr) : {}
-      meta = {
-        bodySize: bodyStr.length,
-        model: b.model,
-        msgCount: b.messages?.length ?? 0,
-        systemLen: b.messages?.[0]?.content?.length ?? 0,
-        userLen: b.messages?.[1]?.content?.length ?? 0,
-        toolsCount: b.tools?.length ?? 0,
-        toolsNames: (b.tools ?? []).map((t: any) => t?.function?.name).filter(Boolean),
-        maxTokens: b.max_tokens,
-        temperature: b.temperature,
-      }
-    } catch {}
-    debugStream.write(`[LLM-REQ] ${ts} ${url} ${JSON.stringify(meta)}\n`)
+  if (!url.includes('/chat/completions')) return origFetch(input, init)
+  const ts = new Date().toISOString()
+  const bodyStr = typeof init?.body === 'string' ? init.body : ''
+  let b: any = null
+  try { b = bodyStr ? JSON.parse(bodyStr) : {} } catch {}
+
+  // meta 文件: 每请求一行, 小
+  if (metaStream) {
+    const meta = {
+      bodySize: bodyStr.length,
+      model: b?.model,
+      msgCount: b?.messages?.length ?? 0,
+      systemLen: b?.messages?.[0]?.content?.length ?? 0,
+      userLen: b?.messages?.[1]?.content?.length ?? 0,
+      perMsgLen: (b?.messages ?? []).map((m: any, i: number) => ({
+        i,
+        role: m?.role,
+        len: m?.content?.length ?? 0,
+        name: m?.name,
+        tool_call_id: m?.tool_call_id,
+        tool_calls: m?.tool_calls?.map((tc: any) => tc?.function?.name),
+      })),
+      toolsCount: b?.tools?.length ?? 0,
+      toolsNames: (b?.tools ?? []).map((t: any) => t?.function?.name).filter(Boolean),
+      toolsTotalDesc: (b?.tools ?? []).reduce((s: number, t: any) => s + (t?.function?.description?.length ?? 0), 0),
+      maxTokens: b?.max_tokens,
+      temperature: b?.temperature,
+    }
+    metaStream.write(`[LLM-REQ] ${ts} ${JSON.stringify(meta)}\n`)
   }
+
+  // body 文件: 完整请求, 便于分析 messages 累积 / tools schema 体积 / prompt 内容
+  if (bodyStream) {
+    bodyStream.write(`\n=== ${ts} ${url} ===\n`)
+    bodyStream.write(JSON.stringify(b, null, 2) + '\n')
+  }
+
   return origFetch(input, init)
 }) as typeof fetch
 
