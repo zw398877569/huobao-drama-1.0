@@ -644,7 +644,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         location: z.string().nullish(),
         time: z.string().nullish(),
         duration: z.number(),
-        action: z.string(),
+        // action nullish (2026-09-21 ISSUE-007): 上一 commit (610610d) 注释和 commit message 都声明改了 action 但漏改,
+        // 这次补上. normalize 那行 action: sp.action ?? '' 之前是 dead code, 现在激活
+        action: z.string().nullish(),
         dialogue: z.string().nullish(),
         description: z.string().nullish(),
         result: z.string().nullish(),
