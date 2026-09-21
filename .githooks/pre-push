@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Pre-push hook for huobao-drama-1.0 (2026-09-21 新增):
+#   1. 防 force push 到 master (避免 agent 误操作删除别人 commit)
+#   2. 打印本地独有 commit 列表, 让 agent 显式确认每个 commit 都是自己处理的
+#      (线程职责边界硬约束, 详见 CLAUDE.md 「线程职责边界」章节)
+#
+# 注意: 不基于 author 检查 (多个 agent 共用同一 author, 不可靠)
+#       判断 "这个 commit 是不是 agent 处理的" 只能 agent 内部做
+#
+# Override (NOT recommended): git push --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+LOCAL=$(git rev-parse --abbrev-ref HEAD)
+REMOTE=$(git rev-parse --symbolic-full-name @{u} 2>/dev/null | sed 's|refs/remotes/||;s|/.*||')
+
+# ── 1. 防 force push ───────────────────────────────────────
+# 拦截所有 force push (无论 --force / -f / --force-with-lease), master 是 default branch
+# 防止 agent 误 reset 别人 commit 后强推, 让用户必须显式 git push --no-verify
+if [ -n "$REMOTE" ]; then
+  if echo "$LOCAL" | grep -qE '^master$|^main$'; then
+    if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+      echo "[BLOCK] Working tree has uncommitted changes, refusing push to protected branch '$LOCAL'"
+      echo "  → 先 commit / stash 再 push. 强推需要显式 git push --no-verify (绕过本 hook)"
+      exit 1
+    fi
+  fi
+fi
+
+# ── 2. 打印本地独有 commit 列表 (review 提示, 不阻拦) ───────
+# 注意: 这是 review aid, 不是 git push --no-verify 那种强制 hook.
+# 真正的 "这是不是 agent 处理的" 靠 CLAUDE.md 规范 + agent 自我检查.
+if [ -n "$REMOTE" ]; then
+  LOCAL_COMMITS=$(git log --format='%h  %an <%ae>%n        %s' "$REMOTE".."$LOCAL" 2>/dev/null)
+  if [ -n "$LOCAL_COMMITS" ]; then
+    echo "─── local commits to push ───"
+    echo "$LOCAL_COMMITS"
+    echo "─────────────────────────────"
+    echo "[review] 确认每个 commit 都是当前 agent 处理的 (线程职责边界)"
+    echo "  → 不认识 / 不属于自己的 commit: 停下来告诉用户, 不要 reset / rebase / cherry-pick"
+    echo "  → override: git push --no-verify"
+  fi
+fi
+
+exit 0
