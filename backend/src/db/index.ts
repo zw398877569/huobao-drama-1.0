@@ -354,6 +354,22 @@ sqlite.exec(`
     updated_at TEXT NOT NULL,
     deleted_at TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS cron_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    exit_code INTEGER,
+    output TEXT,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_cron_runs_name ON cron_runs(name);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {
