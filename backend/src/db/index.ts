@@ -10,8 +10,13 @@ const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../../../data/hu
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
+// 不开 WAL 模式的原因 (2026-09-21):
+//   Docker Desktop 跨边界挂载 (Windows D: → WSL2 → 容器 /app/data) 的 9P 文件系统对
+//   mmap 共享内存支持不完善, WAL 模式创建 .db-shm 时报 SQLITE_IOERR_SHMOPEN.
+//   SQLite 默认 rollback journal 模式不需要 mmap, 所有 SQLite 工具 (DB Browser for SQLite
+//   / DBeaver / sqlite3 CLI) 都能直接打开 db 文件. 性能轻微影响 (写并发) 但本项目读多写少.
+//   如果未来需要 WAL 高并发写入, 方案: 把 db 文件移出 mount volume (用 docker volume 命名卷)
 const sqlite = new Database(DB_PATH, { timeout: 30000 })
-sqlite.pragma('journal_mode = WAL')
 sqlite.pragma('busy_timeout = 30000')
 
 sqlite.exec(`
