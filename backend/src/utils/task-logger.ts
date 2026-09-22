@@ -1,4 +1,20 @@
+import { writeFlowLog } from './file-log.js'
+
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'
+
+/**
+ * 透传上下文 — 用于 traceId 串通和落盘
+ *
+ * - traceId: middleware 注入，下游 handler 通过 c.get('traceId') 拿到后传入
+ * - dramaId / episodeId / storyboardId / taskId: 自动合入 entry meta（不覆盖已有同名字段）
+ */
+export interface LogTaskOpts {
+  traceId?: string
+  dramaId?: number
+  episodeId?: number
+  storyboardId?: number
+  taskId?: string
+}
 
 const C = {
   reset: '\x1b[0m',
@@ -39,6 +55,47 @@ function formatMeta(meta?: Record<string, unknown>) {
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${safeValue(value)}`)
   return entries.length ? ` | ${entries.join(' ')}` : ''
+}
+
+/**
+ * 拼出 console 行尾的 envelope：traceId + dramaId + episodeId + storyboardId + taskId
+ * 只展示有值的字段，保持原有 `key=value` 风格
+ */
+function formatOpts(opts?: LogTaskOpts): string {
+  if (!opts) return ''
+  const parts: string[] = []
+  if (opts.traceId) parts.push(`traceId=${opts.traceId}`)
+  if (opts.dramaId !== undefined) parts.push(`dramaId=${opts.dramaId}`)
+  if (opts.episodeId !== undefined) parts.push(`episodeId=${opts.episodeId}`)
+  if (opts.storyboardId !== undefined) parts.push(`storyboardId=${opts.storyboardId}`)
+  if (opts.taskId) parts.push(`taskId=${opts.taskId}`)
+  return parts.length ? ` [${parts.join(' ')}]` : ''
+}
+
+/**
+ * 构造 JSON Lines entry — 包含 ts/level/scope/action + opts 字段 + meta（去重）
+ * meta 已有同名字段保留（opts 不覆盖）
+ */
+function buildEntry(
+  level: LogLevel,
+  scope: string,
+  action: string,
+  meta?: Record<string, unknown>,
+  opts?: LogTaskOpts
+): Record<string, unknown> {
+  const entry: Record<string, unknown> = {
+    ts: new Date().toISOString(),
+    level,
+    scope,
+    action,
+  }
+  if (opts?.traceId) entry.traceId = opts.traceId
+  if (opts?.dramaId !== undefined) entry.dramaId = opts.dramaId
+  if (opts?.episodeId !== undefined) entry.episodeId = opts.episodeId
+  if (opts?.storyboardId !== undefined) entry.storyboardId = opts.storyboardId
+  if (opts?.taskId) entry.taskId = opts.taskId
+  entry.meta = meta ?? {}
+  return entry
 }
 
 export function redactUrl(rawUrl: string) {
@@ -109,35 +166,49 @@ function truncateString(value: string, edge = 120) {
   return `${value.slice(0, edge)}...<trimmed ${value.length} chars>...${value.slice(-edge)}`
 }
 
-export function logTask(scope: string, action: string, meta?: Record<string, unknown>, level: LogLevel = 'INFO') {
+function emit(level: LogLevel, scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
   const color = colorFor(level)
-  console.log(`${C.dim}${timeText()}${C.reset} ${color}[${scope}]${C.reset} ${action}${formatMeta(meta)}`)
+  const suffix = formatOpts(opts)
+  console.log(`${C.dim}${timeText()}${C.reset} ${color}[${scope}]${C.reset} ${action}${formatMeta(meta)}${suffix}`)
+  if (opts?.traceId) {
+    writeFlowLog(opts.traceId, buildEntry(level, scope, action, meta, opts))
+  }
 }
 
-export function logTaskStart(scope: string, action: string, meta?: Record<string, unknown>) {
-  logTask(scope, `START ${action}`, meta, 'INFO')
+export function logTask(scope: string, action: string, meta?: Record<string, unknown>, level: LogLevel = 'INFO', opts?: LogTaskOpts) {
+  emit(level, scope, action, meta, opts)
 }
 
-export function logTaskProgress(scope: string, action: string, meta?: Record<string, unknown>) {
-  logTask(scope, action, meta, 'INFO')
+export function logTaskStart(scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  emit('INFO', scope, `START ${action}`, meta, opts)
 }
 
-export function logTaskSuccess(scope: string, action: string, meta?: Record<string, unknown>) {
-  logTask(scope, `DONE ${action}`, meta, 'SUCCESS')
+export function logTaskProgress(scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  emit('INFO', scope, action, meta, opts)
 }
 
-export function logTaskWarn(scope: string, action: string, meta?: Record<string, unknown>) {
-  logTask(scope, action, meta, 'WARN')
+export function logTaskSuccess(scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  emit('SUCCESS', scope, `DONE ${action}`, meta, opts)
 }
 
-export function logTaskError(scope: string, action: string, meta?: Record<string, unknown>) {
-  logTask(scope, `ERROR ${action}`, meta, 'ERROR')
+export function logTaskWarn(scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  emit('WARN', scope, action, meta, opts)
 }
 
-export function logTaskPayload(scope: string, action: string, payload: unknown) {
+export function logTaskError(scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  emit('ERROR', scope, `ERROR ${action}`, meta, opts)
+}
+
+export function logTaskPayload(scope: string, action: string, payload: unknown, opts?: LogTaskOpts) {
   const sanitized = sanitizeValue(payload)
   const serialized = typeof sanitized === 'string'
     ? sanitized
     : JSON.stringify(sanitized, null, 2)
-  console.log(`${C.dim}${timeText()}${C.reset} ${C.blue}[${scope}]${C.reset} ${action}\n${serialized}`)
+  console.log(`${C.dim}${timeText()}${C.reset} ${C.blue}[${scope}]${C.reset} ${action}${formatOpts(opts)}\n${serialized}`)
+  if (opts?.traceId) {
+    writeFlowLog(opts.traceId, {
+      ...buildEntry('INFO', scope, action, undefined, opts),
+      meta: { payload: sanitized },
+    })
+  }
 }

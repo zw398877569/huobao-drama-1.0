@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from 'hono'
+import { randomUUID } from 'node:crypto'
 
 const colors = {
   reset: '\x1b[0m',
@@ -22,12 +23,21 @@ function formatTime(): string {
 }
 
 /**
- * 全局日志中间件 — 打印请求方法/路径/状态/耗时/请求体
+ * 全局日志中间件 — 打印请求方法/路径/状态/耗时/请求体 + traceId
+ *
+ * traceId 处理：
+ * - 优先取请求 header `x-trace-id`，无则生成 UUID
+ * - 写入 Hono context: c.set('traceId', traceId)，下游 handler 通过 c.get('traceId') 拿到
+ * - response header 回写 `x-trace-id`，前端可读、用户可复制拿去查 logs
  */
 export const requestLogger: MiddlewareHandler = async (c, next) => {
   const method = c.req.method
   const path = c.req.path
   const start = performance.now()
+
+  // traceId 提取或生成
+  const traceId = c.req.header('x-trace-id') || randomUUID()
+  c.set('traceId', traceId)
 
   // 打印请求
   const time = formatTime()
@@ -43,14 +53,17 @@ export const requestLogger: MiddlewareHandler = async (c, next) => {
     } catch {}
   }
 
-  console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path}${bodyInfo}`)
+  console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path}${bodyInfo}${colors.dim} [traceId=${traceId}]${colors.reset}`)
 
   await next()
 
   const ms = (performance.now() - start).toFixed(0)
   const status = c.res.status
   const sc = statusColor(status)
-  console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path} ${sc}${status}${colors.reset} ${colors.dim}${ms}ms${colors.reset}`)
+  console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path} ${sc}${status}${colors.reset} ${colors.dim}${ms}ms [traceId=${traceId}]${colors.reset}`)
+
+  // response header 回写 traceId — 必须在 await next() 之后 (此时 c.res 已构造)
+  c.res.headers.set('x-trace-id', traceId)
 }
 
 /**
