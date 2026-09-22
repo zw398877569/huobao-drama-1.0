@@ -968,6 +968,13 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
         - 若本镜对白 < 10 字,candidate 不要超过 8s(避免空转)
       每镜自检:duration 必须落在 [floor, 15s] 区间内,且尽量贴近 baseline × scale
       fallback:scene.intention.shotDensity 缺失 → 默认 medium (×1.0);shot_type 不在 baseline 表 → 用 MS(4-5s)
+   - 轴4.5【scene 密度软联动约束 (P2+P4 修, 2026-09-22)】: 镜数由剧情自由决定, 不强制. 但每场景 Σ时长
+   *   和单镜时长受密度约束, 防碎镜(切太碎) + 防 Σ失控(总时长爆):
+   *   low    (铺垫/余韵/悬念):          单镜 ≥8s,     本场景 Σ 25-50s
+   *   medium (揭露/对峙):             单镜 ≥5s,     本场景 Σ 15-35s
+   *   high   (反转/高潮/情感爆发):      单镜 ≥3s,     本场景 Σ 10-25s
+   *   Σ 超 target×1.1 让 code 端按比例缩, 不需要你额外考虑.
+   *   (反例: low 场景切 8 个 2-4s 碎镜 → 6 镜违反单镜下限, Σ 20s 落入 high 区间 → 密度警告 + 节奏崩)
    - 轴5【道具时序约束】(防止剧情道具提前泄露):
       角色身上的「情节道具」只能在所属 scene 的 description 里被显式提到时,才能在本镜出现;
       character.description 里描述的情节瞬间 (例如「前爪按红色按钮」这种特定剧情动作/物体) 不算
@@ -983,6 +990,13 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 场景开头第一镜必须是全景(交代地点)
 - 同一场景内遵循"全景→中景→近景"顺序
 - 输出 shot_plan 必须是合法 JSON 数组，不要包裹其他文字
+- **scene_id 单调约束 (P3 修, 2026-09-22)**: shot_plan 内 scene_id 必须单调不减, 同场景所有镜头必须相邻排列.
+  禁止把同一 scene 拆成多段中间夹其它 scene 镜头.
+  (反例: scene11 镜 1-6 + scene 12 镜 7-14 + scene 11 镜 15-21 → 时间序错乱,
+  观众会看到"天台求神→又回到卧室狗将死→再到凌晨狗按按钮", 剧情逻辑崩)
+- **character_ids 必填规则 (Batch A #3, 2026-09-22)**: 只要画面里出现任何角色(包括背景人影、远处轮廓),
+  character_ids 必须列出对应 ID. 仅"纯环境空镜"(画面无任何角色/肢体/身影, 仅建筑/风景)才能 [].
+  不允许 [] 偷懒 (豆豆在画面角落也算有角色, 必须 [17])
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 shot_plan 字段说明
@@ -1003,7 +1017,9 @@ shot_plan 字段说明
   result (string) — 收尾状态(下一镜的起点)
   atmosphere (string) — 氛围/光影
   intent_function (string) — 剧情功能(揭露/对峙/反转/铺垫/高潮/余韵/悬念/情感爆发)
-  sound_effect (string) — 该镜 diegetic 音效 + 环境底噪(物体碰撞/脚步声/环境音/静默等),无音效显式写 "N/A",禁止留空
+  sound_effect (string) — 该镜 diegetic 音效 + 环境底噪。只写观众能实际听见的声音(> -30dB,
+   物理合理存在)。无音效显式写 "N/A",禁止留空。
+   禁写: 物理不可闻细节 (如"塑料微热膨胀声""布料分子运动声"), H3 会乱生成或完全忽略 (Batch A #6, 2026-09-22)
   bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 节奏/动态变化,H3 官方要求 — 禁止用抽象情绪词),无配乐显式写 "N/A",禁止留空
 
 注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成。

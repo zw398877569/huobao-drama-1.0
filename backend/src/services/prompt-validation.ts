@@ -167,10 +167,13 @@ export function validateEventDensity(videoPrompt: string): EventValidationResult
   const count = events.length
   let density: EventDensity
   let suggestion: string | null = null
-  if (count >= 5) {
+  // 2026-09-22 P2+P4 fix: 阈值抬高 (medium 3→6, high 5→8)
+  //   中文短剧单镜 3-5 events 是常态, 原阈值偏严, 65% 镜都告警
+  //   抬高后 5-event 镜不告警, 8+ events 才告警 (真正大点)
+  if (count >= 8) {
     density = 'high'
     suggestion = `检测到 ${count} 个独立事件。建议拆分到 2-3 个分镜，每个 1-2 个事件。`
-  } else if (count >= 3) {
+  } else if (count >= 6) {
     density = 'medium'
     suggestion = `检测到 ${count} 个事件。可以接受，但建议合并部分动作或运镜。`
   } else {

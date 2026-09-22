@@ -970,6 +970,17 @@ export async function runGenerateShotPrompts(params: {
   const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
   const episodeTargetSeconds = getEpisodeTargetSeconds(episodeId)
 
+  // 2026-09-22 P3 修: scene_id 单调性校验 (防止 planner 把同一 scene 拆成多段)
+  // 硬约束: shot_plan 内 scene_id 单调不减. 违反 → 抛错给 planner retry (Mastra 自动机制)
+  for (let i = 1; i < shot_plan.length; i++) {
+    if (shot_plan[i].scene_id < shot_plan[i - 1].scene_id) {
+      throw new Error(
+        `scene_id 非单调 (P3 校验失败): 镜 ${shot_plan[i].shot_number}(scene_id=${shot_plan[i].scene_id}) < 镜 ${shot_plan[i - 1].shot_number}(scene_id=${shot_plan[i - 1].scene_id}). ` +
+        `同一 scene 必须连续, 禁止拆分中间夹其它 scene. 请按剧本时序重排.`
+      )
+    }
+  }
+
   // Step 3.G: scene-classifier 算 climax 标签 (Step 2.F) → computeShotDuration climax bonus
   //   流程: 取 episode 所有 storyboards 解析 sceneIntention JSON → 按 scene_id 聚合 intentionFunction
   //     → 组装 EpisodeSceneData[] → classifyEpisodeScenes 3-vote → Map<scene_id, SceneTag>
@@ -996,6 +1007,50 @@ export async function runGenerateShotPrompts(params: {
   const sceneTagMap = new Map<number, SceneTag>(
     episodeScenesForClf.map((s, idx) => [s.id, sceneClimaxTags[idx]])
   )
+
+  // 2026-09-22 P2+P4 修: scene 密度软联动约束 (单镜下限 + Σ 区间)
+  //   planner 不强制镜数, 但每场景的总时长 + 单镜时长受 density 约束
+  //   违反 → 抛错让 planner retry
+  //   注: 用 intentionByScene (DramaticFunctionKey) → INTENTION_TEMPLATES[fn].shotDensity 拿密度
+  const SCENE_DENSITY_RULES = {
+    high:   { minMirror: 3, sceneMinTotal: 10, sceneMaxTotal: 25 },
+    medium: { minMirror: 5, sceneMinTotal: 15, sceneMaxTotal: 35 },
+    low:    { minMirror: 8, sceneMinTotal: 25, sceneMaxTotal: 50 },
+  } as const
+
+  // 按 scene_id 分组统计 shot_plan (此时 shot_plan 原始 duration, 不是 clamp 后的)
+  type SceneStat = { density: string; totalDuration: number; count: number; minMirror: number }
+  const sceneStats2 = new Map<number, SceneStat>()
+  for (const sp of shot_plan) {
+    const fn = intentionByScene.get(sp.scene_id)
+    const density = (fn && INTENTION_TEMPLATES[fn]?.shotDensity) || 'medium'
+    const cur = sceneStats2.get(sp.scene_id) || { density, totalDuration: 0, count: 0, minMirror: Infinity }
+    cur.totalDuration += sp.duration || 10
+    cur.count++
+    cur.minMirror = Math.min(cur.minMirror, sp.duration || 10)
+    sceneStats2.set(sp.scene_id, cur)
+  }
+
+  const violations: string[] = []
+  for (const [sceneId, stats] of sceneStats2) {
+    const rule = SCENE_DENSITY_RULES[stats.density as keyof typeof SCENE_DENSITY_RULES]
+    if (!rule) continue
+    if (stats.minMirror < rule.minMirror) {
+      violations.push(`scene ${sceneId}(${stats.density}): 单镜下限违反, 最小单镜=${stats.minMirror}s < 阈值 ${rule.minMirror}s`)
+    }
+    if (stats.totalDuration < rule.sceneMinTotal) {
+      violations.push(`scene ${sceneId}(${stats.density}): Σ 时长过短=${stats.totalDuration}s < 阈值 ${rule.sceneMinTotal}s`)
+    }
+    if (stats.totalDuration > rule.sceneMaxTotal) {
+      violations.push(`scene ${sceneId}(${stats.density}): Σ 时长过长=${stats.totalDuration}s > 阈值 ${rule.sceneMaxTotal}s`)
+    }
+  }
+  if (violations.length > 0) {
+    throw new Error(
+      `scene 密度软联动约束违反 (P2+P4 校验失败): ${violations.join('; ')}. ` +
+      `低密度场景应切 2-3 个长镜(≥8s/个), medium 应 4-6 镜 ≥5s, high 应 3-5 镜 ≥3s. Σ 时长也应在区间内.`
+    )
+  }
 
   let totalDuration = 0
   const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
