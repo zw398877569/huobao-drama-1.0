@@ -31,6 +31,8 @@ interface GenerateVideoParams {
   configId?: number
   negativePrompt?: string
   seed?: number
+  /** traceId 从 middleware 透传到此处, 用于 file-log 写入 logs/flow-${traceId}.jsonl; 不入 DB */
+  traceId?: string
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
@@ -39,6 +41,22 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     ? getConfigById(params.configId)
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
+
+  // traceId 全链路日志入口 — 串通前端 x-trace-id header 到 logs/flow-{traceId}.jsonl
+  // pollVideoTask / webhook 链不动 (PM 拍板), 只打这一行作为这次 generate 调用的入口标记
+  logTaskStart('VideoAPI', 'generate-request', {
+    storyboardId: params.storyboardId,
+    dramaId: params.dramaId,
+    provider: config.provider,
+    model: params.model || config.model,
+    duration: params.duration,
+    referenceMode: params.referenceMode || 'none',
+    refImageCount: params.referenceImageUrls?.length ?? 0,
+  }, {
+    traceId: params.traceId,
+    dramaId: params.dramaId,
+    storyboardId: params.storyboardId,
+  })
 
   const isFree = (params.source || 'storyboard') === 'free'
 

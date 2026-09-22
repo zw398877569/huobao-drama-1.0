@@ -39,6 +39,7 @@ app.post('/', async (c) => {
     // 自由创作模式: source='free' 时不查 episode 锁定的 videoConfigId,
     // 避免误用正式分镜的配置; 同时 storyboardId/dramaId 保持 null 即可
     const source: 'storyboard' | 'free' = body.source === 'free' ? 'free' : 'storyboard'
+    const traceId = (c as any).get('traceId') as string | undefined
     const id = await generateVideo({
       storyboardId: source === 'free' ? null : body.storyboard_id,
       dramaId: body.drama_id,
@@ -55,6 +56,7 @@ app.post('/', async (c) => {
       negativePrompt: body.negative_prompt,
       seed: body.seed,
       configId,
+      traceId,
     })
 
     const [record] = db.select().from(schema.videoGenerations)
