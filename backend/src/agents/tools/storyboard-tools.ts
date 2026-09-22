@@ -986,15 +986,44 @@ export async function runGenerateShotPrompts(params: {
   const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
   const episodeTargetSeconds = getEpisodeTargetSeconds(episodeId)
 
-  // 2026-09-22 P3 修: scene_id 单调性校验 (防止 planner 把同一 scene 拆成多段)
-  // 硬约束: shot_plan 内 scene_id 单调不减. 违反 → 抛错给 planner retry (Mastra 自动机制)
-  for (let i = 1; i < shot_plan.length; i++) {
-    if (shot_plan[i].scene_id < shot_plan[i - 1].scene_id) {
+  // 2026-09-22 P3 修: scene_id 单调性校验 + 合法性校验
+  //   合法性: scene_id 必须在 readStoryboardContext 返回的 scene 集合里 (planner hallucination 硬错, throw)
+  //   单调性: 同 scene 必须连续, 不允许拆分中间夹其它 scene. 旧版本 throw → planner retry (浪费 290s).
+  //          新版本 auto-fix: stable sort + warning log. 99% 短剧情况下等价于 planner 想要的效果.
+  //          真正闪回剧本需要升级方案 B (group first-appearance non-decreasing), 当前用不到.
+
+  // (a) 合法性 throw: hallucinated scene_id 必须 retry
+  const validSceneIds = new Set(scenes.map(s => s.id))
+  for (const sp of shot_plan) {
+    if (!validSceneIds.has(sp.scene_id)) {
       throw new Error(
-        `scene_id 非单调 (P3 校验失败): 镜 ${shot_plan[i].shot_number}(scene_id=${shot_plan[i].scene_id}) < 镜 ${shot_plan[i - 1].shot_number}(scene_id=${shot_plan[i - 1].scene_id}). ` +
-        `同一 scene 必须连续, 禁止拆分中间夹其它 scene. 请按剧本时序重排.`
+        `非法 scene_id=${sp.scene_id} (镜 ${sp.shot_number}),不在剧本场景集合 [${[...validSceneIds].join(',')}]中. ` +
+        `禁止凭空创造新 scene_id (planner system prompt 硬约束).`
       )
     }
+  }
+
+  // (b) 单调性 stable sort: 同 scene_id 保持原相对顺序, 不同 scene_id 按 scene_id 升序
+  const _wasReordered = !shot_plan.every((sp, i) => i === 0 || sp.scene_id >= shot_plan[i - 1].scene_id)
+  if (_wasReordered) {
+    // 收集违规点用于 warning log
+    const violations: Array<{ shot: number; prevSceneId: number; gotSceneId: number }> = []
+    for (let i = 1; i < shot_plan.length; i++) {
+      if (shot_plan[i].scene_id < shot_plan[i - 1].scene_id) {
+        violations.push({
+          shot: shot_plan[i].shot_number,
+          prevSceneId: shot_plan[i - 1].scene_id,
+          gotSceneId: shot_plan[i].scene_id,
+        })
+      }
+    }
+    // stable sort: sort + 同 scene_id 保持原相对顺序
+    shot_plan.sort((a, b) => a.scene_id - b.scene_id)
+    console.warn(
+      `[P3 auto-fix] shot_plan scene_id 不单调, 已 stable sort. 违规数=${violations.length}, ` +
+      `前 3 个: ${violations.slice(0, 3).map(v => `镜${v.shot}: ${v.prevSceneId}→${v.gotSceneId}`).join('; ')}. ` +
+      `如需保持 planner 原序 (闪回剧本), 升级到方案 B (group first-appearance non-decreasing).`
+    )
   }
 
   // Step 3.G: scene-classifier 算 climax 标签 (Step 2.F) → computeShotDuration climax bonus
