@@ -646,7 +646,23 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         scene_id: z.number(),
         // nullable 风险字段: planner 输出 null 时不报 zod validation 错, 由 execute normalize 兜底
         // (2026-09-21 fix: 之前 .optional() 不接 null, planner 输出 null 时整个 tool call fail, history 反复重发 body 暴涨)
-        character_ids: z.array(z.number()).nullish(),
+        // 2026-09-22 fix: LLM 在我加了 Batch A #3 character_ids 必填 prompt 后,
+        //   把 JSON Schema 的 items 关键字当成数据输出成 {item: [...]} (89 次 Tool input validation failed 循环).
+        //   preprocess 容错: 接受 array / object({item:[...]}) / null / undefined, 转换到标准 array.
+        character_ids: z.preprocess(
+          (v): number[] | null | undefined => {
+            if (v === null || v === undefined) return null
+            if (Array.isArray(v)) return v
+            // LLM 把 schema items 误当字段名, 出现 {item: [...]} 或 {items: [...]}
+            if (typeof v === 'object' && v !== null) {
+              const obj = v as Record<string, any>
+              if (Array.isArray(obj.item)) return obj.item
+              if (Array.isArray(obj.items)) return obj.items
+            }
+            return null  // 其它形态 fallback null (zod .nullish 接受), 避免 zod error 触 retry 循环
+          },
+          z.array(z.number()).nullish()
+        ),
         shot_type: z.string().nullish(),
         // angle/movement/action 也改 .nullish() (2026-09-21 ISSUE-006): 同 dialogue/description 一样会触发 zod validation fail + history 重发
         angle: z.string().nullish(),
@@ -670,7 +686,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       // (2026-09-21 fix: 上 schema 改 nullish 后必须配此兜底, 否则 null 字符串会进 prompt 出图乱)
       const safeShotPlan = shot_plan.map(sp => ({
         ...sp,
-        character_ids: sp.character_ids ?? [],
+        character_ids: Array.isArray(sp.character_ids) ? sp.character_ids : [],
         shot_type: sp.shot_type ?? '中景',
         angle: sp.angle ?? '',
         movement: sp.movement ?? '',
