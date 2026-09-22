@@ -74,7 +74,7 @@ interface MinimaxTestBody {
   bitrate?: number
   format?: 'mp3' | 'pcm' | 'flac' | 'wav'
   channel?: 1 | 2
-  pronunciation_dict_tone?: string[]
+  pronunciationDictTone?: string[]
   voiceModify?: { pitch?: number; intensity?: number; timbre?: number; soundEffects?: string }
   /** 端到端轮询参数 */
   pollIntervalMs?: number
@@ -171,7 +171,7 @@ app.post('/test', async (c) => {
         bitrate: mmBody.bitrate ?? 128000,
         format: mmBody.format ?? 'mp3',
         channel: mmBody.channel ?? 1,
-        pronunciation_dict_tone: mmBody.pronunciation_dict_tone,
+        pronunciationDictTone: mmBody.pronunciationDictTone,
         voiceModify: mmBody.voiceModify,
       }
       inputDialogue = params.text
@@ -412,7 +412,7 @@ app.post('/create', async (c) => {
         bitrate: b.bitrate,
         format: b.format,
         channel: b.channel,
-        pronunciation_dict_tone: b.pronunciation_dict_tone,
+        pronunciationDictTone: b.pronunciationDictTone,
         voiceModify: b.voiceModify,
       })
     }
