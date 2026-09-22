@@ -22,6 +22,50 @@ const DRAMATIC_FUNCTIONS = [
 type DramaticFunction = typeof DRAMATIC_FUNCTIONS[number];
 
 /**
+ * Schema validation for LLM-returned intention JSON.
+ * Required fields: function (must be DRAMATIC_FUNCTIONS), intention (non-empty short string),
+ * visualStrategy (non-empty). Optional fields: cameraSpeed, shortDramaTips.
+ *
+ * Plan C (2026-09-22): reject truncated/malformed responses, force retry.
+ */
+type IntentionParseResult =
+  | { ok: true; value: { function: DramaticFunction; intention: string; visualStrategy: string; cameraSpeed: string; shortDramaTips: string } }
+  | { ok: false; reason: string }
+
+function validateIntentionShape(parsed: unknown): IntentionParseResult {
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { ok: false, reason: 'not an object' }
+  }
+  const obj = parsed as Record<string, any>
+  // function: must be one of DRAMATIC_FUNCTIONS
+  if (!obj.function || !DRAMATIC_FUNCTIONS.includes(obj.function)) {
+    return { ok: false, reason: `invalid or missing function: "${obj.function}"` }
+  }
+  // intention: must be non-empty Chinese-string-ish (>= 5 chars), reject "推导失败" placeholder
+  if (!obj.intention || typeof obj.intention !== 'string' || obj.intention.trim().length < 5) {
+    return { ok: false, reason: 'intention too short or missing' }
+  }
+  if (/推导失败|未获得有效回复|placeholder/i.test(obj.intention)) {
+    return { ok: false, reason: 'intention is a placeholder/empty filler' }
+  }
+  // visualStrategy: must be non-empty (LLM outputs as visual_strategy in our prompt; accept both keys)
+  const visualStrategy = obj.visualStrategy || obj.visual_strategy
+  if (!visualStrategy || typeof visualStrategy !== 'string' || visualStrategy.trim().length < 5) {
+    return { ok: false, reason: 'visualStrategy too short or missing' }
+  }
+  return {
+    ok: true,
+    value: {
+      function: obj.function as DramaticFunction,
+      intention: obj.intention.trim(),
+      visualStrategy: visualStrategy.trim(),
+      cameraSpeed: typeof obj.cameraSpeed === 'string' ? obj.cameraSpeed.trim() : '',
+      shortDramaTips: typeof obj.shortDramaTips === 'string' ? obj.shortDramaTips.trim() : '',
+    },
+  }
+}
+
+/**
  * 核心意图分析函数 — 供外部工具和 agent 调用
  * @param location 场景地点
  * @param time 时间段
@@ -76,6 +120,78 @@ export async function analyzeSceneIntentionInternal(
   "shortDramaTips": "针对竖屏短视频的拍摄建议，如'居中构图'、'避开状态栏'等，可选
 }"`;
 
+    // Plan C (2026-09-22): response_format: json_object 强制 JSON-only + max_tokens 131072
+    //   解决 max_tokens: 500 截断 (LLM 先写 thinking 再写 JSON, thinking 越长 JSON 越残)
+    //   response_format 在 API 层禁止 thinking preamble, 模型只能在 {...} 内输出
+    //   max_tokens 131072 给 JSON 留够余量 (MiniMax-M3 上限 512K)
+    const rawContent = await callIntentionLLMWithRetry(baseUrl, config, scenePrompt);
+
+    const validation = validateIntentionShape(parseLooseJson(rawContent));
+    if (!validation.ok) {
+      // 已 retry 过 2 次还失败 → 抛错让外层 try/catch 走 fallback
+      throw new Error(`intention validation failed: ${validation.reason}`);
+    }
+    const parsed = validation.value;
+    const tmpl = INTENTION_TEMPLATES[parsed.function];
+    return {
+      intention: parsed.intention,
+      function: parsed.function,
+      visualStrategy: parsed.visualStrategy,
+      cameraSpeed: parsed.cameraSpeed,
+      shortDramaTips: parsed.shortDramaTips,
+      shotDensity: tmpl?.shotDensity,
+      recommendedDuration: tmpl?.recommendedDuration,
+    };
+  } catch (error: any) {
+    console.warn('SceneIntention AI call failed, using fallback:', error.message);
+    return fallbackAnalyzeIntention(location, time, characters, action, dialogue, description);
+  }
+}
+
+/**
+ * Loose JSON parser: handles responses where LLM adds prose around JSON
+ * (e.g. trailing "Here is the JSON: ..." or wrapping in markdown ```json).
+ * Tries strict JSON.parse first; falls back to extracting the first {...} block.
+ */
+function parseLooseJson(raw: string): unknown {
+  const trimmed = raw.trim();
+  // 1. Direct parse
+  try { return JSON.parse(trimmed); } catch { /* fall through */ }
+  // 2. Strip markdown code fence ```json ... ```
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fence) {
+    try { return JSON.parse(fence[1]); } catch { /* fall through */ }
+  }
+  // 3. Extract first { ... } block (greedy up to last })
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try { return JSON.parse(candidate); } catch { /* fall through */ }
+  }
+  throw new Error('no JSON object found in response');
+}
+
+/**
+ * LLM call with retry + structured output.
+ * - Attempt 1: response_format: json_object, prompt unchanged
+ * - Attempt 2 (if attempt 1 returns invalid): same call, prompt appended with strict reminder
+ * - If both attempts return invalid: throw; outer try/catch falls back to heuristic
+ */
+async function callIntentionLLMWithRetry(
+  baseUrl: string,
+  config: any,
+  scenePrompt: string,
+): Promise<string> {
+  const MAX_ATTEMPTS = 2;
+  let lastErr: Error | null = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const isRetry = attempt > 1;
+    const userPrompt = isRetry
+      ? scenePrompt + '\n\n[严格模式] 这次只输出 JSON 对象 {...}, 禁止任何前后文本/解释/思考块, 否则视为失败。'
+      : scenePrompt;
+
     const resp = await fetch(baseUrl, {
       method: 'POST',
       headers: {
@@ -84,14 +200,17 @@ export async function analyzeSceneIntentionInternal(
       },
       body: JSON.stringify({
         model: config.model,
+        // Plan C: API 层强制 JSON-only output (MiniMax-M3 OpenAI 兼容 API 支持)
+        response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'You are a professional film director analyzing scenes for dramatic intention. Return ONLY valid JSON with no extra text.' },
-          { role: 'user', content: scenePrompt }
+          { role: 'system', content: 'You are a professional film director analyzing scenes for dramatic intention. Output ONLY a single JSON object with no preamble, no explanation, no markdown code fences.' },
+          { role: 'user', content: userPrompt }
         ],
         temperature: 0.3,
-        max_tokens: 500,
+        // Plan C: 500 → 131072 (MiniMax-M3 推荐 128K, 给 JSON 留余量 + 防 thinking 抢占)
+        max_tokens: 131072,
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(60_000),  // Plan C: 30s → 60s (大 max_tokens 可能慢)
     });
 
     if (!resp.ok) throw new Error(`AI API error: ${resp.status}`);
@@ -99,38 +218,21 @@ export async function analyzeSceneIntentionInternal(
     const data = await resp.json();
     const rawContent = data?.choices?.[0]?.message?.content?.trim();
 
-    if (!rawContent) throw new Error('No response content from AI');
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawContent);
-    } catch (e) {
-      parsed = {
-        intention: rawContent.substring(0, 200) || '推导失败',
-        function: '铺垫' as DramaticFunction,
-        shotDensity: 'low',
-        recommendedDuration: { min: 10, max: 15 },
-        visual_strategy: rawContent.substring(200, 500) || '未获得有效回复',
-        cameraSpeed: '',
-        shortDramaTips: '',
-      };
+    if (!rawContent) {
+      lastErr = new Error('No response content from AI');
+      continue;
     }
 
-    const fn: DramaticFunction = DRAMATIC_FUNCTIONS.includes(parsed.function) ? parsed.function as DramaticFunction : '铺垫' as DramaticFunction;
-    const tmpl = INTENTION_TEMPLATES[fn];
-    return {
-      intention: parsed.intention || '推导失败，请检查AI配置',
-      function: fn,
-      visualStrategy: parsed.visual_strategy || '未获得有效回复',
-      cameraSpeed: parsed.cameraSpeed || '',
-      shortDramaTips: parsed.shortDramaTips || '',
-      shotDensity: tmpl?.shotDensity,
-      recommendedDuration: tmpl?.recommendedDuration,
-    };
-  } catch (error: any) {
-    console.warn('SceneIntention AI call failed, using fallback:', error.message);
-    return fallbackAnalyzeIntention(location, time, characters, action, dialogue, description);
+    // Validate right here — if valid, return; if not, retry
+    const validation = validateIntentionShape(parseLooseJson(rawContent));
+    if (validation.ok) {
+      return rawContent;
+    }
+    lastErr = new Error(`attempt ${attempt}: ${validation.reason}`);
+    console.warn(`[SceneIntention] attempt ${attempt} validation failed: ${validation.reason}; raw_len=${rawContent.length}`);
   }
+
+  throw lastErr ?? new Error('max attempts reached without valid response');
 }
 
 function fallbackAnalyzeIntention(location: string, time: string, characters: string[], action: string, dialogue: string, description: string): IntentionResult {
