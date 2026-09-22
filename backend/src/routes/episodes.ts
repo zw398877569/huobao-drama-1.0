@@ -21,6 +21,10 @@ app.post('/', async (c) => {
     .orderBy(schema.episodes.episodeNumber).all()
   const nextNum = existing.length ? Math.max(...existing.map(e => e.episodeNumber)) + 1 : 1
 
+  // Step 4.E: target_duration 可选 (UI 滑块), null 表示用 estimator 自动算
+  const targetDuration = (typeof body.target_duration === 'number' && body.target_duration > 0)
+    ? Math.round(body.target_duration) : null
+
   const res = db.insert(schema.episodes).values({
     dramaId: body.drama_id,
     episodeNumber: nextNum,
@@ -28,6 +32,8 @@ app.post('/', async (c) => {
     imageConfigId: body.image_config_id,
     videoConfigId: body.video_config_id,
     audioConfigId: body.audio_config_id,
+    // Step 4.E: schema 列由 Step 3.D 添加 (db/index.ts:41)
+    ...(targetDuration != null ? { targetDuration } : {}),
     createdAt: ts,
     updatedAt: ts,
   }).run()
@@ -41,6 +47,44 @@ app.post('/', async (c) => {
     image_config_id: ep.imageConfigId,
     video_config_id: ep.videoConfigId,
     audio_config_id: ep.audioConfigId,
+    target_duration: ep.targetDuration,
+  })
+})
+
+// POST /episodes/estimate-target-duration — 智能估算目标时长 (Step 4.E)
+//   body: { drama_id: number, episode_number?: number }
+//   用途: UI 在创建集表单上点 "智能估算" 按钮时调用, 给一个建议值
+//   策略 (heuristic, 新集没有 scenes/storyboards 不能跑完整 estimator):
+//     - 基线 100s (AI 漫剧主流时长, B3 调研 P50)
+//     - 加权: 现有 episode 已有 targetDuration → 取均值
+//       现有 episode 没设置 → 用上面基线 (其决策被 estimator 给忽略)
+//     - 边界: clamp 到 [60, 240] (UI 滑块范围)
+//   真正完整版 (post估算): 调 lib/episode-duration-estimator.estimateTargetDuration(episodeId)
+app.post('/estimate-target-duration', async (c) => {
+  const body = await c.req.json().catch(() => ({} as any))
+  const dramaId = Number(body.drama_id)
+  if (!dramaId) return badRequest(c, 'drama_id required')
+
+  // Step 4.E default baseline: 100s (跟 DEFAULT_EPISODE_TARGET_SECONDS 对齐)
+  const BASELINE = 100
+  const MIN_S = 60
+  const MAX_S = 240
+
+  // 取本 drama 已有 episode 的 targetDuration 平均值作为 prior
+  const eps = db.select({ targetDuration: schema.episodes.targetDuration })
+    .from(schema.episodes)
+    .where(eq(schema.episodes.dramaId, dramaId))
+    .all()
+  const explicit = eps.map(e => e.targetDuration).filter((v): v is number => typeof v === 'number' && v > 0)
+  const heuristic = explicit.length
+    ? Math.round(explicit.reduce((a, b) => a + b, 0) / explicit.length)
+    : BASELINE
+  const clamped = Math.max(MIN_S, Math.min(MAX_S, heuristic))
+
+  return success(c, {
+    target_duration: clamped,
+    source: explicit.length ? 'drama-average' : 'baseline',
+    sample_count: explicit.length,
   })
 })
 
@@ -49,7 +93,8 @@ app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
 
-  const allowed = ['content', 'script_content', 'title', 'description', 'status']
+  // Step 4.E: target_duration 加入允许字段 (UI 编辑 episode 也可改)
+  const allowed = ['content', 'script_content', 'title', 'description', 'status', 'target_duration']
   const updates: Record<string, any> = {}
   for (const key of allowed) {
     if (key in body) updates[key] = body[key]
@@ -63,6 +108,11 @@ app.put('/:id', async (c) => {
   if ('title' in updates) drizzleUpdates.title = updates.title
   if ('description' in updates) drizzleUpdates.description = updates.description
   if ('status' in updates) drizzleUpdates.status = updates.status
+  // Step 4.E: target_duration 校验 + 写入, null 表示恢复自动估算
+  if ('target_duration' in updates) {
+    const v = updates.target_duration
+    drizzleUpdates.targetDuration = (typeof v === 'number' && v > 0) ? Math.round(v) : null
+  }
 
   await db.update(schema.episodes).set(drizzleUpdates).where(eq(schema.episodes.id, id))
   return success(c)

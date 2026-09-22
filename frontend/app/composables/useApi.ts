@@ -42,6 +42,8 @@ export const dramaAPI = {
 export const episodeAPI = {
   create: (data: any) => api.post('/episodes', data),
   update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
+  // Step 4.E: 智能估算目标时长 (后端 heuristic: drama 平均 prior + 100s fallback)
+  estimateTargetDuration: (dramaId: number) => api.post('/episodes/estimate-target-duration', { drama_id: dramaId }),
   characters: (id: number) => api.get(`/episodes/${id}/characters`),
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   props: (id: number) => api.get(`/episodes/${id}/props`),

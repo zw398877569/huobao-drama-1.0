@@ -116,6 +116,57 @@
 
           <div class="dialog-section">
             <div class="dialog-section-head">
+              <span class="dialog-section-title">目标时长</span>
+              <span class="dialog-section-copy">这一集 Σ 镜头时长的收敛目标，step 3.D 接入 estimator 自动用</span>
+            </div>
+            <div class="target-duration-row">
+              <label class="field target-duration-input">
+                <span class="field-label">秒数</span>
+                <input
+                  v-model.number="newEpisodeTargetDuration"
+                  class="input"
+                  type="number"
+                  min="60"
+                  max="240"
+                  step="5"
+                  placeholder="100"
+                />
+                <span class="field-hint">范围 60–240 秒（±50s 调节）</span>
+              </label>
+              <label class="field target-duration-slider">
+                <span class="field-label">滑块（±50s）</span>
+                <input
+                  v-model.number="newEpisodeTargetDuration"
+                  class="range"
+                  type="range"
+                  min="60"
+                  max="240"
+                  step="5"
+                />
+                <div class="range-marks">
+                  <span>60s</span>
+                  <span>150s</span>
+                  <span>240s</span>
+                </div>
+              </label>
+              <div class="target-duration-action">
+                <button
+                  class="btn btn-sm btn-estimate"
+                  :disabled="estimatingTarget"
+                  @click="estimateTarget"
+                  title="调后端 heuristic: drama 平均 prior 或 100s baseline"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                  </svg>
+                  {{ estimatingTarget ? '估算中…' : '智能估算' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="dialog-section">
+            <div class="dialog-section-head">
               <span class="dialog-section-title">生成配置</span>
               <span class="dialog-section-copy">创建后不可更改，建议在这里一次性选对</span>
             </div>
@@ -170,6 +221,9 @@ const audioConfigs = ref([])
 const newEpisodeImageConfigId = ref(null)
 const newEpisodeVideoConfigId = ref(null)
 const newEpisodeAudioConfigId = ref(null)
+// Step 4.E: 目标时长 (UI 滑块 + 智能估算按钮)
+const newEpisodeTargetDuration = ref(100)  // 默认 100s (后端 DEFAULT_EPISODE_TARGET_SECONDS)
+const estimatingTarget = ref(false)
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
 
@@ -213,18 +267,38 @@ async function loadConfigs() {
 
 function openAddEpisode() {
   newEpisodeTitle.value = ''
+  newEpisodeTargetDuration.value = 100  // 重置为默认 baseline
   addDialog.value = true
+}
+
+// Step 4.E: 智能估算按钮 → 调后端 heuristic 接口
+async function estimateTarget() {
+  try {
+    estimatingTarget.value = true
+    const res = await episodeAPI.estimateTargetDuration(dramaId)
+    if (res && typeof res.target_duration === 'number') {
+      newEpisodeTargetDuration.value = res.target_duration
+      toast.success(`估算 ${res.target_duration}s (${res.source === 'drama-average' ? `基于已有 ${res.sample_count} 集均值` : '基线 100s'})`)
+    }
+  } catch (e) {
+    toast.error(e?.message || '估算失败')
+  } finally {
+    estimatingTarget.value = false
+  }
 }
 
 async function addEpisode() {
   try {
     creatingEpisode.value = true
+    // Step 4.E: 滑块值落到 [60, 240] 区间, 合法才传 target_duration (null 让后端 estimator 兜底)
+    const td = Math.round(Number(newEpisodeTargetDuration.value) || 0)
     await episodeAPI.create({
       drama_id: dramaId,
       title: newEpisodeTitle.value || undefined,
       image_config_id: newEpisodeImageConfigId.value,
       video_config_id: newEpisodeVideoConfigId.value,
       audio_config_id: newEpisodeAudioConfigId.value,
+      target_duration: (td >= 60 && td <= 240) ? td : undefined,
     })
     toast.success('已添加新集')
     addDialog.value = false
@@ -285,6 +359,60 @@ onMounted(() => { load(); loadConfigs() })
 .meta-item {
   display: flex; align-items: center; gap: 5px;
   font-size: 12px; color: var(--text-2);
+}
+
+/* Step 4.E: 目标时长 UI */
+.target-duration-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) 1fr auto;
+  gap: 16px;
+  align-items: stretch;
+}
+.target-duration-input { display: flex; flex-direction: column; }
+.target-duration-slider { display: flex; flex-direction: column; }
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--range-fill, 25%), var(--bg-hover) var(--range-fill, 25%), var(--bg-hover) 100%);
+  border-radius: 99px;
+  outline: none;
+  cursor: pointer;
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-0);
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: transform 0.15s var(--ease-out);
+}
+.range::-webkit-slider-thumb:hover { transform: scale(1.15); }
+.range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-0);
+  border: 2px solid var(--accent);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+}
+.range-marks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.target-duration-action { display: flex; align-items: flex-end; }
+.btn-estimate {
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
 }
 
 /* Section label */
