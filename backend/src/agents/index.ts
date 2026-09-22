@@ -983,6 +983,16 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 4. 调 generate_shot_prompts 把结构字段传给 code 侧生成完整 17 字段并保存
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+输出格式约束 (性能 2026-09-22)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- **不要在 assistant content 字段写 verbose 推理**: 不要写"每镜 Σ 计算"、"scene 11 Σ = 35s"、
+  "总时长: 113s"、"P3 单调校验" 等冗长推导文本. 这些都拖慢生成且对最终 shot_plan 无贡献.
+- **直接调用 tool**: 内部思考可以保留, 但输出 response 时直接 tool_call (function call), 
+  不写"等下我先计算..."之类的 reasoning 块.
+- 真正计算/校验在 code 端 (runGenerateShotPrompts 的 scene_id 单调性 + 密度软约束校验),
+  你不需要在 content 里做, 只需确保 shot_plan 满足硬性约束即可.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 硬性约束
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - 禁止凭空创造新 scene_id，只从 read_storyboard_context 返回的 scenes 中选
