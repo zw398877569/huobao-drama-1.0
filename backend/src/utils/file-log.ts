@@ -3,9 +3,10 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const LOG_DIR = process.env.FLOW_LOG_DIR
-  ? path.resolve(process.env.FLOW_LOG_DIR)
-  : path.resolve(__dirname, '../../logs')
+// 默认 /app/data/flow-logs — docker-compose 把 /app/data 挂到 host 的 D:/aicg1.0/data,
+// 这样 logs/ 在 Windows host 上能直接看到 (跟 llm-debug 同位置同风格).
+// dev 模式 (tsx watch 本地跑) 设 FLOW_LOG_DIR=./logs 覆盖到 backend/logs/
+const LOG_DIR = process.env.FLOW_LOG_DIR || '/app/data/flow-logs'
 
 // 单文件最大 50MB — 超限自动切分到 flow-${traceId}-${seq}.jsonl
 const MAX_FILE_BYTES = 50 * 1024 * 1024
