@@ -982,8 +982,11 @@ export async function runGenerateShotPrompts(params: {
     db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
   }
 
-  // Phase 2 准备: 算 scene 内第一镜索引 (用于 O2 场景过渡 bonus)
-  const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
+  // Phase 2 准备: episode 目标时长
+  //   firstInSceneIndices 必须在 P3 stable sort 之后算 (QA ISSUE-008 修, 2026-09-22):
+  //   sort 改变 shot_plan 数组顺序, 如果先算 firstInSceneIndices, 主循环里
+  //   firstInSceneIndices.has(i) 用的 i 是 sort 后的 idx, 但集合是 sort 前的 idx → stale,
+  //   漏 +0.5s 场景过渡 bonus (SCENE_TRANSITION_BONUS)
   const episodeTargetSeconds = getEpisodeTargetSeconds(episodeId)
 
   // 2026-09-22 P3 修: scene_id 单调性校验 + 合法性校验
@@ -1025,6 +1028,9 @@ export async function runGenerateShotPrompts(params: {
       `如需保持 planner 原序 (闪回剧本), 升级到方案 B (group first-appearance non-decreasing).`
     )
   }
+
+  // QA ISSUE-008 fix (2026-09-22): sort 之后重算 firstInSceneIndices, 否则 stale
+  const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
 
   // Step 3.G: scene-classifier 算 climax 标签 (Step 2.F) → computeShotDuration climax bonus
   //   流程: 取 episode 所有 storyboards 解析 sceneIntention JSON → 按 scene_id 聚合 intentionFunction
