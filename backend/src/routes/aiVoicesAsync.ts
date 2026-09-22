@@ -12,12 +12,17 @@
  *   - autodl-comfyui - 异步 results[].url 直接是远程 wav URL, 无需下载步骤
  *
  * 入口: ?provider=xxx (默认 'minimax')
+ *
+ * traceId 全链路日志（2026-09-22 PM msg-20260922-002 task E）：
+ *   3 个 endpoint 入口拿 c.get('traceId')，下游 logTask* 通过 opts 串通到 logs/flow-{traceId}.jsonl
+ *   不在 scope：retry / fallback — 此文件是 TTS validation endpoint，无对应业务逻辑
  */
 import { Hono } from 'hono'
 import { eq, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { getTTSAsyncAdapter } from '../services/adapters/registry.js'
 import { success, badRequest } from '../utils/response.js'
+import { logTaskStart, logTaskProgress, logTaskSuccess, logTaskWarn, logTaskError, logTaskPayload, redactUrl } from '../utils/task-logger.js'
 
 function fail(c: any, message: string, status = 500, extra: any = null) {
   return c.json({ code: status, message, ...(extra ? { data: extra } : {}) }, status)
@@ -69,7 +74,7 @@ interface MinimaxTestBody {
   bitrate?: number
   format?: 'mp3' | 'pcm' | 'flac' | 'wav'
   channel?: 1 | 2
-  pronunciationDictTone?: string[]
+  pronunciation_dict_tone?: string[]
   voiceModify?: { pitch?: number; intensity?: number; timbre?: number; soundEffects?: string }
   /** 端到端轮询参数 */
   pollIntervalMs?: number
@@ -105,6 +110,8 @@ const app = new Hono()
 // POST /ai-voices-async/test - 端到端验证
 app.post('/test', async (c) => {
   const t0 = Date.now()
+  const traceId = (c as any).get('traceId') as string | undefined
+  const opts = { traceId }
   let provider = 'minimax'
   try {
     const body = (await c.req.json().catch(() => ({}))) as MinimaxTestBody & AutoDLTestBody
@@ -112,10 +119,19 @@ app.post('/test', async (c) => {
     const adapter = getTTSAsyncAdapter(provider)
     if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
+    // logTask #1: 入口 — tts-request
+    logTaskStart('VoiceAsync', 'tts-request', {
+      provider,
+      endpoint: 'test',
+      voiceId: provider === 'autodl-comfyui' ? undefined : (body.voiceId || 'audiobook_male_1'),
+      model: provider === 'autodl-comfyui' ? undefined : (body.model || 'speech-2.8-hd'),
+    }, opts)
+
     // 分 provider 构建 params — 不同 provider 接口签名不同
     let createReq: any
     let pollInterval = 2000
     let pollTimeout = 300000
+    let inputDialogue: string | undefined
 
     if (provider === 'autodl-comfyui') {
       const autodlBody = body as AutoDLTestBody
@@ -126,7 +142,15 @@ app.post('/test', async (c) => {
         emoRefAudio: autodlBody.emoRefAudio,
         emoControlMethod: autodlBody.emoControlMethod,
       }
+      inputDialogue = params.promptText
       const cfg = getAudioConfig(provider)
+      // logTask #3: provider-config 拿到后
+      logTaskPayload('VoiceAsync', 'provider-config', {
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        hasApiKey: !!cfg.apiKey,
+      }, opts)
       createReq = adapter.buildCreateRequest(cfg, params)
       pollInterval = autodlBody.pollIntervalMs ?? 3000
       pollTimeout = autodlBody.pollTimeoutMs ?? 300000
@@ -147,33 +171,65 @@ app.post('/test', async (c) => {
         bitrate: mmBody.bitrate ?? 128000,
         format: mmBody.format ?? 'mp3',
         channel: mmBody.channel ?? 1,
-        pronunciationDictTone: mmBody.pronunciationDictTone,
+        pronunciation_dict_tone: mmBody.pronunciation_dict_tone,
         voiceModify: mmBody.voiceModify,
       }
+      inputDialogue = params.text
+      // logTask #3: provider-config 拿到后
+      logTaskPayload('VoiceAsync', 'provider-config', {
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        hasApiKey: !!cfg.apiKey,
+      }, opts)
       createReq = adapter.buildCreateRequest(cfg, params)
       pollInterval = mmBody.pollIntervalMs ?? 2000
       pollTimeout = mmBody.pollTimeoutMs ?? 300000
     }
 
+    // logTask #2: input-dialogue — 用户能看到送 TTS 的实际文本
+    if (inputDialogue !== undefined) {
+      logTaskPayload('VoiceAsync', 'input-dialogue', {
+        text: inputDialogue,
+        chars: inputDialogue.length,
+      }, opts)
+    }
+
     // 1) 创建任务
     const tCreate = Date.now()
+    // logTask #4: TTS API 前 — tts-api-call
+    logTaskStart('VoiceAsync', 'tts-api-call', {
+      phase: 'create',
+      provider,
+      url: redactUrl(createReq.url),
+      method: createReq.method,
+    }, opts)
     const createResp = await fetch(createReq.url, {
       method: createReq.method,
       headers: createReq.headers,
       body: JSON.stringify(createReq.body),
     })
-    const createJson = await createResp.json().catch(() => ({}))
+    // logTask #5: TTS API 后 — tts-api-response
+    const createBody = await createResp.json().catch(() => ({}))
+    logTaskProgress('VoiceAsync', 'tts-api-response', {
+      phase: 'create',
+      durationMs: Date.now() - tCreate,
+      status: createResp.status,
+      bodySize: JSON.stringify(createBody).length,
+    }, opts)
     if (!createResp.ok) {
-      return fail(c, `create task failed: ${createResp.status} ${JSON.stringify(createJson).slice(0, 500)}`, 502)
+      return fail(c, `create task failed: ${createResp.status} ${JSON.stringify(createBody).slice(0, 500)}`, 502)
     }
-    const handle = adapter.parseCreateResponse(createJson)
+    const handle = adapter.parseCreateResponse(createBody)
     const createdAt = Date.now() - tCreate
 
     // 2) 轮询
     const tPoll = Date.now()
     let pollResult: any = null
+    let pollAttempts = 0
     const cfg = getAudioConfig(provider)
     while (Date.now() - tPoll < pollTimeout) {
+      pollAttempts++
       const qReq = adapter.buildQueryRequest(cfg, handle.taskId)
       const qResp = await fetch(qReq.url, { method: qReq.method, headers: qReq.headers })
       const qJson = await qResp.json().catch(() => ({}))
@@ -187,6 +243,11 @@ app.post('/test', async (c) => {
       }
       await new Promise(r => setTimeout(r, pollInterval))
     }
+    logTaskProgress('VoiceAsync', 'poll-summary', {
+      attempts: pollAttempts,
+      durationMs: Date.now() - tPoll,
+      success: !!pollResult,
+    }, opts)
     if (!pollResult) {
       return fail(c, `poll timeout after ${pollTimeout}ms`, 504, { taskId: handle.taskId })
     }
@@ -197,6 +258,17 @@ app.post('/test', async (c) => {
       if (!pollResult.audioUrl) {
         return fail(c, 'autodl-comfyui task completed but no audioUrl in result', 502, { taskId: handle.taskId, raw: pollResult.raw })
       }
+      // logTask #8: 出口 — tts-request-complete
+      logTaskSuccess('VoiceAsync', 'tts-request-complete', {
+        provider,
+        endpoint: 'test',
+        taskId: handle.taskId,
+        audioUrl: pollResult.audioUrl,
+        format: 'wav',
+        totalMs: Date.now() - t0,
+        audioDurationMs: null,  // 此 endpoint 不探针音频时长
+        dialogue_chars: inputDialogue?.length ?? 0,
+      }, opts)
       return success(c, {
         ok: true,
         provider,
@@ -216,7 +288,19 @@ app.post('/test', async (c) => {
       return fail(c, `provider "${provider}" task succeeded but no download helper`, 500, { taskId: handle.taskId })
     }
     const dReq = adapter.buildDownloadRequest(cfg, pollResult.fileId)
+    const tDl = Date.now()
+    logTaskStart('VoiceAsync', 'tts-api-call', {
+      phase: 'download',
+      provider,
+      url: redactUrl(dReq.url),
+      method: dReq.method,
+    }, opts)
     const dResp = await fetch(dReq.url, { method: dReq.method, headers: dReq.headers })
+    logTaskProgress('VoiceAsync', 'tts-api-response', {
+      phase: 'download',
+      durationMs: Date.now() - tDl,
+      status: dResp.status,
+    }, opts)
     if (!dResp.ok) {
       return fail(c, `download failed: ${dResp.status}`, 502, { fileId: pollResult.fileId })
     }
@@ -228,6 +312,19 @@ app.post('/test', async (c) => {
     }
     const audioB64 = audioBuf.toString('base64')
 
+    // logTask #8: 出口 — tts-request-complete
+    logTaskSuccess('VoiceAsync', 'tts-request-complete', {
+      provider,
+      endpoint: 'test',
+      taskId: handle.taskId,
+      fileId: pollResult.fileId,
+      bytes: audioBuf.length,
+      fileSizeKB: audioBuf.length / 1024,
+      format: 'mp3',
+      totalMs: Date.now() - t0,
+      audioDurationMs: null,  // 此 endpoint 不探针音频时长
+      dialogue_chars: inputDialogue?.length ?? 0,
+    }, opts)
     return success(c, {
       ok: true,
       provider,
@@ -244,23 +341,46 @@ app.post('/test', async (c) => {
       audioBase64: audioB64,
     })
   } catch (e: any) {
+    // logTask #9: 异常 — tts-request-error
+    logTaskError('VoiceAsync', 'tts-request-error', {
+      provider,
+      endpoint: 'test',
+      error: e?.message || 'unknown',
+      stack: e?.stack,
+    }, opts)
     return fail(c, e?.message || 'unknown error', 500, { provider })
   }
 })
 
 // POST /ai-voices-async/create - 仅创建任务
 app.post('/create', async (c) => {
+  const traceId = (c as any).get('traceId') as string | undefined
+  const opts = { traceId }
+  let provider = 'minimax'
   try {
     const body = (await c.req.json().catch(() => ({}))) as MinimaxTestBody & AutoDLTestBody
-    const provider = readProvider(c, body)
+    provider = readProvider(c, body)
     const adapter = getTTSAsyncAdapter(provider)
     if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
+    logTaskStart('VoiceAsync', 'tts-create', {
+      provider,
+      endpoint: 'create',
+    }, opts)
+
     let req: any
+    let inputDialogue: string | undefined
     if (provider === 'autodl-comfyui') {
       const b = body as AutoDLTestBody
       if (!b.promptText) return badRequest(c, 'promptText is required')
       const cfg = getAudioConfig(provider)
+      inputDialogue = b.promptText
+      logTaskPayload('VoiceAsync', 'provider-config', {
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        hasApiKey: !!cfg.apiKey,
+      }, opts)
       req = adapter.buildCreateRequest(cfg, {
         promptText: b.promptText,
         promptSimple: b.promptSimple,
@@ -272,6 +392,13 @@ app.post('/create', async (c) => {
       const b = body as MinimaxTestBody
       if (!b.text && !b.textFileId) return badRequest(c, 'text or textFileId is required')
       const cfg = getAudioConfig(provider)
+      inputDialogue = b.text
+      logTaskPayload('VoiceAsync', 'provider-config', {
+        provider: cfg.provider,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        hasApiKey: !!cfg.apiKey,
+      }, opts)
       req = adapter.buildCreateRequest(cfg, {
         text: b.text,
         textFileId: b.textFileId,
@@ -285,46 +412,97 @@ app.post('/create', async (c) => {
         bitrate: b.bitrate,
         format: b.format,
         channel: b.channel,
-        pronunciationDictTone: b.pronunciationDictTone,
+        pronunciation_dict_tone: b.pronunciation_dict_tone,
         voiceModify: b.voiceModify,
       })
     }
 
+    if (inputDialogue !== undefined) {
+      logTaskPayload('VoiceAsync', 'input-dialogue', {
+        text: inputDialogue,
+        chars: inputDialogue.length,
+      }, opts)
+    }
+
+    const tApi = Date.now()
+    logTaskStart('VoiceAsync', 'tts-api-call', {
+      phase: 'create-only',
+      provider,
+      url: redactUrl(req.url),
+      method: req.method,
+    }, opts)
     const resp = await fetch(req.url, {
       method: req.method,
       headers: req.headers,
       body: JSON.stringify(req.body),
     })
     const json = await resp.json().catch(() => ({}))
+    logTaskProgress('VoiceAsync', 'tts-api-response', {
+      phase: 'create-only',
+      durationMs: Date.now() - tApi,
+      status: resp.status,
+      bodySize: JSON.stringify(json).length,
+    }, opts)
     if (!resp.ok) {
       return fail(c, `create failed: ${resp.status} ${JSON.stringify(json).slice(0, 500)}`, 502)
     }
     const handle = adapter.parseCreateResponse(json)
+    logTaskSuccess('VoiceAsync', 'tts-create-complete', {
+      provider,
+      taskId: handle.taskId,
+      dialogue_chars: inputDialogue?.length ?? 0,
+    }, opts)
     return success(c, { provider, taskId: handle.taskId, raw: json })
   } catch (e: any) {
+    logTaskError('VoiceAsync', 'tts-create-error', {
+      provider,
+      error: e?.message || 'unknown',
+      stack: e?.stack,
+    }, opts)
     return fail(c, e?.message || 'unknown error', 500)
   }
 })
 
 // GET /ai-voices-async/query?task_id=xxx&provider=xxx
 app.get('/query', async (c) => {
+  const traceId = (c as any).get('traceId') as string | undefined
+  const opts = { traceId }
+  let provider = 'minimax'
   try {
     const taskId = c.req.query('task_id')
     if (!taskId) return badRequest(c, 'task_id is required')
-    const provider = readProvider(c, {})
+    provider = readProvider(c, {})
     const adapter = getTTSAsyncAdapter(provider)
     if (!adapter) return fail(c, `No async TTS adapter for provider="${provider}"`, 500)
 
     const cfg = getAudioConfig(provider)
     const req = adapter.buildQueryRequest(cfg, taskId)
+    const tApi = Date.now()
+    logTaskStart('VoiceAsync', 'tts-query', {
+      provider,
+      taskId,
+      url: redactUrl(req.url),
+    }, opts)
     const resp = await fetch(req.url, { method: req.method, headers: req.headers })
     const json = await resp.json().catch(() => ({}))
+    logTaskProgress('VoiceAsync', 'tts-query-response', {
+      provider,
+      taskId,
+      durationMs: Date.now() - tApi,
+      status: resp.status,
+      parsedStatus: adapter.parseQueryResponse(json).status,
+    }, opts)
     if (!resp.ok) {
       return fail(c, `query failed: ${resp.status} ${JSON.stringify(json).slice(0, 500)}`, 502)
     }
     const parsed = adapter.parseQueryResponse(json)
     return success(c, { provider, taskId, ...parsed })
   } catch (e: any) {
+    logTaskError('VoiceAsync', 'tts-query-error', {
+      provider,
+      error: e?.message || 'unknown',
+      stack: e?.stack,
+    }, opts)
     return fail(c, e?.message || 'unknown error', 500)
   }
 })
