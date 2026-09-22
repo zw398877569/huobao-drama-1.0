@@ -94,3 +94,11 @@ export const SCENE_TRANSITION_BONUS = 0.5  // isFirstInScene 镜头 +0.5s
 // ── Σ 收敛 (Phase 2 C, 默认参数) ─────────────────────────────
 export const DEFAULT_EPISODE_TARGET_SECONDS = 100  // AI 漫剧主流时长 (B3 调研 240 样本 P50=100s)
 export const EPISODE_TARGET_TOLERANCE = 1.1       // Σ 允许超过 target × 1.1 才缩放
+
+// ── Climax 系数 (Step 3.G, 2026-09-22) ────────────────────────
+//   scene-classifier (lib/scene-classifier.ts) 标记 climax 时, computeShotDuration 应用此系数
+//   让高潮镜头有更长落点时间. 不破坏 intent-template 的快慢节奏设计意图,
+//   不突破 H3 VIDEO_MAX=15 硬约束, Σ 收敛时高潮镜头相对延长比例 1.3:1 仍保留.
+//   1.3x 示例: 反转(0.6x)×CU(3s)=1.8s×1.3=2.34s→3s; 高潮(0.6x)×MS(4s)=2.4s×1.3=3.12s→3s;
+//   高潮(0.6x)×WS(7s)=4.2s×1.3=5.46s→5s; 仍受 [VIDEO_MIN, VIDEO_MAX] + 短对白压缩 安全网约束.
+export const CLIMAX_BONUS_COEFFICIENT = 1.3

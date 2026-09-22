@@ -33,11 +33,16 @@ import {
   SCENE_TRANSITION_BONUS,
   DEFAULT_EPISODE_TARGET_SECONDS,
   EPISODE_TARGET_TOLERANCE,
+  CLIMAX_BONUS_COEFFICIENT,
 } from '../../constants/shot-type-baseline'
 import {
   estimateTargetDuration,
-  type EpisodeSceneData,
 } from '../../lib/episode-duration-estimator'
+import {
+  classifyEpisodeScenes,
+  type EpisodeSceneData,
+  type SceneTag,
+} from '../../lib/scene-classifier'
 
 // H3 三段式 video_prompt 的 5D 字段映射(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS P4)
 // planner 输出中文 / 自由文本,这里统一映射到 H3 英文 enum
@@ -702,6 +707,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
 function computeShotDuration(
   sp: { shot_type: string; dialogue?: string; movement?: string },
   intentTemplate: { durationCoefficient?: number; shotDensity?: string } | undefined,
+  // Step 3.G: scene-classifier 标记 climax 时应用 CLIMAX_BONUS_COEFFICIENT,
+  // 让该 scene 所有镜头延长 (但不破坏 intent-template 快慢节奏 + 不突破 VIDEO_MAX=15)
+  sceneTag: SceneTag = 'normal',
 ): number {
   const baseline = getBaselineFor(sp.shot_type)
   const densityScale = intentTemplate?.durationCoefficient ?? FALLBACK_DENSITY_SCALE
@@ -711,6 +719,12 @@ function computeShotDuration(
   const scaled = baseline.min * densityScale * moveScale
   const floor = computeDialogueFloor(dialogueChars)
   let candidate = Math.max(floor, scaled)
+  // Step 3.G: climax bonus (scene-classifier 3-vote 标记 climax 时)
+  //   1.3x 乘到 candidate, 让该 scene 镜头延长落点时间.
+  //   Σ 收敛时 climax 镜相对延长比例 1.3:1 仍保留 (绝对时长会被 Σ 缩, 但相对节奏稳).
+  if (sceneTag === 'climax') {
+    candidate *= CLIMAX_BONUS_COEFFICIENT
+  }
   // P3: 短对白压缩 (< 10 字 → ≤ 8s, 避免空转)
   if (dialogueChars > 0 && dialogueChars < SHORT_DIALOGUE_THRESHOLD) {
     candidate = Math.min(candidate, SHORT_DIALOGUE_MAX)
@@ -956,6 +970,33 @@ export async function runGenerateShotPrompts(params: {
   const firstInSceneIndices = buildFirstInSceneIndices(shot_plan)
   const episodeTargetSeconds = getEpisodeTargetSeconds(episodeId)
 
+  // Step 3.G: scene-classifier 算 climax 标签 (Step 2.F) → computeShotDuration climax bonus
+  //   流程: 取 episode 所有 storyboards 解析 sceneIntention JSON → 按 scene_id 聚合 intentionFunction
+  //     → 组装 EpisodeSceneData[] → classifyEpisodeScenes 3-vote → Map<scene_id, SceneTag>
+  //   后续 loop 里 sp.scene_id 查表得到 sceneTag 传给 computeShotDuration.
+  const storyboardsForClf = db.select().from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, episodeId)).all()
+  const intentionByScene = new Map<number, DramaticFunctionKey>()
+  for (const sb of storyboardsForClf) {
+    if (sb.sceneId == null) continue
+    if (sb.sceneIntention && !intentionByScene.has(sb.sceneId)) {
+      try {
+        const parsed = JSON.parse(sb.sceneIntention) as { function?: string }
+        if (parsed.function) {
+          intentionByScene.set(sb.sceneId, parsed.function as DramaticFunctionKey)
+        }
+      } catch { /* malformed sceneIntention JSON, skip */ }
+    }
+  }
+  const episodeScenesForClf: EpisodeSceneData[] = scenes
+    .filter(s => s.episodeId === episodeId)
+    .sort((a, b) => a.id - b.id)  // chronological order for position-based 3-vote
+    .map(s => ({ ...s, intentionFunction: intentionByScene.get(s.id) }))
+  const sceneClimaxTags = classifyEpisodeScenes(episodeScenesForClf)
+  const sceneTagMap = new Map<number, SceneTag>(
+    episodeScenesForClf.map((s, idx) => [s.id, sceneClimaxTags[idx]])
+  )
+
   let totalDuration = 0
   const densityWarnings: Array<{ shot_number: number; density: string; suggestion: string; events: string[] }> = []
   const safetyWarnings: Array<{ shot_number: number; flagged: boolean; notes: any[] }> = []
@@ -969,7 +1010,9 @@ export async function runGenerateShotPrompts(params: {
     //   → dialogueFloor clamp → [VIDEO_MIN, VIDEO_MAX] 安全网
     //   旧逻辑 (密度 clamp 到区间) 已废弃, 密度现在是 scale 系数不是 range
     const intentTemplate = INTENTION_TEMPLATES[sp.intent_function as DramaticFunctionKey]
-    let candidate = computeShotDuration(sp, intentTemplate)
+    // Step 3.G: 取 scene-classifier 标签 (fallback 'normal' 表示 scene_id 不在 episode 场景表)
+    const sceneTag = sceneTagMap.get(sp.scene_id) ?? 'normal'
+    let candidate = computeShotDuration(sp, intentTemplate, sceneTag)
     // 场景过渡 bonus (O2)
     candidate = applySceneTransitionBonus(candidate, firstInSceneIndices.has(i))
     // [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] 终极安全网 (video API 硬约束)
