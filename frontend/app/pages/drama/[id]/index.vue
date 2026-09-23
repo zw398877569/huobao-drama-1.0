@@ -14,6 +14,8 @@
           <div class="page-meta">
             <span v-if="drama.style" class="style-chip" :title="`风格：${styleLabel(drama.style)}`">{{ styleLabel(drama.style) }}</span>
             <span v-if="drama.style" class="meta-divider"></span>
+            <span v-if="drama.character_aesthetic || drama.characterAesthetic" class="style-chip aesthetic-chip" :title="`角色美学：${characterAestheticLabel(drama.character_aesthetic || drama.characterAesthetic)}`">{{ characterAestheticLabel(drama.character_aesthetic || drama.characterAesthetic) }}</span>
+            <span v-if="drama.character_aesthetic || drama.characterAesthetic" class="meta-divider"></span>
             <span class="meta-item">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               {{ drama.characters?.length || 0 }} 角色
@@ -26,6 +28,12 @@
           </div>
         </div>
       </div>
+      <button class="btn" @click="openEditStyle" title="编辑剧集整体风格 + 角色美学" style="margin-right:8px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+        </svg>
+        编辑风格
+      </button>
       <button class="btn btn-primary" @click="openAddEpisode">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -198,22 +206,64 @@
       </div>
     </div>
   </div>
+
+    <!-- Edit Style Dialog (2026-09-23 PM msg-20260923-002 fix #2) -->
+    <div v-if="editStyle" class="dialog-mask" @click.self="editStyle = false">
+      <div class="dialog card">
+        <div class="dialog-header">
+          <div class="dialog-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+          </div>
+          <h2 class="dialog-title">编辑剧集风格</h2>
+          <p class="dialog-desc">视觉风格 + 角色美学两个维度独立控制</p>
+        </div>
+        <form @submit.prevent="saveStyle" class="dialog-form">
+          <label class="field">
+            <span class="field-label">视觉风格</span>
+            <BaseSelect v-model="editForm.style" :options="styleSelectOptions" placeholder="选择风格" searchable />
+          </label>
+          <label class="field">
+            <span class="field-label">角色美学</span>
+            <BaseSelect v-model="editForm.character_aesthetic" :options="aestheticOptions" placeholder="选择角色美学" />
+          </label>
+          <div class="dialog-actions">
+            <button type="button" class="btn" @click="editStyle = false">取消</button>
+            <button type="submit" class="btn btn-primary" :disabled="savingStyle">
+              {{ savingStyle ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
 </template>
 
 <script setup>
 import { toast } from 'vue-sonner'
 import { useStylePresets } from '~/composables/useStylePresets'
+import { CHARACTER_AESTHETIC_OPTIONS, characterAestheticLabel } from '~/composables/useCharacterAesthetics'
 
 const route = useRoute()
 const drama = ref(null)
 
 // 风格 label 来自后端, 单一来源
-const { styleLabel, load: loadStylePresets } = useStylePresets()
+const { styleLabel, stylePresets, load: loadStylePresets } = useStylePresets()
 onMounted(() => { loadStylePresets() })
 
 const dramaId = Number(route.params.id)
 const addDialog = ref(false)
 const creatingEpisode = ref(false)
+// 2026-09-23 PM msg-20260923-002 fix #2: 编辑剧集风格 (visual + character_aesthetic) 状态
+const editStyle = ref(false)
+const savingStyle = ref(false)
+const editForm = ref({ style: '', character_aesthetic: 'neutral' })
+// 2026-09-23: styleSelectOptions 复用 useStylePresets 的 stylePresets
+const styleSelectOptions = computed(() =>
+  stylePresets.value.map(s => ({ label: s.hint ? `${s.label} — ${s.hint}` : s.label, value: s.slug })),
+)
+// 2026-09-23: 角色美学独立选项 (与 drama.style 解耦)
+const aestheticOptions = CHARACTER_AESTHETIC_OPTIONS
 const newEpisodeTitle = ref('')
 const imageConfigs = ref([])
 const videoConfigs = ref([])
@@ -262,6 +312,36 @@ async function loadConfigs() {
     if (!newEpisodeAudioConfigId.value && audioConfigs.value.length) newEpisodeAudioConfigId.value = audioConfigs.value[0].id
   } catch (e) {
     toast.error(e.message)
+  }
+}
+
+// 2026-09-23 PM msg-20260923-002 fix #2: 打开编辑风格弹窗
+function openEditStyle() {
+  editForm.value = {
+    style: drama.value?.style || '',
+    character_aesthetic: drama.value?.character_aesthetic || drama.value?.characterAesthetic || 'neutral',
+  }
+  editStyle.value = true
+}
+
+async function saveStyle() {
+  if (savingStyle.value) return
+  savingStyle.value = true
+  try {
+    await dramaAPI.update(dramaId, {
+      style: editForm.value.style || null,
+      character_aesthetic: editForm.value.character_aesthetic || null,
+    })
+    // 更新本地 drama (snake_case from server)
+    drama.value.style = editForm.value.style || ''
+    drama.value.character_aesthetic = editForm.value.character_aesthetic || null
+    toast.success('剧集风格已保存')
+    editStyle.value = false
+    await load()  // 重新拉取 drama 数据以保证 character_aesthetic 等字段刷新
+  } catch (e: any) {
+    toast.error(e?.message || '保存失败')
+  } finally {
+    savingStyle.value = false
   }
 }
 

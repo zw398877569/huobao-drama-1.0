@@ -115,6 +115,10 @@
               <BaseSelect v-model="form.style" :options="styleSelectOptions" placeholder="选择风格" searchable />
             </label>
           </div>
+          <label class="field">
+            <span class="field-label">角色美学 <span class="dim" style="font-weight:normal;margin-left:6px;font-size:11px">(国内短剧默认选「东亚脸」)</span></span>
+            <BaseSelect v-model="form.character_aesthetic" :options="aestheticOptions" placeholder="选择角色美学" />
+          </label>
           <div class="modal-actions">
             <button type="button" class="btn" @click="showCreate = false">取消</button>
             <button type="submit" class="btn btn-primary">
@@ -134,18 +138,21 @@
 import { toast } from 'vue-sonner'
 import { dramaAPI } from '~/composables/useApi'
 import { useStylePresets } from '~/composables/useStylePresets'
+import { CHARACTER_AESTHETIC_OPTIONS } from '~/composables/useCharacterAesthetics'
 import BaseSelect from '~/components/BaseSelect.vue'
 
 const dramas = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
-const form = ref({ title: '', total_episodes: 1, style: '' })
+const form = ref({ title: '', total_episodes: 1, style: '', character_aesthetic: 'neutral' })
 // 视觉风格 — 来自后端 /api/v1/style-presets, 不在前端硬编码
 const { stylePresets, load: loadStylePresets } = useStylePresets()
 onMounted(() => { loadStylePresets() })
 const styleSelectOptions = computed(() =>
   stylePresets.value.map(s => ({ label: s.hint ? `${s.label} — ${s.hint}` : s.label, value: s.slug })),
 )
+// 2026-09-23 PM msg-20260923-002 fix #2: 角色美学独立选项 (与 drama.style 解耦)
+const aestheticOptions = CHARACTER_AESTHETIC_OPTIONS
 
 async function load() {
   loading.value = true
@@ -162,7 +169,7 @@ async function load() {
 async function create() {
   if (!form.value.title?.trim()) return
   try {
-    const d = await dramaAPI.create(form.value)
+    const d = await dramaAPI.create({ ...form.value, character_aesthetic: form.value.character_aesthetic || null })
     showCreate.value = false
     navigateTo(`/drama/${d.id}`)
   } catch (e) {
