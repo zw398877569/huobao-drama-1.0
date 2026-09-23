@@ -86,8 +86,6 @@ app.post('/:id/generate-image', async (c) => {
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
     'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
     'AGE ANCHOR: if a numeric age is mentioned (e.g. "25 years old", "around 30"), pin the character to that exact integer; if vague ("young", "middle-aged"), default to 25-30 for protagonist or elderly for aged roles; do NOT free-render into 50+ when "around 30" is given,',
-    'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
-    'AGE ANCHOR: if a numeric age is mentioned (e.g. "25 years old", "around 30"), pin the character to that exact integer; if vague ("young", "middle-aged"), default to 25-30 for protagonist or elderly for aged roles; do NOT free-render into 50+ when "around 30" is given,',
     'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
     'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
     'consistent character design across all views, clean light gradient background',
