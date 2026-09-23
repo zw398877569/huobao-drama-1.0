@@ -184,7 +184,7 @@ app.post('/:id/generate-tts', async (c) => {
   })
 
   try {
-    const result = await generateTTSForDialogue(id, sb.episodeId, sb.dialogue)
+    const result = await generateTTSForDialogue(id, sb.episodeId, sb.dialogue, sb.atmosphere)
     if (result.ignored) {
       return badRequest(c, '该镜头没有可生成的对白或旁白')
     }

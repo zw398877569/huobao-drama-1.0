@@ -21,6 +21,87 @@ import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../
 
 const NARRATOR_VOICE_FALLBACK = process.env.NARRATOR_VOICE || 'alloy'
 
+
+// ============ 2026-09-23 问题 3 — TTS 自然度优化 ============
+
+/** atmosphere 关键词 → MiniMax emotion 枚举 */
+type TTSEmotion = 'happy' | 'sad' | 'angry' | 'fearful' | 'neutral'
+
+/**
+ * 从分镜 atmosphere 字符串推断 TTS emotion + speed.
+ *
+ * 关键词分类（参考分镜工具常见描写）：
+ *   sad/farewell/melancholy/grief/loneliness → emotion='sad', speed 0.85-0.9 (慢, 留白)
+ *   tense/fearful/panic/threat/chase/conflict → emotion='angry'/'fearful', speed 1.05-1.15 (快, 紧凑)
+ *   warm/peaceful/gentle/intimate → emotion='neutral', speed 0.95 (平缓)
+ *   joyful/reunion/cheerful → emotion='happy', speed 1.0 (中等, 不用 happy 默认强行卖萌)
+ *   fallback → emotion='neutral', speed 1.0
+ */
+function inferTTSParams(atmosphere?: string | null): { emotion: TTSEmotion; speed: number } {
+  if (!atmosphere) return { emotion: 'neutral', speed: 1.0 }
+  const lower = atmosphere.toLowerCase()
+
+  if (/悲伤|告别|哀悼|压抑|沉重|凄凉|lonely|farewell|melancholy|grief|sorrow/.test(lower)) {
+    return { emotion: 'sad', speed: 0.88 }
+  }
+  if (/紧张|恐惧|惊|危机|追逐|冲突|战斗|恐惧|tense|fearful|panic|threat|chase|conflict/.test(lower)) {
+    return { emotion: 'fearful', speed: 1.12 }
+  }
+  if (/愤怒|狂躁|吼|怒|angry|fury|rage/.test(lower)) {
+    return { emotion: 'angry', speed: 1.1 }
+  }
+  if (/温馨|平静|舒缓|亲密|温柔|peaceful|warm|gentle|intimate|tender/.test(lower)) {
+    return { emotion: 'neutral', speed: 0.95 }
+  }
+  if (/欢乐|喜悦|团聚|温馨|开心|joyful|reunion|cheerful|delight/.test(lower)) {
+    return { emotion: 'happy', speed: 1.0 }
+  }
+  return { emotion: 'neutral', speed: 1.0 }
+}
+
+/**
+ * 段内长句切分 — 按中文标点 + 语气词边界切短句, 避免整段一次合成.
+ * 默认每段 ≤20 字 (MiniMax TTS 单段推荐 ≤30 字, 20 字更自然).
+ * 切点优先级: 句末标点 > 强语气词 > 逗号 (句中读).
+ */
+const MAX_SEGMENT_CHARS = 20
+const SENTENCE_END = /[。！？!?]/
+const SOFT_BREAKS = /[,，;；]/
+
+function splitLongText(text: string): string[] {
+  const trimmed = text.trim()
+  if (!trimmed) return []
+  if ([...trimmed].length <= MAX_SEGMENT_CHARS) return [trimmed]
+
+  const out: string[] = []
+  let buf = ''
+  for (const ch of trimmed) {
+    buf += ch
+    const bufLen = [...buf].length
+    // 1) 遇到句末标点强制切
+    if (SENTENCE_END.test(ch)) {
+      out.push(buf.trim())
+      buf = ''
+      continue
+    }
+    // 2) 软断点 (逗号/分号) + 已超长 → 切
+    if (SOFT_BREAKS.test(ch) && bufLen >= 10) {
+      out.push(buf.trim())
+      buf = ''
+      continue
+    }
+    // 3) 超长但没有断点 → 强制切
+    if (bufLen >= MAX_SEGMENT_CHARS) {
+      out.push(buf.trim())
+      buf = ''
+    }
+  }
+  if (buf.trim()) out.push(buf.trim())
+  return out.filter(Boolean)
+}
+
+// ============ TTS 自然度优化 end ============
+
 export interface TTSSegmentMeta {
   speaker: string
   text: string
@@ -103,6 +184,7 @@ export async function generateTTSForDialogue(
   storyboardId: number,
   episodeId: number,
   dialogue: string | null | undefined,
+  atmosphere?: string | null,  // 2026-09-23 问题 3: 用于推断 emotion + speed
 ): Promise<TTSComposeResult> {
   const parsed = parseDialogueSegments(dialogue)
   if (parsed.ignorable) {
@@ -115,19 +197,35 @@ export async function generateTTSForDialogue(
   // 合并相邻同 speaker
   const merged = coalesceAdjacent(parsed.segments)
   const configId = getEpisodeConfigId(episodeId)
+  // 2026-09-23 问题 3: 从 atmosphere 推断 emotion + speed, 告别场景不再卖萌
+  const ttsParams = inferTTSParams(atmosphere)
   const meta: TTSSegmentMeta[] = []
   const segPaths: string[] = []
+
+  logTaskStart('TTSConcat', 'infer-tts-params', {
+    atmosphere: atmosphere || '(empty)',
+    emotion: ttsParams.emotion,
+    speed: ttsParams.speed,
+  })
 
   for (let i = 0; i < merged.length; i++) {
     const m = merged[i]
     const voice = getVoiceForSpeaker(episodeId, m.speaker, m.isNarrator)
     logTaskProgress('TTSConcat', 'generate-segment', {
-      index: i, speaker: m.speaker, isNarrator: m.isNarrator, voice, textLen: m.text.length,
+      index: i, speaker: m.speaker, isNarrator: m.isNarrator, voice,
+      textLen: m.text.length,
+      emotion: ttsParams.emotion,
+      speed: ttsParams.speed,
     })
+    // 2026-09-23 问题 3: 段内长句切分 (默认 ≤20 字, 让 TTS 按气口自然合成)
+    const sentences = splitLongText(m.text)
+    const finalText = sentences.join(' ')  // MiniMax TTS 支持空格分隔多短句
     const segPath = await generateTTS({
-      text: m.text,
+      text: finalText,
       voice,
       configId: configId ?? undefined,
+      emotion: ttsParams.emotion,
+      speed: ttsParams.speed,
     })
     segPaths.push(segPath)
     meta.push({
