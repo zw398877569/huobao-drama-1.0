@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono'
 import { randomUUID } from 'node:crypto'
+import { taskStorage } from '../utils/task-logger.js'
 
 const colors = {
   reset: '\x1b[0m',
@@ -55,7 +56,7 @@ export const requestLogger: MiddlewareHandler = async (c, next) => {
 
   console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path}${bodyInfo}${colors.dim} [traceId=${traceId}]${colors.reset}`)
 
-  await next()
+  await taskStorage.run({ traceId }, () => next())
 
   const ms = (performance.now() - start).toFixed(0)
   const status = c.res.status

@@ -1,4 +1,14 @@
 import { writeFlowLog } from './file-log.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+/**
+ * AsyncLocalStorage 自动注入 traceId + business IDs (2026-09-23 用户验证反馈)
+ * 之前 PM msg-20260922-002 task A/B 只在 middleware 设了 traceId 但下游 logTask* 调用
+ * 需要手动传 opts 才能串通文件落盘 → 12 个 routes 漏改, 只有 aiVoicesAsync 一个文件生效.
+ * 现在 middleware 把 traceId 放进 ALS, emit 函数自动从 ALS 读 → 所有 logTask* 调用零改动.
+ * 手动 opts 仍生效 (覆盖 ALS 值, 向后兼容).
+ */
+export const taskStorage = new AsyncLocalStorage<LogTaskOpts>()
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS'
 
@@ -167,11 +177,13 @@ function truncateString(value: string, edge = 120) {
 }
 
 function emit(level: LogLevel, scope: string, action: string, meta?: Record<string, unknown>, opts?: LogTaskOpts) {
+  // ALS fallback: 如果调用方没传 opts, 从 AsyncLocalStorage 拿 middleware 注入的 traceId
+  const contextOpts = opts ?? taskStorage.getStore()
   const color = colorFor(level)
-  const suffix = formatOpts(opts)
+  const suffix = formatOpts(contextOpts)
   console.log(`${C.dim}${timeText()}${C.reset} ${color}[${scope}]${C.reset} ${action}${formatMeta(meta)}${suffix}`)
-  if (opts?.traceId) {
-    writeFlowLog(opts.traceId, buildEntry(level, scope, action, meta, opts))
+  if (contextOpts?.traceId) {
+    writeFlowLog(contextOpts.traceId, buildEntry(level, scope, action, meta, contextOpts))
   }
 }
 
@@ -200,14 +212,16 @@ export function logTaskError(scope: string, action: string, meta?: Record<string
 }
 
 export function logTaskPayload(scope: string, action: string, payload: unknown, opts?: LogTaskOpts) {
+  const contextOpts = opts ?? taskStorage.getStore()
+  const traceId = contextOpts?.traceId
   const sanitized = sanitizeValue(payload)
   const serialized = typeof sanitized === 'string'
     ? sanitized
     : JSON.stringify(sanitized, null, 2)
-  console.log(`${C.dim}${timeText()}${C.reset} ${C.blue}[${scope}]${C.reset} ${action}${formatOpts(opts)}\n${serialized}`)
-  if (opts?.traceId) {
-    writeFlowLog(opts.traceId, {
-      ...buildEntry('INFO', scope, action, undefined, opts),
+  console.log(`${C.dim}${timeText()}${C.reset} ${C.blue}[${scope}]${C.reset} ${action}${formatOpts(contextOpts)}\n${serialized}`)
+  if (traceId) {
+    writeFlowLog(traceId, {
+      ...buildEntry('INFO', scope, action, undefined, contextOpts),
       meta: { payload: sanitized },
     })
   }
