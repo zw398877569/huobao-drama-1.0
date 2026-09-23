@@ -50,18 +50,12 @@ export const STYLE_PRESETS: StylePreset[] = [
     slug: 'realistic',
     label: '写实',
     hint: '都市写实 / 职场情感 / 家庭伦理',
-    positiveCharacterTokens: 'photorealistic character portrait, East Asian facial features, soft jawline, smooth skin texture, realistic proportions',
+    // 2026-09-23 PM msg-20260923-002 fix #2: 回退 93e3e81 — realistic preset 不再硬绑东亚脸
+    //   角色美学 (east-asian / western / neutral) 改由 drama.characterAesthetic 独立维度控制
+    //   candidate CHARACTER_AESTHETICS 注入点见 routes/characters.ts + storyboard-tools.ts
+    positiveCharacterTokens: 'photorealistic character portrait, natural skin texture, candid photography, realistic proportions',
     positiveShotTokens: 'photorealistic cinematography, natural lighting, realistic film still',
     keywords: ['realistic', '写实', '真人', 'photorealistic'],
-  },
-  {
-    // 2026-09-23 问题 1: 显式东方写实 preset, drama.style 含"东亚/东方/亚洲/中式/中国/中国"自动匹配
-    slug: 'realistic-cn',
-    label: '东方写实',
-    hint: '国内短剧 / 东亚脸 / 都市言情 / 家庭伦理 (东方审美锚定)',
-    positiveCharacterTokens: 'photorealistic character portrait, East Asian facial features, soft jawline, smooth skin texture, realistic proportions, contemporary Chinese aesthetic, modern East Asian setting',
-    positiveShotTokens: 'photorealistic cinematography, natural lighting, contemporary East Asian urban environment, realistic film still',
-    keywords: ['东方', '东亚', '亚洲', '中式', '中国', 'cn', 'east', 'asian', 'chinese'],
   },
   {
     slug: 'cinematic',
