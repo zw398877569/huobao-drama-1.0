@@ -10,6 +10,12 @@ export const dramas = sqliteTable('dramas', {
   description: text('description'),
   genre: text('genre'),
   style: text('style').default('realistic'),
+  // 2026-09-23 PM msg-20260923-002 fix #2: 角色美学独立维度
+  //   与 drama.style (剧集整体美术风格) 分离:
+  //   - drama.style: 写实/动漫/电影感 (控制画风/镜头语言)
+  //   - characterAesthetic: east-asian / western / neutral (控制角色脸型/肤色/发色)
+  //   nullable, 默认 null → 代码 fallback 'neutral' → 不注入 token, 现状兼容
+  characterAesthetic: text('character_aesthetic'),
   totalEpisodes: integer('total_episodes').default(1),
   totalDuration: integer('total_duration').default(0),
   status: text('status').notNull().default('draft'),

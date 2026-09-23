@@ -57,6 +57,8 @@ app.post('/', async (c) => {
     description: body.description,
     genre: body.genre,
     style: body.style,
+    // 2026-09-23: 角色美学独立维度, nullable, 默认 null → 代码 fallback 'neutral'
+    characterAesthetic: body.character_aesthetic ?? null,
     tags: body.tags ? JSON.stringify(body.tags) : null,
     metadata: body.metadata,
     status: 'draft',
@@ -130,6 +132,7 @@ app.put('/:id', async (c) => {
   if (body.description !== undefined) updates.description = body.description
   if (body.genre !== undefined) updates.genre = body.genre
   if (body.style !== undefined) updates.style = body.style
+  if (body.character_aesthetic !== undefined) updates.characterAesthetic = body.character_aesthetic
   if (body.status !== undefined) updates.status = body.status
   if (body.tags !== undefined) updates.tags = JSON.stringify(body.tags)
   if (body.metadata !== undefined) updates.metadata = body.metadata
