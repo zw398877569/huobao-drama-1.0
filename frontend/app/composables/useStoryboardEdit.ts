@@ -1,3 +1,4 @@
+import { toast } from 'vue-sonner'
 import { storyboardAPI } from '~/composables/useApi'
 import { useStylePresets } from '~/composables/useStylePresets'
 import type { Ref } from 'vue'
@@ -94,9 +95,13 @@ export function useStoryboardEdit(deps: Deps) {
     if (!next.intention) delete next.intention
     if (!next.visualStrategy) delete next.visualStrategy
     const json = Object.keys(next).length ? JSON.stringify(next) : ''
+    // 2026-09-23 UX fix: 检测到 json 与原值相同就不发 API + toast (避免 blur 重复触发刷屏)
+    if (json === (sb.scene_intention || '')) return
     sb.scene_intention = json
     sb.sceneIntention = json
     storyboardAPI.update(sb.id, { scene_intention: json })
+      .then(() => { toast.success('导演意图已保存') })
+      .catch((e: any) => { toast.error(e?.message || '保存失败') })
   }
 
   // Trigger scene_intention agent analysis for a single storyboard and refresh local state
