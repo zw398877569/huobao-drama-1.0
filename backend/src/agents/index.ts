@@ -979,6 +979,18 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
       角色身上的「情节道具」只能在所属 scene 的 description 里被显式提到时,才能在本镜出现;
       character.description 里描述的情节瞬间 (例如「前爪按红色按钮」这种特定剧情动作/物体) 不算
       「角色固有道具」,首镜 frame/正文严禁默认带入;违反 = 剧情时序错乱,观众看不懂为什么某镜有某物
+   - 轴5.5【本镜窗口硬约束 (2026-09-23 问题 2)】:
+      shot.action / shot.description / shot.result / shot.atmosphere / shot.dialogue
+      必须严格只描述本镜 [start_time, end_time] 时间窗口内的瞬时状态.
+      **禁止包含**:
+        - 后续剧情高潮时刻的动作/表情/眼神 (例: 开场镜严禁写"复活后眼睛放光、嘴角咧开露出诡异笑意"
+          — 那是后续高潮镜的状态,不是开场窗内的瞬时)
+        - 后续剧情才出现的道具 (例: 开场镜严禁写"爪子飞快按动按钮" — 按钮是后续高潮镜才出现的)
+        - character.appearance 里夹杂的"剧情态瞬间" (例: 角色 appearance 写"前爪按红色按钮"
+          不算永久外观,首镜严禁默认带入)
+      **强制**: 想象本镜只占 X 秒,角色在这 X 秒内的"瞬时动作/表情/状态"是什么,只写这个.
+      错误反例 (开场镜): "主人低头凝视怀中气息渐弱的狗, 双手缓缓抚上狗毛; 狗狗前爪按在红色按钮,
+      嘴角咧开露出诡异笑意" → 前半句是开场窗内的,后半句"按红色按钮/诡异笑意"是后续高潮窗的.
 3. 输出 shot_plan（只含结构字段，不含 prompt）
 4. 调 generate_shot_prompts 把结构字段传给 code 侧生成完整 17 字段并保存
 

@@ -1135,7 +1135,7 @@ export async function runGenerateShotPrompts(params: {
           if (roleLower.includes('女') || roleLower.includes('woman') || roleLower.includes('female')) return '女性'
           return '人物'
         })()
-      return `${c.name}外貌:${look}`
+      return `${c.name}永久外貌(年龄/脸型/发色/体型/服装,仅参考角色立绘,不重复 plot 道具/高潮动作):${look}`
     }).join('；')
 
     // 场景参考图
@@ -1182,7 +1182,7 @@ export async function runGenerateShotPrompts(params: {
     //   修复: 用 charRolesPrefix 判断, 空时不加这个 '. '
     const charRoles = charRefs.map(c => {
       const look = c.appearance || c.description || c.personality || '人物'
-      return `${escapeXml(c.name)}外貌:${escapeXml(look)}`
+      return `${escapeXml(c.name)}永久外貌(年龄/脸型/发色/体型/服装,仅参考立绘不重复 plot 道具/高潮动作):${escapeXml(look)}`
     }).join('；')
     const charRolesPrefix = charRoles ? `${charRoles}. ` : ''
     const integrated = `延续上一镜末帧构图. ${charRolesPrefix}${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
