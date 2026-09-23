@@ -9,6 +9,7 @@ import { eq, and, isNull } from 'drizzle-orm'
 import { now } from '../../utils/response'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
 import { getPresetByStyle, getStylePreset } from '../../services/negative-prompt-presets'
+import { getCharacterAestheticTokens } from '../../constants/character-aesthetics'
 // Import scene intention analysis function and templates
 import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
@@ -159,11 +160,13 @@ function ensureH3ThreePartPrompt(
 
 export function createStoryboardTools(episodeId: number, dramaId: number) {
   // 预计算自动反词：按 drama.style 匹配一次，整个会话复用
-  const [drama] = db.select({ style: schema.dramas.style })
+  // 2026-09-23 PM msg-20260923-002 fix #2: 同时取 drama.characterAesthetic (角色美学独立维度)
+  const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
     .from(schema.dramas)
     .where(eq(schema.dramas.id, dramaId)).all()
   const autoNegativePrompt = getPresetByStyle(drama?.style).prompt
   const stylePreset = getStylePreset(drama?.style)
+  const characterAestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
 
   const readStoryboardContext = createTool({
     id: 'read_storyboard_context',
@@ -699,7 +702,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         atmosphere: sp.atmosphere ?? '',
         intent_function: sp.intent_function ?? '铺垫',
       }))
-      return runGenerateShotPrompts({ episodeId, dramaId, shot_plan: safeShotPlan })
+      return runGenerateShotPrompts({ episodeId, dramaId, shot_plan: safeShotPlan, characterAestheticTokens })
     },
   })
 
@@ -933,8 +936,10 @@ export async function runGenerateShotPrompts(params: {
   }>
   keepExisting?: boolean
   onProgress?: (progress: { shot: number; total: number; status: string }) => void
+  // 2026-09-23 PM msg-20260923-002 fix #2: 角色美学独立维度 token (从 createStoryboardTools 顶部预计算后传入)
+  characterAestheticTokens?: string
 }): Promise<{ count: number; total_duration: number; density_warnings: number; safety_warnings: number }> {
-  const { episodeId, dramaId, shot_plan, keepExisting = true, onProgress } = params
+  const { episodeId, dramaId, shot_plan, keepExisting = true, onProgress, characterAestheticTokens = '' } = params
   const ts = now()
   logTaskProgress('StoryboardTool', 'generate-shot-prompts-begin', {
     episodeId,
@@ -1135,7 +1140,7 @@ export async function runGenerateShotPrompts(params: {
           if (roleLower.includes('女') || roleLower.includes('woman') || roleLower.includes('female')) return '女性'
           return '人物'
         })()
-      return `${c.name}永久外貌(年龄/脸型/发色/体型/服装,仅参考角色立绘,不重复 plot 道具/高潮动作):${look}`
+      return `${c.name}永久外貌(年龄/脸型/发色/体型/服装,仅参考角色立绘,不重复 plot 道具/高潮动作):${look}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
 
     // 场景参考图
@@ -1182,7 +1187,7 @@ export async function runGenerateShotPrompts(params: {
     //   修复: 用 charRolesPrefix 判断, 空时不加这个 '. '
     const charRoles = charRefs.map(c => {
       const look = c.appearance || c.description || c.personality || '人物'
-      return `${escapeXml(c.name)}永久外貌(年龄/脸型/发色/体型/服装,仅参考立绘不重复 plot 道具/高潮动作):${escapeXml(look)}`
+      return `${escapeXml(c.name)}永久外貌(年龄/脸型/发色/体型/服装,仅参考立绘不重复 plot 道具/高潮动作):${escapeXml(look)}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
     const charRolesPrefix = charRoles ? `${charRoles}. ` : ''
     const integrated = `延续上一镜末帧构图. ${charRolesPrefix}${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()

@@ -8,6 +8,7 @@ import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
+import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
 
 const app = new Hono()
 
@@ -74,14 +75,17 @@ app.post('/:id/generate-image', async (c) => {
 
   const charDetail = char.appearance || char.description || ''
   const personality = char.personality || ''
-  const [drama] = db.select({ style: schema.dramas.style })
+  const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
     .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
   const stylePreset = getStylePreset(drama?.style || undefined)
+  // 2026-09-23 PM msg-20260923-002 fix #2: 注入角色美学 token (独立维度, 与 stylePreset 解耦)
+  const aestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
   const rawPrompt = [
     char.name,
     charDetail,
     personality ? 'personality: ' + personality : '',
     stylePreset.positiveCharacterTokens,
+    aestheticTokens,
     'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
     'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
@@ -118,11 +122,14 @@ app.post('/batch-generate-images', async (c) => {
     .from(schema.characters)
     .where(inArray(schema.characters.id, ids.length ? ids : [0])).all()
   const uniqueDramaIds = Array.from(new Set(matchedChars.map(c => c.dramaId)))
+  // 2026-09-23 PM msg-20260923-002 fix #2: 预查询 drama.style + characterAesthetic (避免 N+1)
   const dramaStyleMap = new Map<number, ReturnType<typeof getStylePreset>>()
+  const dramaAestheticMap = new Map<number, string>()
   for (const did of uniqueDramaIds) {
-    const [drama] = db.select({ style: schema.dramas.style })
+    const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
       .from(schema.dramas).where(eq(schema.dramas.id, did)).all()
     dramaStyleMap.set(did, getStylePreset(drama?.style || undefined))
+    dramaAestheticMap.set(did, getCharacterAestheticTokens(drama?.characterAesthetic))
   }
   const results: number[] = []
   for (const cid of ids) {
@@ -131,11 +138,13 @@ app.post('/batch-generate-images', async (c) => {
     const charDetail = char.appearance || char.description || ''
     const personality = char.personality || ''
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
+    const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''
     const rawPrompt = [
       char.name,
       charDetail,
       personality ? 'personality: ' + personality : '',
       stylePreset.positiveCharacterTokens,
+      aestheticTokens,
       'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
       'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
