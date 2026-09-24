@@ -35,12 +35,14 @@ export const dramaAPI = {
   list: () => api.get<{ items: any[] }>('/dramas'),
   get: (id: number) => api.get(`/dramas/${id}`),
   create: (data: any) => api.post('/dramas', data),
+  get: (id: number) => api.get(`/characters/${id}`),
   update: (id: number, data: any) => api.put(`/dramas/${id}`, data),
   del: (id: number) => api.del(`/dramas/${id}`),
 }
 
 export const episodeAPI = {
   create: (data: any) => api.post('/episodes', data),
+  get: (id: number) => api.get(`/characters/${id}`),
   update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
   // Step 4.E: 智能估算目标时长 (后端 heuristic: drama 平均 prior + 100s fallback)
   estimateTargetDuration: (dramaId: number) => api.post('/episodes/estimate-target-duration', { drama_id: dramaId }),
@@ -53,6 +55,7 @@ export const episodeAPI = {
 
 export const storyboardAPI = {
   create: (data: any) => api.post('/storyboards', data),
+  get: (id: number) => api.get(`/characters/${id}`),
   update: (id: number, data: any) => api.put(`/storyboards/${id}`, data),
   generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
@@ -62,6 +65,7 @@ export const storyboardAPI = {
 }
 
 export const characterAPI = {
+  get: (id: number) => api.get(`/characters/${id}`),
   update: (id: number, data: any) => api.put(`/characters/${id}`, data),
   voiceSample: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
   generateImage: (id: number, episodeId: number, configId?: number | string | null) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId, config_id: configId }),

@@ -12,12 +12,41 @@ import { getCharacterAestheticTokens } from '../constants/character-aesthetics.j
 
 const app = new Hono()
 
+// GET /characters/:id — fetch single character (2026-09-24 PM msg-20260924-002 task_D)
+app.get('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [char] = db.select().from(schema.characters)
+    .where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+  return success(c, {
+    id: char.id,
+    drama_id: char.dramaId,
+    name: char.name,
+    role: char.role,
+    description: char.description,
+    appearance: char.appearance,
+    appearance_permanent: char.appearancePermanent,
+    appearance_plot_state: char.appearancePlotState,
+    personality: char.personality,
+    voice_style: char.voiceStyle,
+    voice_provider: char.voiceProvider,
+    voice_sample_url: char.voiceSampleUrl,
+    image_url: char.imageUrl,
+    local_path: char.localPath,
+    reference_images: char.referenceImages,
+    seed_value: char.seedValue,
+    sort_order: char.sortOrder,
+    created_at: char.createdAt,
+    updated_at: char.updatedAt,
+  })
+})
+
 // PUT /characters/:id
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
-  for (const key of ['name', 'role', 'description', 'appearance', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath']) {
+  for (const key of ['name', 'role', 'description', 'appearance', 'appearancePermanent', 'appearancePlotState', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath']) {
     const snakeKey = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase())
     if (snakeKey in body) updates[key] = body[snakeKey]
     else if (key in body) updates[key] = body[key]
