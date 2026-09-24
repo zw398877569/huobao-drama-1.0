@@ -428,6 +428,10 @@ ensureColumn('video_generations', 'negative_prompt', 'TEXT')
 // 列表接口可按 ?source= 过滤
 ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 
+// 2026-09-24 split appearance: 拆 characters.appearance 为永久外貌 (PERMANENT) + 剧情态变化 (PLOT_STATE)
+// PM msg-20260924-002 — 解决角色立绘 plot 态污染 (dramaId=7 characterId=21 案例)
+ensureColumn('characters', 'appearance_permanent', 'TEXT')
+ensureColumn('characters', 'appearance_plot_state', 'TEXT')
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db
