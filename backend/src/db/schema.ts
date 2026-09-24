@@ -56,6 +56,8 @@ export const characters = sqliteTable('characters', {
   role: text('role'),
   description: text('description'),
   appearance: text('appearance'),
+  appearancePermanent: text('appearance_permanent'),
+  appearancePlotState: text('appearance_plot_state'),
   personality: text('personality'),
   voiceStyle: text('voice_style'),
   imageUrl: text('image_url'),
