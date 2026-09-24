@@ -73,7 +73,7 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const charDetail = char.appearance || char.description || ''
+  const charDetail = char.appearancePermanent || char.appearance || char.description || ''
   const personality = char.personality || ''
   const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
     .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
@@ -135,7 +135,7 @@ app.post('/batch-generate-images', async (c) => {
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
-    const charDetail = char.appearance || char.description || ''
+    const charDetail = char.appearancePermanent || char.appearance || char.description || ''
     const personality = char.personality || ''
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''

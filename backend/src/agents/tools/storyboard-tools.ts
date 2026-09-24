@@ -202,7 +202,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           name: c.name,
           role: c.role || '',
           description: c.description || '',
-          appearance: c.appearance || '',
+          appearancePermanent: c.appearancePermanent || '',
+          appearancePlotState: c.appearancePlotState || '',
           personality: c.personality || '',
           voice_style: c.voiceStyle || '',
           image_url: c.imageUrl || '',
@@ -1130,8 +1131,12 @@ export async function runGenerateShotPrompts(params: {
     sp.duration = Math.max(VIDEO_MIN_DURATION, Math.min(VIDEO_MAX_DURATION, candidate))
 
     // 角色外观兜底
+    // 2026-09-24 PM msg-20260924-002: 镜头图 imagePrompt 拼接 — 永久外貌 (PERMANENT) + 按 sp.intent_function 拼剧情态 (PLOT_STATE)
+    //   字段优先级: appearancePermanent > appearance (deprecated 兼容) > description > personality > role fallback
+    //   plot_state JSON parse 失败 → fallback 只用 PERMANENT (不影响生图)
     const charDesc = charRefs.map(c => {
-      const look = c.appearance ||
+      let look = c.appearancePermanent ||
+        c.appearance ||
         c.description ||
         c.personality ||
         (() => {
@@ -1140,6 +1145,17 @@ export async function runGenerateShotPrompts(params: {
           if (roleLower.includes('女') || roleLower.includes('woman') || roleLower.includes('female')) return '女性'
           return '人物'
         })()
+      if (sp.intent_function && c.appearancePlotState) {
+        try {
+          const plotState = JSON.parse(c.appearancePlotState)
+          const section = plotState[sp.intent_function]
+          if (section && typeof section === 'string') {
+            look = `${look}。剧情态[${sp.intent_function}]:${section}`
+          }
+        } catch {
+          // plot_state parse 失败 — 静默 fallback PERMANENT only
+        }
+      }
       return `${c.name}永久外貌(年龄/脸型/发色/体型/服装,仅参考角色立绘,不重复 plot 道具/高潮动作):${look}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
 
@@ -1185,8 +1201,22 @@ export async function runGenerateShotPrompts(params: {
     // QA ISSUE-003 (msg-20260920-006): charRefs 为空时 charRoles='', integrated 开头会变
     //   '延续上一镜末帧构图. . ${segs}...', 多一个 '. ', 格式丑但不崩.
     //   修复: 用 charRolesPrefix 判断, 空时不加这个 '. '
+    // 2026-09-24 PM msg-20260924-002: 镜头图 videoPrompt 拼接 — 永久外貌 (PERMANENT) + 按 sp.intent_function 拼剧情态 (PLOT_STATE)
+    //   字段优先级: appearancePermanent > appearance (deprecated 兼容) > description > personality
+    //   plot_state JSON parse 失败 → fallback 只用 PERMANENT (不影响生图)
     const charRoles = charRefs.map(c => {
-      const look = c.appearance || c.description || c.personality || '人物'
+      let look = c.appearancePermanent || c.appearance || c.description || c.personality || '人物'
+      if (sp.intent_function && c.appearancePlotState) {
+        try {
+          const plotState = JSON.parse(c.appearancePlotState)
+          const section = plotState[sp.intent_function]
+          if (section && typeof section === 'string') {
+            look = `${look}。剧情态[${sp.intent_function}]:${section}`
+          }
+        } catch {
+          // plot_state parse 失败 — 静默 fallback PERMANENT only
+        }
+      }
       return `${escapeXml(c.name)}永久外貌(年龄/脸型/发色/体型/服装,仅参考立绘不重复 plot 道具/高潮动作):${escapeXml(look)}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
     const charRolesPrefix = charRoles ? `${charRoles}. ` : ''
