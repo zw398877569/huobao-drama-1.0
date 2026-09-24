@@ -338,7 +338,7 @@ async function saveStyle() {
     toast.success('剧集风格已保存')
     editStyle.value = false
     await load()  // 重新拉取 drama 数据以保证 character_aesthetic 等字段刷新
-  } catch (e: any) {
+  } catch (e) {
     toast.error(e?.message || '保存失败')
   } finally {
     savingStyle.value = false
