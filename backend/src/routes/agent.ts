@@ -217,9 +217,39 @@ app.post('/storyboard_breaker/planning', async (c) => {
         await stream.writeSSE({ event: 'progress', data: JSON.stringify({ tip: 'AI 正在规划分镜结构，请稍候...' }) })
       }, 8000)
 
+      // 2026-09-25 PM msg-20260924-001 (storyboard-planner step logging):
+      //   拆解阶段总耗时 437s, 但 intentions-analyzed (T+17s) 到 generate-shot-prompts-begin (T+211s) 之间
+      //   194s 没有任何日志事件 — agent LLM 在跑 maxSteps=15 多步推理, 但代码没打点.
+      //   加 onStepFinish callback 让每步推理可见 (traceId 自动从 ALS 拿)
+      const llmStepStart = performance.now()
       const result = await agent.generate(
         [{ role: 'user', content: '请规划所有镜头的 shot_plan，然后调 generate_shot_prompts 保存。' }],
-        { maxSteps: 15 },
+        {
+          maxSteps: 15,
+          onStepFinish: (event: any) => {
+            const stepElapsedMs = Math.round(performance.now() - llmStepStart)
+            const toolCalls = event?.toolCalls ?? []
+            try {
+              logTaskProgress('Agent', 'planner-step-finished', {
+                stepNumber: event?.stepNumber,
+                finishReason: event?.finishReason,
+                textLen: event?.text?.length ?? 0,
+                toolCallCount: toolCalls.length,
+                toolNames: toolCalls.map((tc: any) => tc?.toolName || tc?.name).filter(Boolean),
+                promptTokens: event?.usage?.promptTokens,
+                completionTokens: event?.usage?.completionTokens,
+                stepElapsedMs,
+              })
+            } catch {
+              // log 失败不能让整个 agent.generate 挂掉, 静默
+            }
+            // SSE progress 推前端 (UI 显示步骤进度, 灰度)
+            stream.writeSSE({
+              event: 'progress',
+              data: JSON.stringify({ tip: `LLM step ${event?.stepNumber} finished (${stepElapsedMs}ms)`, stepNumber: event?.stepNumber }),
+            }).catch(() => { /* SSE 已关闭, 静默 */ })
+          },
+        },
       )
       clearInterval(heartbeat)
 
