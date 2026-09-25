@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
 
-export type ServiceType = 'text' | 'image' | 'video' | 'audio'
+export type ServiceType = 'text' | 'image' | 'video' | 'audio' | 'sanitizer'
 
 export interface AIConfig {
   provider: string

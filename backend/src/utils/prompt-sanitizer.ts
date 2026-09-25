@@ -212,6 +212,8 @@ const SYSTEM_INSTRUCTION = [
   'E. 末尾追加 ", cinematic still, dramatic tension, artistic composition"。',
   'F. Output IN ENGLISH, comma-separated short phrases, max 240 chars.',
   'G. Do NOT output explanations, prefixes, quotes, or markdown code blocks. Do NOT output <think> thinking blocks. Output only the rewritten prompt string.',
+  // 2026-09-25 PM msg-20260924-006 (Q5 task_A): 加显式指令, 防 MiniMax-M3 中转站禁不掉 thinking block 时输出空
+  'IMPORTANT: Output ONLY the rewritten prompt string. NO thinking, NO explanation, NO analysis. Even if thinking block is forced, the FINAL ANSWER must be a complete rewritten prompt.',
 ].join('\n')
 
 function extractPromptFromLLM(raw) {
@@ -310,24 +312,13 @@ function containsResidualPolicyRisk(text) {
   return /(?:杀气|血色|尸体|鲜血|搏杀|拼杀|厮杀|燃烧|燃起|残阳如血|残阳如丹|血色夕阳|杀机|邪气|萧杀|肃杀|比武|过招|剑身|剑刃|刀锋|长剑|短剑|刀光|剑光|兵器|武功|高手|对决|致命一击|残忍.{0,2}对待|凄厉|哀嚎|死亡.{0,2}威胁|白骨|死寂|残月|武林|匕首|长枪|大刀|弯刀|暗器|飞镖|枪口|子弹|刀刃|斧钺|长矛|战斧|火海|爆炸|炸弹|手雷|导弹|炮火|炮击|毁灭|屠戮|屠杀|剿灭|吞噬|绞杀|刺杀|暗杀|狙杀|血雾|血雨|血潮|血浪|血花|喷涌|涌出|迸溅|流淌|滴落|渗出|皮开肉绽|骨断筋折|心脏破裂|大动脉|万箭齐发|箭雨|漫天箭矢|血洗|屠城|灭门|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|化作飞灰|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|滚滚黑烟|灼热|炽热|高温|滚滚热浪|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|灼热|炽热|高温|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋|绝望|崩溃|疯狂|癫狂|嗜血|暴怒|狂怒|愤怒|恐惧|惊恐|战栗|阴森|诡异|恐怖|惊悚|狰狞|扭曲|鬼魅|幽灵|厉鬼|妖魔|妖邪|魔物|邪祟|诅咒|咒语|封印|炼狱|地狱|尸山血海|血流成河|千军万马|铁骑|陨落|灰飞烟灭|魂飞魄散|香消玉殒|红颜薄命|一命呜呼|横死|惨死|暴毙|自刎|自缢|自焚|殉情|殉葬|陪葬|尸骨无存|断肢|残臂|内脏|脏腑|脑浆|颅骨|脊椎|脊髓|万箭穿心|焦痕|碳化|黑烟|浓烟|灼热|炽热|高温|烈焰|烈火|冲天火光|火墙|火浪|火龙|火光|焰光|炸裂|轰然巨响|震耳欲聋)/.test(text)
 }
 
-async function sanitizeImagePromptLLM(rawPrompt) {
-  const config = getActiveConfig('text')
-  if (!config) {
-    logTaskWarn('PromptSanitizer', 'no-text-config', { reason: 'no active text AI config' })
-    return null
-  }
-  if (!config.apiKey || !config.model) {
-    logTaskWarn('PromptSanitizer', 'text-config-incomplete', { provider: config.provider })
-    return null
-  }
-
-  const url = getTextChatCompletionsUrl(config)
-  logTaskProgress('PromptSanitizer', 'llm-rewrite-start', {
-    provider: config.provider,
-    model: config.model,
-    inputLen: rawPrompt.length,
-  })
-
+// 2026-09-25 PM msg-20260924-006 (Q5) — sanitizeImagePromptLLM 重构:
+//   - task_A: max_tokens 400 → 1500 (MiniMax-M3 thinking 占用, 400 不够)
+//   - task_B: 优先用 'sanitizer' 专用配置 (deepseek-chat 不输出 thinking block), 没配才回退 'text'
+//   - task_C: retry 1 次 + 失败 ≥2 次记 'sanitizer-llm-failed-twice' warn
+//
+// 重构成 attemptSanitizerLLM helper + 外层 retry loop — 避免原 try-catch 内部 return null 中断 retry
+async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, configSource: string, attempt: number) {
   try {
     const resp = await fetch(url, {
       method: 'POST',
@@ -338,12 +329,12 @@ async function sanitizeImagePromptLLM(rawPrompt) {
       body: JSON.stringify({
         model: config.model,
         temperature: 0.4,
-        max_tokens: 400,
+        max_tokens: 1500, // 2026-09-25 PM msg-20260924-006 (Q5 task_A): M3 thinking block 占 token, 400 不够 → 1500
         messages: [
           { role: 'system', content: SYSTEM_INSTRUCTION },
           { role: 'user', content: `原文 prompt:\n<<<${rawPrompt}>>>` },
         ],
-        // MiniMax-M3 等推理模型默认输出  thinking 块, 禁用以避免污染改写结果
+        // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染改写结果
         extra_body: { reasoning: { enabled: false } },
       }),
       signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
@@ -351,56 +342,109 @@ async function sanitizeImagePromptLLM(rawPrompt) {
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '')
       logTaskWarn('PromptSanitizer', 'llm-rewrite-http-error', {
+        attempt,
         status: resp.status,
         body: errText.slice(0, 240),
       })
-      return null
+      return { outcome: 'hard-fail' }
     }
     const data = await resp.json()
-    const content = data?.choices?.[0]?.message?.content
-    // 按 rawPrompt 语言分流: 中文 → 旧版 (中文 LLM 输出专用, 保留行为); 英文 → 新版 (英文 LLM 输出专用)
-    const extractedRaw = typeof content === 'string' ? content : ''
+    const llmContent = data?.choices?.[0]?.message?.content
+    const extractedRaw = typeof llmContent === 'string' ? llmContent : ''
     const rewritten = hasNonEnglishChars(rawPrompt)
       ? extractPromptFromLLM(extractedRaw)
       : extractPromptFromLLMEnglish(extractedRaw)
     if (!rewritten) {
       logTaskWarn('PromptSanitizer', 'llm-rewrite-empty', {
+        attempt,
+        configSource,
         provider: config.provider,
-        rawPreview: (typeof content === 'string' ? content : '').slice(0, 400),
+        rawPreview: extractedRaw.slice(0, 400),
       })
-      return null
+      return { outcome: 'retryable-empty' }
     }
     logTaskProgress('PromptSanitizer', 'llm-rewrite-success', {
+      attempt,
+      configSource,
       provider: config.provider,
       inLen: rawPrompt.length,
       outLen: rewritten.length,
       rewritten,
     })
-    // 第二层防御:LLM 改写后可能仍有 agnes 黑名单关键词残留,
-    // 用本地 sanitize 再精确擦除一次(不丢弃 LLM 的整体框架)
     const polished = sanitizeImagePromptLocal(rewritten)
     if (polished !== rewritten) {
       logTaskProgress('PromptSanitizer', 'llm-output-polished', {
+        attempt,
         provider: config.provider,
         before: rewritten.slice(0, 60),
         after: polished.slice(0, 60),
       })
     }
     if (containsResidualPolicyRisk(polished)) {
-      // 本地 sanitize 后仍有残留,降级到纯本地兜底
       logTaskWarn('PromptSanitizer', 'llm-output-still-risky', {
+        attempt,
         provider: config.provider,
         preview: polished.slice(0, 80),
       })
-      return null
+      return { outcome: 'retryable-empty' }
     }
-    return polished
+    return { outcome: 'success', polished }
   } catch (err) {
-    logTaskWarn('PromptSanitizer', 'llm-rewrite-failed', { error: err?.message || String(err) })
-    return null
+    logTaskWarn('PromptSanitizer', 'llm-rewrite-throw', {
+      attempt,
+      configSource,
+      error: err?.message || String(err),
+    })
+    return { outcome: 'hard-fail' }
   }
 }
 
+async function sanitizeImagePromptLLM(rawPrompt) {
+  // task_B: 优先 'sanitizer' 专用配置 (deepseek-chat 不输出 thinking), 没配才回退 'text'
+  let config = getActiveConfig('sanitizer')
+  let configSource = 'sanitizer'
+  if (!config) {
+    config = getActiveConfig('text')
+    configSource = 'text-fallback'
+  }
+  if (!config) {
+    logTaskWarn('PromptSanitizer', 'no-text-config', { reason: 'no active sanitizer/text AI config' })
+    return null
+  }
+  if (!config.apiKey || !config.model) {
+    logTaskWarn('PromptSanitizer', 'text-config-incomplete', { provider: config.provider })
+    return null
+  }
+
+  const url = getTextChatCompletionsUrl(config)
+  logTaskProgress('PromptSanitizer', 'llm-rewrite-start', {
+    configSource,
+    provider: config.provider,
+    model: config.model,
+    inputLen: rawPrompt.length,
+  })
+
+  // task_C: retry 1 次 (MAX_ATTEMPTS=2), 第 2 次仍失败 → 标 sanitizer-llm-failed-twice warn
+  const MAX_ATTEMPTS = 2
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const result = await attemptSanitizerLLM(url, config, rawPrompt, configSource, attempt)
+    if (result.outcome === 'success') return result.polished
+    if (result.outcome === 'hard-fail') return null
+    if (attempt < MAX_ATTEMPTS) {
+      logTaskProgress('PromptSanitizer', 'llm-rewrite-retry', { attempt, configSource })
+      continue
+    }
+    logTaskWarn('PromptSanitizer', 'sanitizer-llm-failed-twice', {
+      configSource,
+      provider: config.provider,
+      model: config.model,
+      inputLen: rawPrompt.length,
+      hint: 'sanitizer LLM 连续失败, 走本地 sanitize 兜底. 检查: (1) sanitizer config (2) API key (3) max_tokens (4) 中转站 thinking block',
+    })
+    return null
+  }
+  return null
+}
 /**
  * 图片生成 prompt 无害化改写主入口。
  *
