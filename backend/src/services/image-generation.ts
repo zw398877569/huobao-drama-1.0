@@ -5,7 +5,7 @@ import { now } from '../utils/response.js'
 import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
-import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl, truncateForLog } from '../utils/task-logger.js'
 import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
 
 // 默认图片生成安全后缀：把"角色/场景"提示词从"剧情重现"重新框架为"电影概念艺术"，
@@ -120,9 +120,9 @@ async function processImageGeneration(id: number, config: AIConfig) {
         let finalPrompt = genRecord.prompt
         if (finalPrompt && hasNonEnglishChars(finalPrompt)) {
           try {
-            logTaskProgress('ImageTask', 'translating-prompt', { id, original: finalPrompt.slice(0, 80) })
+            logTaskProgress('ImageTask', 'translating-prompt', { id, original: truncateForLog(finalPrompt) })
             finalPrompt = await translateImagePromptToEnglish(finalPrompt)
-            logTaskProgress('ImageTask', 'translated-prompt', { id, translated: finalPrompt.slice(0, 80) })
+            logTaskProgress('ImageTask', 'translated-prompt', { id, translated: truncateForLog(finalPrompt) })
           } catch (err: any) {
             logTaskWarn('ImageTask', 'translation-failed', { id, error: err.message })
             // translation failure is non-fatal, fall through with original prompt

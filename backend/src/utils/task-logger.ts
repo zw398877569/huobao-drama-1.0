@@ -108,6 +108,18 @@ function buildEntry(
   return entry
 }
 
+// 2026-09-25 PM msg-20260924-007 (Q6): 单条 log payload 截断保护
+// 用途: 翻译 prompt 等大字段不再 .slice(0, 80) 截断, 完整入日志 (方便观测翻译损失)
+// 保护: > 200KB 字符 → 截断到 200KB + 加 '...truncated at 200KB' 后缀
+export const MAX_LOG_PAYLOAD_SIZE = 200_000 // 200KB
+
+export function truncateForLog(text: unknown): string {
+  if (text == null) return ''
+  const s = typeof text === 'string' ? text : String(text)
+  if (s.length <= MAX_LOG_PAYLOAD_SIZE) return s
+  return s.slice(0, MAX_LOG_PAYLOAD_SIZE) + '...truncated at 200KB'
+}
+
 export function redactUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl)
