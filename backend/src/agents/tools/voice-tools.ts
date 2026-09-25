@@ -6,7 +6,8 @@ import { z } from 'zod'
 import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response'
-import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
+import { logTaskProgress, logTaskStart, logTaskSuccess } from '../../utils/task-logger'
+import { generateTTSPreview } from '../../services/tts-preview.js'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {
@@ -95,7 +96,38 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
     },
   })
 
-  return { getCharacters, listVoices, assignVoice }
+  // 2026-09-25 PM msg-20260924-005 (Q4 voice_assigner preview TTS):
+  // 让 agent 真听 base64 评估音色, 而非凭直觉决策
+  // 每次 preview 自动 lazy cleanup 24h+ 旧样本
+  const previewVoiceTts = createTool({
+    id: 'preview_voice_tts',
+    description: 'Generate a short TTS preview (3-5s) for a candidate voice. Returns base64 audio so you can HEAR the voice and evaluate age/gender/emotion match. Always preview >=2 candidates before assign_voice.',
+    inputSchema: z.object({
+      text: z.string().describe('台词片段, 建议 5-15 字, 反映角色说话风格'),
+      voice_id: z.string().describe('候选 voice id (from list_voices)'),
+      speed: z.number().optional().describe('语速 (默认 1.0)'),
+      emotion: z.string().optional().describe('情绪 (默认 neutral)'),
+    }),
+    execute: async ({ text, voice_id, speed, emotion }) => {
+      logTaskStart('VoiceTool', 'preview-tts', { voiceId: voice_id, textLen: text.length, emotion, speed })
+      const result = await generateTTSPreview(
+        text,
+        voice_id,
+        speed ?? 1.0,
+        emotion ?? 'neutral',
+      )
+      return {
+        voice_id,
+        audio_path: result.relativePath,
+        audio_base64: result.base64,
+        file_size: result.fileSize,
+        duration_ms: result.durationMs,
+        instruction: '听 base64 audio 评估音色是否匹配: (1) 性别 (2) 年龄段 (3) 情绪 (4) 整体气质. 满意再调 assign_voice.',
+      }
+    },
+  })
+
+  return { getCharacters, listVoices, previewVoiceTts, assignVoice }
 }
 
 function inferGender(name: string, desc: unknown) {

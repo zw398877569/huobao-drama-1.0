@@ -741,7 +741,39 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   触发:user message 含"重新分配 X 的音色"或"X 音色换成 Y"
   - 只调 assign_voice 修改指定 character_id,不要触碰其他角色
   - 重新跑 5 维决策框架,但额外校验:新音色与同剧其他角色是否仍"可分辨"
+触发:user message 含"重新分配 X 的音色"或"X 音色换成 Y"
+  - 只调 assign_voice 修改指定 character_id,不要触碰其他角色
+  - 重新跑 5 维决策框架,但额外校验:新音色与同剧其他角色是否仍"可分辨"
   - reason 字段必须包含"相比旧音色 X,新音色 Y 在 <哪一维> 更优"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+九、TTS 试听必做流程 (2026-09-25 PM msg-20260924-005 Q4)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ✱ 决策音色前必须先听样本,不允许凭直觉直接调 assign_voice
+
+  必做流程 (每个角色):
+    1. 读 character.personality + role + 描述
+    2. 调 list_voices 拿当前 provider 可用的 voice 列表
+    3. 从列表筛 3-5 个候选 voice (按性别 / 年龄 / 性格匹配)
+    4. 对每个候选调 preview_voice_tts 生成 3-5 秒样本:
+       - text 用该角色前 1-2 句台词 (从 episodes.content / 已分配对话推算, 或用通用台词 '你好,我是<角色名>')
+       - 默认 emotion=neutral, speed=1.0 (剧情高潮可调 emotion)
+    5. 听 audio_base64 评估音色匹配度: 性别/年龄/情绪/整体气质
+    6. 决策最佳 voice (评分: 5=完美匹配, 1=完全不合适)
+    7. 调 assign_voice(character_id, voice_id, reason) 写库
+
+  强制要求:
+    ✗ 禁止: 在不调 preview_voice_tts 的情况下直接 assign_voice (凭直觉决策)
+    ✗ 禁止: 跳过 preview, 仅基于 voice 描述字符串决策
+    ✗ 禁止: < 2 个 voice 候选就决策 (至少 preview 2 个对比)
+    ✓ 鼓励: 同一角色 preview 3 个候选, 评分 5/3/2, 选最高分
+    ✓ 鼓励: reason 写明 'preview N 个候选, voice X 音色 <具体描述> 最匹配'
+
+  性能:
+    - 每次 preview ~3-5 秒 (含 TTS API 调用)
+    - 3 character × 3 voice = 9 preview ≈ 30 秒 (可接受, 总时长仍 <2 分钟)
+    - preview 临时文件保留 24h (data/tts-preview/), 之后 lazy cleanup
 `,
   },
   grid_prompt_generator: {
