@@ -14,12 +14,67 @@
  *   - 所有错误都返回 4xx + 中文 message, 不污染其他端点
  */
 import { Hono } from 'hono'
-import { desc, eq, gte, lte, and } from 'drizzle-orm'
+import { desc, eq, gte, lte, and, notInArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { now } from '../utils/response.js'
 
 const app = new Hono()
+
+// === stale-running sweep ===
+// launchd 任务被 SIGKILL (OOM / launchd Throttle / 用户 kill) 时, wrapper 永远不会发出 END,
+// 对应记录会卡在 status='running' 永远 — 这里在 GET /runs 前做一个 lazy 回收。
+// 阈值按任务单独配 (每个任务最长运行时间不同), 没列出的走默认。
+// 只在 GET /runs 触发 (不是单条详情), 用户打开 dashboard 顺手清, 不需要额外 cron。
+const STALE_THRESHOLD_MS: Record<string, number> = {
+  dailylearn: 2 * 60 * 60 * 1000,        // 2h — Phase 2 LLM 最长 15-20 分钟, 2h 是宽松上限
+  minimaxlearn: 2 * 60 * 60 * 1000,
+  videounderstand: 30 * 60 * 1000,        // 30min — 单视频 5-10 分钟
+  'daily-hot-list': 30 * 60 * 1000,      // 30min — 8 数据源约 10 分钟
+}
+const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000 // 未知任务走 2h 默认
+
+function sweepStaleRuns() {
+  const ts = Date.now()
+  const updated = now() // updatedAt 是 text (ISO), endedAt 是 integer (ms)
+  let swept = 0
+
+  // 按任务单独阈值扫一遍
+  for (const [name, threshold] of Object.entries(STALE_THRESHOLD_MS)) {
+    const cutoff = ts - threshold
+    const result = db.update(schema.cronRuns).set({
+      status: 'failed',
+      endedAt: ts,
+      exitCode: -1,
+      output: `[stale-orphan] no END reported after ${Math.round(threshold / 60000)}min, assumed killed (OOM/launchd/SIGKILL)`,
+      updatedAt: updated,
+    }).where(and(
+      eq(schema.cronRuns.name, name),
+      eq(schema.cronRuns.status, 'running'),
+      lte(schema.cronRuns.startedAt, cutoff),
+    )).run()
+    swept += (result as any)?.changes ?? 0
+  }
+
+  // 兜底: 未知任务名 (不在 PER_TASK_MS 的), 超过默认阈值也清
+  const knownNames = Object.keys(STALE_THRESHOLD_MS)
+  const cutoff = ts - DEFAULT_STALE_MS
+  const result = db.update(schema.cronRuns).set({
+    status: 'failed',
+    endedAt: ts,
+    exitCode: -1,
+    output: `[stale-orphan] no END reported after ${Math.round(DEFAULT_STALE_MS / 60000)}min (default), assumed killed`,
+    updatedAt: updated,
+  }).where(and(
+    eq(schema.cronRuns.status, 'running'),
+    lte(schema.cronRuns.startedAt, cutoff),
+    notInArray(schema.cronRuns.name, knownNames),
+  )).run()
+  swept += (result as any)?.changes ?? 0
+
+  if (swept > 0) console.log(`[cron] sweepStaleRuns: cleaned ${swept} stale-orphan running record(s)`)
+  return swept
+}
 
 /** wrapper 上报 START — 幂等: 同一 runId 已存在则返回 200 不报错 */
 app.post('/runs', async (c) => {
@@ -81,6 +136,9 @@ app.patch('/runs/:runId', async (c) => {
 
 /** 列表查询 — 支持 date / status / name 过滤 */
 app.get('/runs', async (c) => {
+  // lazy stale-running sweep — 把超期未结束的 running 行标记成 stale-orphan
+  sweepStaleRuns()
+
   const date = c.req.query('date')   // YYYY-MM-DD (Asia/Shanghai)
   const status = c.req.query('status')
   const name = c.req.query('name')
