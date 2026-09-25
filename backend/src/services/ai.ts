@@ -46,6 +46,49 @@ export function getTextChatCompletionsUrl(config: AIConfig): string {
   return joinProviderUrl(config.baseUrl, textProviderPath(config.provider), '/chat/completions')
 }
 
+// 2026-09-25 PM msg-20260924-002 决策 B: text config baseUrl 监控
+// 当 text 服务 active config 的 baseUrl host 不在已知 provider 列表时, 记 WARN (config_drift)
+// 防 voice_assigner 端点串入 deepseek 这类 silent breaking 再次发生 — 及时发现让 agentType 跑错端点
+//
+// 已知 text provider host (HUOBAO_PRESET_SERVICES + 用户当前 DB 的 MiniMax):
+const TEXT_BASEURL_ALLOWED_HOSTS = [
+  'minimaxi.com',         // MiniMax openai 兼容端点 (用户当前 DB configId=1)
+  'minimax.cn',           // MiniMax 官方端点 (configId=9/10, isActive=1)
+  'chatfire.site',        // chatfire 代理 (HUOBAO_PRESET 默认, 用户当前 DB 未用)
+  'openrouter.ai',        // openrouter 备用
+]
+
+function isTextBaseUrlAllowed(baseUrl: string): boolean {
+  const url = (baseUrl || '').toLowerCase()
+  return TEXT_BASEURL_ALLOWED_HOSTS.some(host => url.includes(host))
+}
+
+function parseModelsJson(modelField: unknown): string {
+  if (!modelField) return ''
+  try {
+    const arr = JSON.parse(modelField as string)
+    return Array.isArray(arr) ? (arr[0] || '') : (modelField as string)
+  } catch {
+    return modelField as string
+  }
+}
+
+function monitorTextConfigDrift(activeRow: any): void {
+  // 仅 text 服务监控 (audio/image/video provider host 各自不同, 误报风险高, scope 控制)
+  if (!isTextBaseUrlAllowed(activeRow.baseUrl)) {
+    logTaskWarn('AIConfig', 'text-config-baseurlunexpected', {
+      configId: activeRow.id,
+      serviceType: 'text',
+      provider: activeRow.provider,
+      baseUrl: activeRow.baseUrl,
+      model: parseModelsJson(activeRow.model),
+      allowed_hosts: TEXT_BASEURL_ALLOWED_HOSTS,
+      severity: 'config_drift',
+      hint: 'active text config baseUrl 不在已知 provider host 列表, 可能是端点串入/配置漂移, 排查 DB aiServiceConfigs 表 + 任何 agentType getActiveConfig(\'text\') 链路上的 setBaseUrl override',
+    })
+  }
+}
+
 export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
@@ -67,6 +110,8 @@ export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
     model: models[0] || '',
     priority: active.priority,
   })
+  // 2026-09-25 PM msg-20260924-002 决策 B: 监控 — text 端点漂移检测
+  if (serviceType === 'text') monitorTextConfigDrift(active)
   return {
     provider: active.provider || '',
     baseUrl: active.baseUrl,
