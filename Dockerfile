@@ -57,7 +57,7 @@ ARG APT_MIRROR
 RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s#https://deb.debian.org/debian#$APT_MIRROR/debian https://mirrors.aliyun.com/debian https://mirrors.cloud.tencent.com/debian#g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
-    apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg sqlite3 \
     && rm -rf /var/lib/apt/lists/* \
     && npm i -g tsx
 
