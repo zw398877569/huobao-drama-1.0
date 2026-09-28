@@ -59,6 +59,55 @@ const nameOptions = computed(() => {
   return Array.from(s).sort()
 })
 
+// 按任务聚合 (2026-09-28 增量) — 一眼看出哪个任务健康, 不用全表扫
+interface ByTaskRow {
+  name: string
+  success: number
+  failed: number
+  running: number
+  total: number
+  lastRunAt: number | null
+  lastStatus: string
+  successRate: number
+}
+const byTaskStats = computed<ByTaskRow[]>(() => {
+  const m = new Map<string, ByTaskRow>()
+  for (const r of runs.value) {
+    const n = r.name
+    if (!n) continue
+    let row = m.get(n)
+    if (!row) {
+      row = { name: n, success: 0, failed: 0, running: 0, total: 0, lastRunAt: null, lastStatus: '', successRate: 0 }
+      m.set(n, row)
+    }
+    row.total += 1
+    if (r.status === 'success') row.success += 1
+    else if (r.status === 'failed') row.failed += 1
+    else if (r.status === 'running') row.running += 1
+    if (row.lastRunAt == null || (r.startedAt && r.startedAt > row.lastRunAt)) {
+      row.lastRunAt = r.startedAt ?? null
+      row.lastStatus = r.status ?? ''
+    }
+  }
+  // 计算成功率 (只算已完成的, running 不计入分母)
+  for (const row of m.values()) {
+    const completed = row.success + row.failed
+    row.successRate = completed > 0 ? Math.round(row.success * 100 / completed) : 0
+  }
+  // 按"最近跑"倒序排
+  return Array.from(m.values()).sort((a, b) => {
+    const ta = a.lastRunAt ?? 0
+    const tb = b.lastRunAt ?? 0
+    return tb - ta
+  })
+})
+
+// 点击任务卡片 → 触发 name filter 跳到表格
+function pickTask(name: string) {
+  nameFilter.value = name
+  load()
+}
+
 async function load() {
   loading.value = true
   try {
@@ -170,6 +219,41 @@ onMounted(load)
       <div class="stat-card">
         <div class="stat-num">{{ stats.total > 0 ? Math.round(stats.success * 100 / stats.total) : 0 }}%</div>
         <div class="stat-label">成功率</div>
+      </div>
+    </div>
+
+    <!-- 按任务聚合 (2026-09-28 增量) — 一眼看出哪个任务健康 -->
+    <div v-if="byTaskStats.length" class="tasks-by-task">
+      <div class="tasks-by-task-title">
+        <span>按任务聚合</span>
+        <span class="dim" style="font-size:11px; font-weight:normal">点击卡片过滤下表</span>
+      </div>
+      <div class="tasks-by-task-grid">
+        <div
+          v-for="t in byTaskStats"
+          :key="t.name"
+          class="task-card"
+          :class="[
+            { 'task-card-failed': t.failed > 0 && t.running === 0 },
+            { 'task-card-running': t.running > 0 },
+            { 'task-card-selected': nameFilter === t.name }
+          ]"
+          @click="pickTask(t.name)"
+        >
+          <div class="task-card-head">
+            <span class="task-card-name">{{ t.name }}</span>
+            <span :class="['tag', statusBadge(t.lastStatus)]">{{ statusTag(t.lastStatus).label }}</span>
+          </div>
+          <div class="task-card-stats">
+            <span class="task-card-stat task-card-stat-success">✓ {{ t.success }}</span>
+            <span class="task-card-stat task-card-stat-failed">✗ {{ t.failed }}</span>
+            <span v-if="t.running" class="task-card-stat task-card-stat-running">⏳ {{ t.running }}</span>
+            <span class="task-card-stat task-card-stat-rate">{{ t.successRate }}%</span>
+          </div>
+          <div class="task-card-foot dim mono">
+            最近: {{ fmtTime(t.lastRunAt) }}
+          </div>
+        </div>
       </div>
     </div>
 
@@ -409,6 +493,76 @@ onMounted(load)
 
 @media (max-width: 900px) {
   .tasks-stats { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* 按任务聚合区块 (2026-09-28 增量) */
+.tasks-by-task {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tasks-by-task-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.tasks-by-task-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.task-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-card:hover { background: var(--bg-hover); border-color: var(--accent); }
+.task-card-failed { border-left: 3px solid #dc3545; }
+.task-card-running { border-left: 3px solid var(--accent); }
+.task-card-selected { border-color: var(--accent); background: var(--accent-bg); }
+.task-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.task-card-name {
+  font-family: var(--font-mono);
+  color: var(--text-0);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+.task-card-stat { color: var(--text-2); }
+.task-card-stat-success { color: #28a745; }
+.task-card-stat-failed { color: #dc3545; }
+.task-card-stat-running { color: var(--accent-dark); }
+.task-card-stat-rate { color: var(--text-0); font-weight: 600; margin-left: auto; }
+.task-card-foot {
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
 }
 @media (max-width: 600px) {
   .tasks-stats { grid-template-columns: repeat(2, 1fr); }
