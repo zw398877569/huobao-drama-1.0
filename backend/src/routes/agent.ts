@@ -128,6 +128,13 @@ app.post('/:type/chat', async (c) => {
     return badRequest(c, 'Agent not found')
   }
 
+  // 2026-09-28 QA msg-20260925-003 ISSUE-011 (P1): message 缺失时 agent.generate 抛 'role user must have content property'
+  // 提前校验, 返 400 + 清晰错误, 不让 AI SDK 模糊错冒上来
+  if (!message || (typeof message === 'string' && !message.trim())) {
+    logTaskError('Agent', agentType, { reason: 'missing message', dramaId: drama_id, episodeId: episode_id })
+    return badRequest(c, 'message is required (string with non-empty content)')
+  }
+
   const startTime = performance.now()
 
   try {
