@@ -229,22 +229,40 @@ app.post('/storyboard_breaker/planning', async (c) => {
       //   194s 没有任何日志事件 — agent LLM 在跑 maxSteps=15 多步推理, 但代码没打点.
       //   加 onStepFinish callback 让每步推理可见 (traceId 自动从 ALS 拿)
       const llmStepStart = performance.now()
+      // 2026-09-28 QA msg-20260925-006 ISSUE-013 (P3): AI SDK StepResult 没有 stepNumber 字段,
+      //   用闭包 stepCounter 推导 (initial step = 0, 每次回调 +1)
+      let stepCounter = 0
       const result = await agent.generate(
         [{ role: 'user', content: '请规划所有镜头的 shot_plan，然后调 generate_shot_prompts 保存。' }],
         {
           maxSteps: 15,
           onStepFinish: (event: any) => {
             const stepElapsedMs = Math.round(performance.now() - llmStepStart)
+            const stepNumber = stepCounter++
             const toolCalls = event?.toolCalls ?? []
+            // toolName 兼容多种 shape: AI SDK ToolCall.toolName / OpenAI function.name / MCP 风格
+            const toolNames = toolCalls.map((tc: any) => tc?.toolName || tc?.function?.name || tc?.input?.toolName).filter(Boolean)
+            // usage 兼容 v4/v5 AI SDK (camelCase), 部分 provider 也用 prompt_tokens (snake)
+            const usage = event?.usage ?? {}
+            const promptTokens = usage.promptTokens ?? usage.inputTokens ?? usage.prompt_tokens
+            const completionTokens = usage.completionTokens ?? usage.outputTokens ?? usage.completion_tokens
             try {
+              // 第一次回调 dump 实际 event keys (一次性, 避免污染流日志, 后续 debug 用)
+              if (stepNumber === 0 && process.env.NODE_ENV !== 'production') {
+                const keys = Object.keys(event ?? {})
+                const tcShape = toolCalls[0] ? Object.keys(toolCalls[0]) : []
+                console.log('[planner-step-debug] event keys:', JSON.stringify(keys), 'first toolCall keys:', JSON.stringify(tcShape))
+              }
               logTaskProgress('Agent', 'planner-step-finished', {
-                stepNumber: event?.stepNumber,
+                stepNumber,
+                stepType: event?.stepType,
                 finishReason: event?.finishReason,
                 textLen: event?.text?.length ?? 0,
                 toolCallCount: toolCalls.length,
-                toolNames: toolCalls.map((tc: any) => tc?.toolName || tc?.name).filter(Boolean),
-                promptTokens: event?.usage?.promptTokens,
-                completionTokens: event?.usage?.completionTokens,
+                toolNames,
+                promptTokens,
+                completionTokens,
+                totalTokens: usage.totalTokens,
                 stepElapsedMs,
               })
             } catch {
@@ -253,7 +271,7 @@ app.post('/storyboard_breaker/planning', async (c) => {
             // SSE progress 推前端 (UI 显示步骤进度, 灰度)
             stream.writeSSE({
               event: 'progress',
-              data: JSON.stringify({ tip: `LLM step ${event?.stepNumber} finished (${stepElapsedMs}ms)`, stepNumber: event?.stepNumber }),
+              data: JSON.stringify({ tip: `LLM step ${stepNumber} finished (${stepElapsedMs}ms)`, stepNumber }),
             }).catch(() => { /* SSE 已关闭, 静默 */ })
           },
         },
