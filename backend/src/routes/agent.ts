@@ -247,11 +247,15 @@ app.post('/storyboard_breaker/planning', async (c) => {
             const promptTokens = usage.promptTokens ?? usage.inputTokens ?? usage.prompt_tokens
             const completionTokens = usage.completionTokens ?? usage.outputTokens ?? usage.completion_tokens
             try {
-              // 第一次回调 dump 实际 event keys (一次性, 避免污染流日志, 后续 debug 用)
-              if (stepNumber === 0 && process.env.NODE_ENV !== 'production') {
-                const keys = Object.keys(event ?? {})
-                const tcShape = toolCalls[0] ? Object.keys(toolCalls[0]) : []
-                console.log('[planner-step-debug] event keys:', JSON.stringify(keys), 'first toolCall keys:', JSON.stringify(tcShape))
+              // 2026-09-28 QA msg-20260925-007 ISSUE-014 (P3): 永久 logTaskProgress dump (不再 dev-only console.log)
+              //   原因: console.log NODE_ENV gate 让 prod 看不到, 没法二次排查 toolCall 字段名
+              //   用 logTaskProgress('Agent', 'planner-step-debug') 入流日志, 任何环境都能 grep
+              if (stepNumber === 0) {
+                logTaskProgress('Agent', 'planner-step-debug', {
+                  eventKeys: Object.keys(event ?? {}),
+                  firstToolCallKeys: toolCalls[0] ? Object.keys(toolCalls[0]) : [],
+                  firstToolCallSample: toolCalls[0] ? JSON.stringify(toolCalls[0]).slice(0, 200) : null,
+                })
               }
               logTaskProgress('Agent', 'planner-step-finished', {
                 stepNumber,
@@ -298,11 +302,30 @@ app.post('/storyboard_breaker/planning', async (c) => {
         }),
       })
     } catch (err: any) {
-      logTaskError('Agent', 'storyboard_breaker-planning', { error: err.message })
-      await stream.writeSSE({
-        event: 'error',
-        data: JSON.stringify({ message: err.message }),
-      })
+      // 2026-09-28 QA msg-20260925-007 ISSUE-015 (P2): M3 安全过滤触发 (input new_sensitive (len) 风格)
+      //   不是 dev bug, 是 M3 对输入触发 content filter. 给清晰 hint + SSE event, 避免误以为是 dev bug
+      const errMsg = err?.message || String(err)
+      const isSafetyFilter = /new_sensitive|input.*sensitive|content_policy|safety_filter|policy_violation|敏感/i.test(errMsg)
+      if (isSafetyFilter) {
+        logTaskWarn('Agent', 'm3-safety-filter-rejection', {
+          error: errMsg,
+          hint: 'M3 对当前输入触发安全过滤. 检查: 1) 上游脚本是否含敏感词 (鲜血/武器/死亡/燃烧) 2) agent 系统 prompt 是否有敏感示例 3) 考虑改用 deepseek-chat (sanitizer 专用配置)'
+        })
+        await stream.writeSSE({
+          event: 'error',
+          data: JSON.stringify({
+            type: 'm3-safety-filter',
+            message: errMsg,
+            hint: 'M3 安全过滤. 检查输入或换模型 (见 flow log warn)'
+          }),
+        })
+      } else {
+        logTaskError('Agent', 'storyboard_breaker-planning', { error: errMsg })
+        await stream.writeSSE({
+          event: 'error',
+          data: JSON.stringify({ message: errMsg }),
+        })
+      }
     } finally {
       await stream.close()
     }
