@@ -390,12 +390,21 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
     }
     return { outcome: 'success', polished }
   } catch (err) {
+    // 2026-09-28 QA msg-20260925-004 ISSUE-012 (P2): timeout 是 transient (网络/M3 服务端慢) 应 retry,
+    //   只有真硬错 (auth / 4xx-5xx 持续失败) 才 hard-fail. 修前所有 throw 都吞成 hard-fail,
+    //   inputLen > 1000 prompt 第一次 timeout 后立刻 fallback, retry 没触发.
+    const e: any = err  // TS catch 默认 unknown, any 简化属性访问
+    const isTimeout = e?.name === 'AbortError'
+      || e?.message?.includes('aborted due to timeout')
+      || e?.code === 'ABORT_ERR'
     logTaskWarn('PromptSanitizer', 'llm-rewrite-throw', {
       attempt,
       configSource,
-      error: err?.message || String(err),
+      error: e?.message || String(err),
+      errName: e?.name,
+      isTimeout,
     })
-    return { outcome: 'hard-fail' }
+    return { outcome: isTimeout ? 'retryable-empty' : 'hard-fail' }
   }
 }
 
