@@ -71,6 +71,9 @@ COPY backend/package.json backend/package-lock.json ./backend/
 COPY backend/src ./backend/src
 COPY backend/tsconfig.json ./backend/
 
+# Migrations (manual SQL + .ts runner scripts) — production image needs these so users can run `docker exec ... sh -c "sqlite3 /app/data/huobao_drama.db < /app/backend/migrations/manual-*.sql"` directly without docker cp
+COPY backend/migrations ./backend/migrations
+
 # Frontend static output
 COPY --from=frontend-build /app/frontend/.output/public ./frontend/dist
 
