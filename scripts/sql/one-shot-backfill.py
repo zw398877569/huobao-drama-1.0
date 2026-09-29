@@ -1,15 +1,27 @@
 """
-one-shot-backfill.py — Windows 一键 backfill (v2, 改进诊断)
+one-shot-backfill.py — Windows 一键 backfill cron_runs.outputs
 
-用法 (PowerShell):
+正确路径 (2026-09-29):
+  - Windows 项目根: D:\aicg1.0\huobao-drama-1.0\
+  - DB 文件:       D:\aicg1.0\data\huobao_drama.db
+  - 本脚本路径:     D:\aicg1.0\huobao-drama-1.0\scripts\sql\one-shot-backfill.py
+
+用法 (PowerShell, 必须先停 backend 避免 SQLite 锁冲突):
+  docker stop huobao-drama-1.0
   cd D:\aicg1.0\data
-  python -u D:\你的路径\scripts\sql\one-shot-backfill.py --db huobao_drama.db
+  python -u D:\aicg1.0\huobao-drama-1.0\scripts\sql\one-shot-backfill.py --db huobao_drama.db
+  docker start huobao-drama-1.0
 
-改进点 (vs v1):
-- 加 sys.stdout.reconfigure(encoding='utf-8') 处理 Windows 中文编码
+路径记忆:
+  - Mac 看的是 SMB 挂载:  /Volumes/aicg1.0/data/huobao_drama.db
+  - 后端 Docker 看的是:   /app/data/huobao_drama.db (volume 映射 D:/aicg1.0/data)
+  - Windows 看的是:        D:\aicg1.0\data\huobao_drama.db
+  - 三者是同一文件 (Windows 通过 Docker volume 把 D:\aicg1.0\data 挂到容器的 /app/data)
+
+v2 改进:
+- 加 sys.stdout.reconfigure(encoding="utf-8") 处理 Windows 中文编码
 - 加 flush=True 让 PowerShell 不缓冲
 - 加 try/except + traceback, 出错也能看到
-- 加进度行 flush
 """
 import argparse
 import json
@@ -17,18 +29,16 @@ import re
 import sys
 import traceback
 
-# 强制 UTF-8 输出 (Windows PowerShell 默认 GBK 会乱码或静默失败)
 try:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
-    pass  # 老 Python 没这个方法, 不管
+    pass
 
 OUTPUTS_RE = re.compile(r"^\s*✓\s+(.+?):\s+(\S+)\s*$")
 
 
 def log(msg: str) -> None:
-    """Print + flush, 避免 PowerShell 缓冲"""
     print(msg, flush=True)
 
 
@@ -36,12 +46,12 @@ def main() -> int:
     try:
         ap = argparse.ArgumentParser()
         ap.add_argument("--db", default=r"D:\aicg1.0\data\huobao_drama.db",
-                        help="Windows 本地 DB 路径")
+                        help="Windows 本地 DB 路径 (默认 D:\\aicg1.0\\data\\huobao_drama.db)")
         args = ap.parse_args()
 
         log(f"[1/3] 连接 {args.db}")
 
-        import sqlite3  # 延迟 import, 错时能看到清晰 traceback
+        import sqlite3
         conn = sqlite3.connect(args.db, timeout=30)
         cols = [r[1] for r in conn.execute("PRAGMA table_info(cron_runs)").fetchall()]
         if "outputs" not in cols:
