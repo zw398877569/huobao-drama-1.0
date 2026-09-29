@@ -21,6 +21,17 @@ import { now } from '../utils/response.js'
 
 const app = new Hono()
 
+/** outputs 字段是 JSON 字符串 (SQLite TEXT 只能存字符串), GET 返回时 parse 成真数组, 避免前端按字符迭代 */
+function parseOutputs(s: string | null | undefined): string[] {
+  if (!s) return []
+  try {
+    const v = JSON.parse(s)
+    return Array.isArray(v) ? v : []
+  } catch {
+    return []
+  }
+}
+
 // === stale-running sweep ===
 // launchd 任务被 SIGKILL (OOM / launchd Throttle / 用户 kill) 时, wrapper 永远不会发出 END,
 // 对应记录会卡在 status='running' 永远 — 这里在 GET /runs 前做一个 lazy 回收。
@@ -166,10 +177,11 @@ app.get('/runs', async (c) => {
   if (conds.length) q = q.where(and(...conds))
   const rows = q.orderBy(desc(schema.cronRuns.startedAt)).limit(limit).all()
 
-  // 聚合 stats
+  // 聚合 stats + parse outputs
   const stats = { total: rows.length, success: 0, failed: 0, running: 0, avgDurationMs: 0 }
   let totalDur = 0, durCount = 0
-  for (const r of rows) {
+  const runs = rows.map(r => ({ ...r, outputs: parseOutputs(r.outputs) }))
+  for (const r of runs) {
     if (r.status === 'success') stats.success++
     else if (r.status === 'failed') stats.failed++
     else if (r.status === 'running') stats.running++
@@ -177,7 +189,7 @@ app.get('/runs', async (c) => {
   }
   stats.avgDurationMs = durCount > 0 ? Math.round(totalDur / durCount) : 0
 
-  return success(c, { runs: rows, stats })
+  return success(c, { runs, stats })
 })
 
 /** 单条详情 */
@@ -185,7 +197,8 @@ app.get('/runs/:runId', async (c) => {
   const runId = c.req.param('runId')
   const [row] = db.select().from(schema.cronRuns)
     .where(eq(schema.cronRuns.runId, runId)).all()
-  return success(c, row || null)
+  if (!row) return success(c, null)
+  return success(c, { ...row, outputs: parseOutputs(row.outputs) })
 })
 
 export default app
