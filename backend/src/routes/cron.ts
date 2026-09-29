@@ -132,8 +132,14 @@ app.patch('/runs/:runId', async (c) => {
   // 输出截到 2000 字符, 防止巨大日志撑爆 DB
   const trimmedOutput = typeof output === 'string' ? output.slice(-2000) : ''
   // 2026-09-28 增量: outputs 数组 (wrapper 从 log "✓ label: /abs/path" 提取)
-  // 简单序列化, 不做 schema 校验 (后端信任 wrapper)
-  const trimmedOutputs = typeof outputs === 'string' ? outputs.slice(0, 10000) : null
+  // wrapper 发的是 JSON array (像 ["path1","path2"]), 不是 string. 后端要 stringify 才能存 TEXT 列
+  // 2026-09-29 修: 原来只判 string 漏了 array, 导致 wrapper 发数组时被存 null, dashboard 看不到产出的 paths
+  let trimmedOutputs: string | null = null
+  if (Array.isArray(outputs)) {
+    trimmedOutputs = JSON.stringify(outputs).slice(0, 10000)
+  } else if (typeof outputs === 'string') {
+    trimmedOutputs = outputs.slice(0, 10000)
+  }
 
   db.update(schema.cronRuns)
     .set({
