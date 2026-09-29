@@ -9,6 +9,7 @@ import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
 import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
+import { getAgeAnchorTokens } from '../constants/age-anchor.js'
 import { selectForCodeSide, formatCodeSideTokens, logFewshotSelection } from '../services/face-archive-service.js'
 
 const app = new Hono()
@@ -114,6 +115,8 @@ app.post('/:id/generate-image', async (c) => {
   const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
   const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
   if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
+  // Sprint 5 Task G: AGE ANCHOR 独立模块 (跟 face-archive 解耦, 三段并列硬拼)
+  const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.appearance || char.description)
   const rawPrompt = [
     char.name,
     charDetail,
@@ -121,6 +124,7 @@ app.post('/:id/generate-image', async (c) => {
     stylePreset.positiveCharacterTokens,
     aestheticTokens,
     faceArchiveTokens,
+    ageAnchorTokens,
     'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
     'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
@@ -178,6 +182,8 @@ app.post('/batch-generate-images', async (c) => {
     const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
     const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
     if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
+    // Sprint 5 Task G: AGE ANCHOR 独立模块 (batch 路径)
+    const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.appearance || char.description)
     const rawPrompt = [
       char.name,
       charDetail,
@@ -185,6 +191,7 @@ app.post('/batch-generate-images', async (c) => {
       stylePreset.positiveCharacterTokens,
       aestheticTokens,
       faceArchiveTokens,
+      ageAnchorTokens,
       'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
       'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
