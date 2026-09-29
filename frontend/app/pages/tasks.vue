@@ -108,6 +108,21 @@ function pickTask(name: string) {
   load()
 }
 
+// 2026-09-28 增量: 产出物路径渲染 + 点击复制
+function shortPath(p: string): string {
+  // 截取最后 2 段路径 (e.g., "face-archive/nRqy...md") 减少列宽
+  const parts = p.replace(/^\/Users\/mac\/Obsidian\//, '').split('/')
+  return parts.slice(-2).join('/')
+}
+async function copyPath(p: string) {
+  try {
+    await navigator.clipboard.writeText(p)
+  } catch (e) {
+    // clipboard 不可用时降级用 prompt (Safari 限制)
+    console.warn('clipboard.writeText failed', e)
+  }
+}
+
 async function load() {
   loading.value = true
   try {
@@ -267,15 +282,16 @@ onMounted(load)
             <th style="width: 100px">状态</th>
             <th style="width: 100px">退出码</th>
             <th style="width: 90px">耗时</th>
+            <th style="width: 240px">产出</th>
             <th style="width: 100px">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading && !runs.length">
-            <td colspan="6" class="tasks-empty">加载中…</td>
+            <td colspan="7" class="tasks-empty">加载中…</td>
           </tr>
           <tr v-else-if="!runs.length">
-            <td colspan="6" class="tasks-empty">
+            <td colspan="7" class="tasks-empty">
               <div>{{ date }} 没有记录</div>
               <div class="dim" style="font-size:11px; margin-top:4px">
                 数据从代码改动那一刻开始记录 — 之前的日志捞不回来
@@ -290,6 +306,12 @@ onMounted(load)
             </td>
             <td class="mono">{{ r.exitCode ?? '—' }}</td>
             <td class="mono">{{ fmtDur(r.durationMs) }}</td>
+            <td class="tasks-outputs-cell">
+              <span v-if="!r.outputs || r.outputs.length === 0" class="dim">—</span>
+              <span v-for="(p, idx) in r.outputs" v-else :key="idx" class="output-chip" :title="p" @click.stop="copyPath(p)">
+                {{ shortPath(p) }}
+              </span>
+            </td>
             <td>
               <button class="btn btn-sm" @click.stop="openDetail(r)">查看</button>
             </td>
@@ -564,6 +586,30 @@ onMounted(load)
   border-top: 1px solid var(--border);
   padding-top: 6px;
 }
+
+/* 产出列 (2026-09-28 增量) */
+.tasks-outputs-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.output-chip {
+  background: var(--bg-2);
+  color: var(--text-1);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.1s;
+}
+.output-chip:hover { border-color: var(--accent); background: var(--accent-bg); color: var(--accent-text); }
 @media (max-width: 600px) {
   .tasks-stats { grid-template-columns: repeat(2, 1fr); }
   .tasks-table { font-size: 11.5px; }
