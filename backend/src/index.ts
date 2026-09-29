@@ -94,6 +94,7 @@ import webhooks from './routes/webhooks.js'
 import cron from './routes/cron.js'
 import aiVoices from './routes/aiVoices.js'
 import aiVoicesAsync from './routes/aiVoicesAsync.js'
+import faceArchive from './routes/faceArchive.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { ensureLogDir } from './utils/file-log.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -135,6 +136,7 @@ api.route('/skills', skills)
 api.route('/style-presets', stylePresets)
 api.route('/ai-voices', aiVoices)
 api.route('/ai-voices-async', aiVoicesAsync)
+api.route('/face-entries', faceArchive)
 
 app.route('/api/v1/_debug', agnesDebug)
 app.route('/api/v1', api)
