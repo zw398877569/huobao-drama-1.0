@@ -106,7 +106,7 @@ app.patch('/runs/:runId', async (c) => {
   const runId = c.req.param('runId')
   let body: any
   try { body = await c.req.json() } catch { return badRequest(c, 'invalid json body') }
-  const { status, endedAt, exitCode, output } = body
+  const { status, endedAt, exitCode, output, outputs } = body
   if (status !== 'success' && status !== 'failed') {
     return badRequest(c, 'status must be "success" or "failed"')
   }
@@ -120,12 +120,16 @@ app.patch('/runs/:runId', async (c) => {
   const durationMs = Math.max(0, endedAt - existing.startedAt)
   // 输出截到 2000 字符, 防止巨大日志撑爆 DB
   const trimmedOutput = typeof output === 'string' ? output.slice(-2000) : ''
+  // 2026-09-28 增量: outputs 数组 (wrapper 从 log "✓ label: /abs/path" 提取)
+  // 简单序列化, 不做 schema 校验 (后端信任 wrapper)
+  const trimmedOutputs = typeof outputs === 'string' ? outputs.slice(0, 10000) : null
 
   db.update(schema.cronRuns)
     .set({
       status, endedAt,
       exitCode: typeof exitCode === 'number' ? exitCode : null,
       output: trimmedOutput,
+      outputs: trimmedOutputs,
       durationMs,
       updatedAt: now(),
     })

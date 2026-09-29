@@ -396,4 +396,7 @@ export const cronRuns = sqliteTable('cron_runs', {
   durationMs: integer('duration_ms'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
+  // 2026-09-28 增量: 产出物路径数组 (JSON 序列化), wrapper 从 log "✓ label: /abs/path" 提取
+  // 跨平台可读: dashboard / 后端统一消费这一列, 替代 grep log 的工作流
+  outputs: text('outputs'),
 })

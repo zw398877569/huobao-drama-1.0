@@ -432,6 +432,10 @@ ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 // PM msg-20260924-002 — 解决角色立绘 plot 态污染 (dramaId=7 characterId=21 案例)
 ensureColumn('characters', 'appearance_permanent', 'TEXT')
 ensureColumn('characters', 'appearance_plot_state', 'TEXT')
+
+// 2026-09-28 增量: cron_runs 加 outputs 字段 (wrapper 从脚本 log 提 ✓ 路径)
+// 后端启动时 ALTER TABLE 自动加, 已有数据 outputs=NULL
+ensureColumn('cron_runs', 'outputs', 'TEXT')
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db
