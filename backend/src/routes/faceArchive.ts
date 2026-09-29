@@ -97,7 +97,8 @@ app.post('/sync', async (c) => {
     if (!e || typeof e.factor !== 'string') return badRequest(c, `entries[${i}].factor is required (string)`)
     if (!e.externalId || typeof e.externalId !== 'string') return badRequest(c, `entries[${i}].externalId is required (string)`)
     if (!e.name || typeof e.name !== 'string') return badRequest(c, `entries[${i}].name is required (string)`)
-    if (!e.data || typeof e.data !== 'object') return badRequest(c, `entries[${i}].data is required (object)`)
+    if (!e || typeof e !== 'object') return badRequest(c, `entries[${i}] must be an object`)
+    if (e.data !== undefined && (typeof e.data !== 'object' || e.data === null)) return badRequest(c, `entries[${i}].data must be object if provided`)
   }
 
   const ts = now()
@@ -119,8 +120,8 @@ app.post('/sync', async (c) => {
         externalId: e.externalId,
         name: e.name,
         nameEn: e.nameEn ?? null,
-        data: JSON.stringify(e.data),
-        promptTokens: e.promptTokens ?? (e.data && typeof e.data === 'object' && e.data.prompt_tokens) ? e.data.prompt_tokens : null,
+        data: JSON.stringify(e.data ?? e),
+        promptTokens: e.promptTokens ?? ((e.data ?? e) && typeof (e.data ?? e) === 'object' && (e.data ?? e).prompt_tokens) ? (e.data ?? e).prompt_tokens : null,
         gender: e.gender ?? null,
         source: e.source ?? 'face-archive',
         archivedAt: newArchivedAt,
