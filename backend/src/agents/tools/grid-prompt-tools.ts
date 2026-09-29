@@ -10,6 +10,7 @@
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, schema } from '../../db/index'
+import { selectForLLMFewshot, formatFewShotList, logFewshotSelection } from '../../services/face-archive-service.js'
 import { eq } from 'drizzle-orm'
 
 export function createGridPromptTools(episodeId: number, dramaId: number) {
@@ -54,13 +55,22 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       if (c.role) parts.push(`role: ${c.role}`)
       if (c.personality) parts.push(`personality: ${c.personality}`)
 
+      // Sprint 5 Task D: face-archive LLM-side 5-8 条 few-shot (ORDER BY RANDOM(), 用户拍板 D3)
+      // 这是 deterministic 函数 (tool 不调 LLM), 但仍把 few-shot 作为'风格参考'附在 prompt 末尾
+      // 后续若有真正的 character generation LLM 调用, 可直接复用 selectForLLMFewshot
+      const fewshotEntries = selectForLLMFewshot({ id: c.dramaId, style: null, characterAesthetic: null }, { id: c.id, name: c.name, personality: c.personality, dramaId: c.dramaId, appearancePermanent: c.appearancePermanent, appearance: c.appearance }, 8)
+      if (fewshotEntries.length) logFewshotSelection({ scope: 'llm-fewshot', dramaId: c.dramaId, characterId: c.id, entries: fewshotEntries })
+      const fewshotList = formatFewShotList(fewshotEntries)
+      const fewshotNote = fewshotList ? '\n\n## 风格参考 (参考不复制, 必须原创):\n' + fewshotList + '\n注: 不要直接复用以上任何具体人物的脸型/发型/组合, 原创角色, 风格对齐但不复制。' : ''
+
       const base = parts.join(', ')
-      const prompt = `${base}, cinematic portrait, high quality, consistent art style, no text, no watermark`
+      const prompt = `${base}, cinematic portrait, high quality, consistent art style, no text, no watermark${fewshotNote}`
 
       return {
         character_id: c.id,
         character_name: c.name,
         prompt,
+        fewshotReferences: fewshotEntries.map((e) => ({ id: e.id, factor: e.factor, name: e.name, nameEn: e.nameEn, promptTokens: e.promptTokens })),
       }
     },
   })

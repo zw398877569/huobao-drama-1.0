@@ -9,6 +9,7 @@ import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
 import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
+import { selectForCodeSide, formatCodeSideTokens, logFewshotSelection } from '../services/face-archive-service.js'
 
 const app = new Hono()
 
@@ -109,12 +110,17 @@ app.post('/:id/generate-image', async (c) => {
   const stylePreset = getStylePreset(drama?.style || undefined)
   // 2026-09-23 PM msg-20260923-002 fix #2: 注入角色美学 token (独立维度, 与 stylePreset 解耦)
   const aestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
+  // Sprint 5 Task D: face-archive code-side 1-2 条精选 (latest archivedAt DESC)
+  const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
+  const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
+  if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
   const rawPrompt = [
     char.name,
     charDetail,
     personality ? 'personality: ' + personality : '',
     stylePreset.positiveCharacterTokens,
     aestheticTokens,
+    faceArchiveTokens,
     'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
     'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
@@ -168,12 +174,17 @@ app.post('/batch-generate-images', async (c) => {
     const personality = char.personality || ''
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''
+    // Sprint 5 Task D: face-archive code-side 1-2 条精选 (batch 路径)
+    const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
+    const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
+    if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
     const rawPrompt = [
       char.name,
       charDetail,
       personality ? 'personality: ' + personality : '',
       stylePreset.positiveCharacterTokens,
       aestheticTokens,
+      faceArchiveTokens,
       'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
       'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
