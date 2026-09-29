@@ -400,3 +400,26 @@ export const cronRuns = sqliteTable('cron_runs', {
   // 跨平台可读: dashboard / 后端统一消费这一列, 替代 grep log 的工作流
   outputs: text('outputs'),
 })
+
+// face-archive 同步表 — 2026-09-29 Sprint 5 P0 (face-archive 集成)
+// 数据源: ~/Obsidian/cronTask/aicg-demo/data/face-types.json (Mac cron 任务产出, 不进 git repo)
+// 注入位置:
+//   - src/routes/characters.ts imagePrompt 拼接 (code-side 1-2 条精选)
+//   - src/agents/tools/grid-prompt-tools.ts generateCharacterPrompt (LLM-side few-shot 5-8 条)
+// 关联表/字段: 不存 character_id, 无外键 — face-archive 是风格参考库, 不绑定具体 character.
+// 多剧共用同一张表 (跨剧多样性 soft constraint 由 ORDER BY RANDOM() + few-shot 软约束保证).
+// 索引在 manual-2026-09-29-face-type-entries.sql 里建 (4 个: factor_external unique + 3 查询索引).
+export const faceTypeEntries = sqliteTable('face_type_entries', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  factor: text('factor').notNull(),
+  externalId: text('external_id').notNull(),
+  name: text('name').notNull(),
+  nameEn: text('name_en'),
+  data: text('data').notNull(),
+  promptTokens: text('prompt_tokens'),
+  gender: text('gender'),
+  source: text('source').notNull().default('face-archive'),
+  archivedAt: text('archived_at').notNull(),
+  syncedAt: text('synced_at').notNull(),
+  createdAt: text('created_at').notNull(),
+})
