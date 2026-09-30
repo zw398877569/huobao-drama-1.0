@@ -42,6 +42,8 @@ export const episodes = sqliteTable('episodes', {
   imageConfigId: integer('image_config_id'),
   videoConfigId: integer('video_config_id'),
   audioConfigId: integer('audio_config_id'),
+  // Sprint 6 PM msg-20260930-001 Task A — 分镜拆解模型选择持久化 (跟 image/video/audio config 风格一致)
+  textConfigId: integer('text_config_id'),
   // PM 派单 msg-20260920-004 Step 3.D: user-set target duration (s), null = estimator fallback
   targetDuration: integer('target_duration'),
   createdAt: text('created_at').notNull(),
@@ -423,3 +425,8 @@ export const faceTypeEntries = sqliteTable('face_type_entries', {
   syncedAt: text('synced_at').notNull(),
   createdAt: text('created_at').notNull(),
 })
+
+// Sprint 6 PM msg-20260930-001 Task A — episodes.text_config_id
+//   跟 image/video/audio config_id 风格一致 (持久化分镜拆解模型选择, 用户测 DeepSeek)
+//   ensureColumn 自动 ALTER TABLE 加列 (backend/src/db/index.ts 启动时跑)
+export {}

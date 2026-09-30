@@ -388,6 +388,8 @@ ensureColumn('episodes', 'image_config_id', 'INTEGER')
 ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
 ensureColumn('episodes', 'target_duration', 'INTEGER')
+// Sprint 6 PM msg-20260930-001 Task A — episodes.text_config_id (分镜拆解模型持久化)
+ensureColumn('episodes', 'text_config_id', 'INTEGER')
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 // P0 Scene Intention: derived from scene_intention agent
