@@ -65,7 +65,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
 
   const providers = [
     'autodl-comfyui', 'nano-banana', 'agnes', 'ali', 'chatfire',
-    'gemini', 'grsai', 'minimax', 'minimax-hailuo', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
+    'deepseek', 'gemini', 'grsai', 'minimax', 'minimax-hailuo', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
   ]
   const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
 
@@ -81,6 +81,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
       chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['gemini-3-pro-preview'] },
       openrouter: { label: 'OpenRouter 推荐', baseUrl: 'https://openrouter.ai/api', models: ['google/gemini-3-flash-preview'] },
       openai: { label: 'OpenAI 推荐', baseUrl: 'https://api.openai.com', models: ['gpt-4.1-mini'] },
+      // Sprint 6 PM msg-20260930-001 Task C — DeepSeek 推荐预设 (用户测 DeepSeek 分镜能力)
+      deepseek: { label: 'DeepSeek 推荐', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-flash', 'deepseek-v4-pro'] },
     },
     image: {
       chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['doubao-seedream-4-5-251128'] },
@@ -130,6 +132,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     chatfire: '/v1',
     openai: '/v1',
     openrouter: '/v1',
+    // Sprint 6 Task C — DeepSeek API 是 OpenAI 兼容协议, 端点前缀 '/v1'
+    deepseek: '/v1',
     minimax: '/v1',
     gemini: '/v1beta',
     volcengine: '/api/v3',
