@@ -2080,14 +2080,14 @@ const {
   hasDialogue, hasTTS,
 })
 
+// Sprint 6 Task E — 分镜模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, QA msg-20260930-002 修: 挪到 destructuring 块外前面)
+const selectedTextConfigId = ref<string | null>(null)
+const storyboardModelPopoverOpen = ref(false)
+
 // Script-stage + production agents (rewrite / extract / voice / breakdown / samples / add shot)
 const {
   doRewrite, skipRewrite, doExtract, doVoice,
   batchGenSamples, doBreakdown, genSample, updateCharVoice, addShot,
-// Sprint 6 Task E — 分镜拆解模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, 否则 selectedTextConfigId 在 useEpisodeAgents 解构时还是 undefined)
-const selectedTextConfigId = ref<string | null>(null)
-const storyboardModelPopoverOpen = ref(false)
-
 } = useEpisodeAgents({
   ctx: { chars, sbs, epId, localRaw, localScript, rawContent, scriptStep, charsVoiced },
   dramaId,
