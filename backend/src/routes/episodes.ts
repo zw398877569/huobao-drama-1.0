@@ -47,6 +47,7 @@ app.post('/', async (c) => {
     image_config_id: ep.imageConfigId,
     video_config_id: ep.videoConfigId,
     audio_config_id: ep.audioConfigId,
+    text_config_id: ep.textConfigId ?? null,  // Sprint 6 Task F — 分镜拆解模型选择持久化
     target_duration: ep.targetDuration,
   })
 })
@@ -94,7 +95,7 @@ app.put('/:id', async (c) => {
   const body = await c.req.json()
 
   // Step 4.E: target_duration 加入允许字段 (UI 编辑 episode 也可改)
-  const allowed = ['content', 'script_content', 'title', 'description', 'status', 'target_duration']
+  const allowed = ['content', 'script_content', 'title', 'description', 'status', 'target_duration', 'text_config_id']
   const updates: Record<string, any> = {}
   for (const key of allowed) {
     if (key in body) updates[key] = body[key]
@@ -112,6 +113,12 @@ app.put('/:id', async (c) => {
   if ('target_duration' in updates) {
     const v = updates.target_duration
     drizzleUpdates.targetDuration = (typeof v === 'number' && v > 0) ? Math.round(v) : null
+  }
+  // Sprint 6 Task F — 分镜拆解模型选择持久化 (D1 决策, 跟 image/video/audio config_id 一致)
+  // null = 清除, 走 active text config fallback (Task B 'text-config-fallback' log)
+  if ('text_config_id' in updates) {
+    const v = updates.text_config_id
+    drizzleUpdates.textConfigId = (typeof v === 'number' && v > 0) ? v : null
   }
 
   await db.update(schema.episodes).set(drizzleUpdates).where(eq(schema.episodes.id, id))
