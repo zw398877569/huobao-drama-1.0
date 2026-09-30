@@ -449,6 +449,12 @@
               <template v-if="!sbs.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
+              <!-- Sprint 6 Task E — 分镜模型选择器 (D2: 只覆盖 storyboard_planner) -->
+              <button class="btn btn-sm model-btn" @click="storyboardModelPopoverOpen = !storyboardModelPopoverOpen" :title="'切换分镜模型: ' + currentTextModelLabel">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                分镜模型 · {{ currentTextModelLabel }}
+                <span v-if="selectedTextConfigId" class="tag" style="font-size:10px">自定义</span>
+              </button>
               <button class="btn btn-sm" :disabled="rn || !selectedSb?.id || regeneratingOne" @click="regeneratingOne = true; (async () => { const sb = selectedSb?.id ? selectedSb : (sbs[sbs.length - 1] || sbs[0]); if (!sb?.id) { regeneratingOne = false; toast.error('没有可重生成的镜头'); return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${sb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(sb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
                 <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
@@ -1734,6 +1740,17 @@
         @close="closeVideoModelPopover"
       />
 
+      <!-- Sprint 6 Task E — 分镜拆解模型选择弹窗 (D2: 只覆盖 storyboard_planner, 用户测 DeepSeek) -->
+      <ModelSelector
+        :show="storyboardModelPopoverOpen"
+        title="选择分镜模型"
+        :options="textConfigSelectOptions"
+        :model-value="selectedTextConfigId"
+        empty-text="暂无文本模型配置，请先在设置中添加"
+        @update:model-value="onTextConfigChange"
+        @close="closeStoryboardModelPopover"
+      />
+
       <div v-if="showBottomBubble" class="step-bubble">
         <button
           v-if="panel === 'script'"
@@ -1909,9 +1926,9 @@ const {
 } = useEpisodeContext()
 // Configs (image/video/audio AI providers) + voice profile loading
 const {
-  imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
+  imageConfigs, videoConfigs, audioConfigs, textConfigs, voiceProfiles,
   fallbackVoiceProfiles,
-  voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions,
+  voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions, textConfigSelectOptions,
   lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
   lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
   configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
@@ -2067,6 +2084,10 @@ const {
 const {
   doRewrite, skipRewrite, doExtract, doVoice,
   batchGenSamples, doBreakdown, genSample, updateCharVoice, addShot,
+// Sprint 6 Task E — 分镜拆解模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, 否则 selectedTextConfigId 在 useEpisodeAgents 解构时还是 undefined)
+const selectedTextConfigId = ref<string | null>(null)
+const storyboardModelPopoverOpen = ref(false)
+
 } = useEpisodeAgents({
   ctx: { chars, sbs, epId, localRaw, localScript, rawContent, scriptStep, charsVoiced },
   dramaId,
@@ -2076,6 +2097,8 @@ const {
   videoConfigs, lockedVideoConfigId, lockedAudioProvider,
   running: rn,
   runningType: rt,
+  // Sprint 6 Task E — 分镜拆解模型选择传 useEpisodeAgents
+  selectedTextConfigId,
 })
 
 const regeneratingOne = ref(false)
@@ -2144,6 +2167,48 @@ const currentVideoModelLabel = computed(() => {
 // 关闭视频模型选择器
 function closeVideoModelPopover() {
   videoModelPopoverOpen.value = false
+}
+
+// Sprint 6 Task E — 分镜模型 (text config) 选择器
+function closeStoryboardModelPopover() {
+  storyboardModelPopoverOpen.value = false
+}
+
+const currentTextModelLabel = computed(() => {
+  const stored = selectedTextConfigId.value
+  if (!stored) return '默认'
+  const configId = parseModelValue(stored)
+  if (!configId) return '默认'
+  const cfg = textConfigs.value.find((c: any) => c.id === configId)
+  if (!cfg) return '默认'
+  // 解析 model 字段
+  let models: string[] = []
+  if (Array.isArray(cfg.model)) {
+    models = cfg.model.filter((m: any) => typeof m === 'string')
+  } else if (typeof cfg.model === 'string' && cfg.model) {
+    try {
+      const m = JSON.parse(cfg.model)
+      models = Array.isArray(m) ? m.filter((x: any) => typeof x === 'string') : [cfg.model]
+    } catch { models = [cfg.model] }
+  }
+  // 复合格式 "<id>:<model>" 取 model 部分
+  const [, modelName] = stored.split(':')
+  return modelName || models[0] || cfg.name
+})
+
+// Sprint 6 Task E — 选 model 后自动 PATCH 到 episodes.text_config_id (持久化, 跟 image/video/audio 一致)
+async function onTextConfigChange(v: string | null) {
+  selectedTextConfigId.value = v
+  const configId = v ? parseModelValue(v) : null
+  try {
+    await episodeAPI.update(epId.value, {
+      text_config_id: configId,  // null = 清除, 走 active fallback
+    })
+    // logTaskProgress 也跟着加, 跟 Task F 后端对齐
+    toast.success(configId ? `已选择分镜模型 configId=${configId}` : '已清除分镜模型, 使用默认 active text config')
+  } catch (e: any) {
+    toast.error(`保存分镜模型失败: ${e?.message || e}`)
+  }
 }
 
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
@@ -2224,6 +2289,17 @@ async function refresh() {
       const epHasContent = !!(episode.value?.content)
       const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
       const epHasSbs = sbs.value.length > 0
+
+      // Sprint 6 Task E — 加载分镜拆解选中的 text config (持久化, 跟 image/video/audio config_id 一致)
+      selectedTextConfigId.value = (episode.value?.text_config_id ?? episode.value?.textConfigId ?? null)
+        ? `${episode.value.text_config_id ?? episode.value.textConfigId}`  // placeholder; full model value below
+        : null
+      // 实际可能需要 "configId:modelName" 复合格式, 但 episode.text_config_id 只是数字 configId
+      // 简化: 仅持久化 configId 部分, 后端 parseConfigIdWithModel 接受纯数字, 自动取 models[0]
+      // 如果未来需要持久化具体 model, 改为 "configId:modelName" 格式
+      if (episode.value?.text_config_id ?? episode.value?.textConfigId) {
+        selectedTextConfigId.value = String(episode.value.text_config_id ?? episode.value.textConfigId)
+      }
 
       if (epHasSbs) scriptStep.value = 4
       else if (epHasScript && chars.value.some(c => c.voice_style || c.voiceStyle)) scriptStep.value = 3

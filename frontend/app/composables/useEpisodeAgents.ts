@@ -23,10 +23,12 @@ type Deps = {
   lockedAudioProvider: ComputedRef<string>,
   running: Ref<boolean>,
   runningType: Ref<string | null>,
+  // Sprint 6 PM msg-20260930-001 Task E — 分镜拆解模型选择 (D2: 只覆盖 storyboard_planner)
+  selectedTextConfigId?: Ref<string | null>,
 }
 
 export function useEpisodeAgents(deps: Deps) {
-  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId, lockedAudioProvider, running, runningType } = deps
+  const { ctx, dramaId, saveRaw, saveScr, runAgent, refresh, videoConfigs, lockedVideoConfigId, lockedAudioProvider, running, runningType, selectedTextConfigId } = deps
 
   function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, ctx.epId.value, refresh) }
 
@@ -66,7 +68,10 @@ export function useEpisodeAgents(deps: Deps) {
     runningType.value = 'storyboard_breaker'
     let currentTip = ''
     try {
-      await agentAPI.streamPlanning({ drama_id: dramaId, episode_id: ctx.epId.value }, (event, data) => {
+      // Sprint 6 Task E — 分镜拆解模型选择 (复合格式 "configId:modelName", 后端 parseConfigIdWithModel 再拆一次)
+      const body: any = { drama_id: dramaId, episode_id: ctx.epId.value }
+      if (selectedTextConfigId?.value) body.text_config_id = selectedTextConfigId.value
+      await agentAPI.streamPlanning(body, (event, data) => {
         if (event === 'status') {
           toast.info(`分镜规划中，视频模型：${label}...`)
         } else if (event === 'progress') {
