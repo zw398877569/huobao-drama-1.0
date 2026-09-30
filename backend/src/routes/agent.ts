@@ -4,6 +4,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
+import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -196,9 +197,20 @@ app.post('/storyboard_breaker/planning', async (c) => {
     return badRequest(c, 'drama_id and episode_id are required')
   }
 
-  logTaskStart('Agent', 'storyboard_breaker-planning', { dramaId: drama_id, episodeId: episode_id })
+  // Sprint 6 PM msg-20260930-001 Task B — text_config_id 可选 (用户测 DeepSeek 分镜)
+  // 复合格式 "configId:modelName" 或纯数字 configId; null 时走 getActiveConfig('text') fallback
+  const parsed = parseConfigIdWithModel(body.text_config_id)
+  const agentOptions: { textConfigId?: number; modelOverride?: string } = {}
+  if (parsed.configId) agentOptions.textConfigId = parsed.configId
+  if (parsed.model) agentOptions.modelOverride = parsed.model
 
-  const agent = createAgent('storyboard_planner', episode_id, drama_id)
+  logTaskStart('Agent', 'storyboard_breaker-planning', {
+    dramaId: drama_id, episodeId: episode_id,
+    textConfigId: agentOptions.textConfigId ?? null,
+    modelOverride: agentOptions.modelOverride ?? null,
+  })
+
+  const agent = createAgent('storyboard_planner', episode_id, drama_id, agentOptions)
   if (!agent) return badRequest(c, 'storyboard_planner agent not found')
 
   return streamSSE(c, async (stream) => {

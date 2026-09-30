@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent'
 import { createOpenAI } from '@ai-sdk/openai'
 import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index'
-import { getTextConfig, getTextProviderBaseUrl } from '../services/ai'
+import { getTextConfig, getTextProviderBaseUrl, getConfigById } from '../services/ai'
 import { logTaskProgress } from '../utils/task-logger'
 import { createSceneIntentionAgent, createSceneIntentionTools } from './scene-intention'
 import { loadAgentSkills } from './skills'
@@ -1092,8 +1092,8 @@ function getAgentConfig(agentType: string) {
   return rows.find(r => r.isActive) || rows[0] || null
 }
 
-function getModel(dbConfig: any) {
-  const textConfig = getTextConfig()
+function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: string; apiKey: string; model: string } | null) {
+  const textConfig = overrideConfig ?? getTextConfig()
   const resolvedBaseURL = getTextProviderBaseUrl(textConfig)
   logTaskProgress('AIConfig', 'text-model-endpoint', {
     provider: textConfig.provider,
@@ -1108,12 +1108,22 @@ function getModel(dbConfig: any) {
   return provider.chat(modelName)
 }
 
-export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental' }): Agent | null {
+export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental'; textConfigId?: number; modelOverride?: string }): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
 
   const dbConfig = getAgentConfig(type)
-  const model = getModel(dbConfig)
+  // Sprint 6 PM msg-20260930-001 Task B — 分镜拆解模型选择 (D2: 只覆盖 storyboard_planner 一个 agent)
+  // textConfigId 有值 + active → 用配置; 否则 fallback getTextConfig() (active text config)
+  let textOverride: { provider: string; baseUrl: string; apiKey: string; model: string } | null = null
+  if (options?.textConfigId) {
+    const byId = getConfigById(options.textConfigId)
+    if (byId) textOverride = byId
+    else logTaskWarn('Agent', 'text-config-fallback', { textConfigId: options.textConfigId, agentType: type, reason: 'inactive or not found, fallback to active' })
+  }
+  // modelOverride 来自 parseConfigIdWithModel (复合格式 "configId:modelName"), 覆盖 config.model[0]
+  if (textOverride && options?.modelOverride) textOverride = { ...textOverride, model: options.modelOverride }
+  const model = getModel(dbConfig, textOverride)
   const baseInstructions = dbConfig?.systemPrompt?.trim() || defaults.instructions
   const skillInstructions = loadAgentSkills(type)
   const instructions = skillInstructions
