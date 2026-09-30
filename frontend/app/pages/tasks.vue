@@ -5,6 +5,7 @@
  * 完全独立于项目内 logTask / videoGenerations 等
  */
 import { computed, onMounted, ref } from 'vue'
+import { toast } from 'vue-sonner'
 import { cronAPI } from '~/composables/useApi'
 
 // ====== 工具 ======
@@ -117,9 +118,17 @@ function shortPath(p: string): string {
 async function copyPath(p: string) {
   try {
     await navigator.clipboard.writeText(p)
-  } catch (e) {
+    // 2026-09-30 增量: 复制成功后 toast 反馈, 用户知道是否复制成功
+    toast.success(`已复制: ${shortPath(p)}`, {
+      description: p,
+      duration: 2500,
+    })
+  } catch (e: any) {
     // clipboard 不可用时降级用 prompt (Safari 限制)
     console.warn('clipboard.writeText failed', e)
+    // 降级方案: 用 prompt 让用户手动复制
+    window.prompt('请手动复制路径', p)
+    toast.error('自动复制失败, 已弹窗手动复制')
   }
 }
 
