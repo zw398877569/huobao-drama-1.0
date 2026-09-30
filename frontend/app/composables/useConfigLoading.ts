@@ -14,6 +14,8 @@ export function useConfigLoading(deps: Deps) {
   const imageConfigs = ref<any[]>([])
   const videoConfigs = ref<any[]>([])
   const audioConfigs = ref<any[]>([])
+  // Sprint 6 PM msg-20260930-001 Task D — textConfigs (供分镜拆解模型选择器用, 跟 image/video/audio config 同结构)
+  const textConfigs = ref<any[]>([])
   const voiceProfiles = ref<any[]>([])
 
   // Fallback list shown when no voices can be loaded from the configured provider.
@@ -118,6 +120,35 @@ export function useConfigLoading(deps: Deps) {
     return groups
   })
 
+  // Sprint 6 Task D — text config options (分镜拆解模型选择器用, 跟 imageConfigSelectOptions 同结构)
+  const textConfigSelectOptions = computed(() => {
+    if (!textConfigs.value.length) return []
+    const byProvider = new Map<string, Array<{ label: string; value: string }>>()
+    for (const c of textConfigs.value) {
+      if (!c.is_active) continue
+      let models: string[] = []
+      if (Array.isArray(c.model)) {
+        models = c.model.filter((m: any) => typeof m === 'string' && m.trim())
+      } else if (typeof c.model === 'string' && c.model) {
+        try {
+          const parsed = JSON.parse(c.model)
+          models = Array.isArray(parsed) ? parsed.filter((m: any) => typeof m === 'string') : [c.model]
+        } catch {
+          models = [c.model]
+        }
+      }
+      if (!models.length) continue
+      const existing = byProvider.get(c.provider) || []
+      const items = models.map(m => ({ label: m, value: `${c.id}:${m}` }))
+      byProvider.set(c.provider, [...existing, ...items])
+    }
+    const groups: Array<{ group: string; items: Array<{ label: string; value: string }> }> = []
+    for (const [provider, items] of byProvider.entries()) {
+      groups.push({ group: provider, items })
+    }
+    return groups
+  })
+
   // 解析 "configId:modelName" 格式的 value，返回 configId
   function parseModelValue(value: string | null | undefined): number | null {
     if (!value || !value.includes(':')) return null
@@ -128,14 +159,16 @@ export function useConfigLoading(deps: Deps) {
 
   async function loadConfigs() {
     try {
-      const [imgCfgs, vidCfgs, audCfgs] = await Promise.all([
+      const [imgCfgs, vidCfgs, audCfgs, txtCfgs] = await Promise.all([
         aiConfigAPI.list('image'),
         aiConfigAPI.list('video'),
         aiConfigAPI.list('audio'),
+        aiConfigAPI.list('text'),
       ])
       imageConfigs.value = imgCfgs || []
       videoConfigs.value = vidCfgs || []
       audioConfigs.value = audCfgs || []
+      textConfigs.value = txtCfgs || []
     } catch (e) { console.error('Failed to load AI configs', e) }
   }
 
@@ -180,9 +213,9 @@ export function useConfigLoading(deps: Deps) {
   onMounted(() => { loadConfigs(); loadVoices() })
 
   return {
-    imageConfigs, videoConfigs, audioConfigs, voiceProfiles,
+    imageConfigs, videoConfigs, audioConfigs, textConfigs, voiceProfiles,
     fallbackVoiceProfiles,
-    voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions,
+    voiceSelectOptions, videoConfigSelectOptions, imageConfigSelectOptions, textConfigSelectOptions,
     lockedImageConfigId, lockedVideoConfigId, lockedAudioConfigId, lockedAudioProvider,
     lockedImageConfigLabel, lockedVideoConfigLabel, lockedAudioConfigLabel,
     configLabel, loadConfigs, inferVoiceGender, mapVoiceProfile, loadVoices, getVoiceProfile,
