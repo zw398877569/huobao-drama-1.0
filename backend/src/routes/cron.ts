@@ -41,6 +41,7 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   dailylearn: 2 * 60 * 60 * 1000,        // 2h — Phase 2 LLM 最长 15-20 分钟, 2h 是宽松上限
   minimaxlearn: 2 * 60 * 60 * 1000,
   videounderstand: 30 * 60 * 1000,        // 30min — 单视频 5-10 分钟
+  'face-archive': 2 * 60 * 60 * 1000,    // 2h — Phase 2 codex exec 最长 10-15 分钟, 2h 宽松
   'daily-hot-list': 30 * 60 * 1000,      // 30min — 8 数据源约 10 分钟
 }
 const DEFAULT_STALE_MS = 2 * 60 * 60 * 1000 // 未知任务走 2h 默认
