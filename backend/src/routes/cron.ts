@@ -208,4 +208,31 @@ app.get('/runs/:runId', async (c) => {
   return success(c, { ...row, outputs: parseOutputs(row.outputs) })
 })
 
+/** POST /runs/:runId/log — 增量: wrapper 上传完整 log (末尾 ~50KB)
+ *  与 PATCH /runs/:runId 完全独立, 失败不影响主 cron 状态
+ *  body: { log: string } */
+app.post('/runs/:runId/log', async (c) => {
+  const runId = c.req.param('runId')
+  let body: any
+  try { body = await c.req.json() } catch { return badRequest(c, 'invalid json body') }
+  const { log } = body
+  if (typeof log !== 'string') return badRequest(c, 'log (string) required')
+
+  // 截到 50KB 防止巨大 payload 撑爆 DB (原始 log 可能几 MB)
+  const MAX = 50 * 1024
+  const trimmedLog = log.length > MAX ? log.slice(-MAX) : log
+
+  // 确认 runId 存在 (避免创建孤儿 row)
+  const [existing] = db.select().from(schema.cronRuns)
+    .where(eq(schema.cronRuns.runId, runId)).all()
+  if (!existing) return badRequest(c, `runId not found: ${runId}`)
+
+  db.update(schema.cronRuns)
+    .set({ outputFull: trimmedLog, updatedAt: now() })
+    .where(eq(schema.cronRuns.runId, runId))
+    .run()
+
+  return success(c, { runId, logLen: trimmedLog.length, truncated: log.length > MAX })
+})
+
 export default app

@@ -361,6 +361,13 @@ onMounted(load)
           </div>
           <pre v-if="selected.output" class="tasks-output">{{ selected.output }}</pre>
           <div v-else class="dim tasks-output-empty">无输出</div>
+
+          <!-- 2026-10-09 增量: 完整日志 (wrapper 单独上传的末尾 50KB)
+               不影响上面 truncated output, 独立折叠区 -->
+          <details v-if="selected.outputFull" class="tasks-full-log">
+            <summary>完整日志 (末尾 50KB) — 点击展开</summary>
+            <pre class="tasks-output">{{ selected.outputFull }}</pre>
+          </details>
           <div v-if="detailLoading" class="dim" style="font-size:11px; padding:4px 0">详情加载中…</div>
         </div>
       </div>
@@ -518,6 +525,24 @@ onMounted(load)
   overflow-y: auto;
 }
 .tasks-output-empty { padding: 12px; text-align: center; font-size: 12px; }
+
+/* 2026-10-09 增量: 完整日志折叠区样式 */
+.tasks-full-log {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #0e1116;
+}
+.tasks-full-log summary {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+  font-family: var(--font-mono);
+}
+.tasks-full-log summary:hover { color: var(--text-1); background: rgba(255,255,255,0.03); }
+.tasks-full-log .tasks-output { margin: 0; border-radius: 0 0 var(--radius) var(--radius); }
 
 /* dim */
 .dim { color: var(--text-3); }

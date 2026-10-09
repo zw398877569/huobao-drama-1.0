@@ -401,6 +401,9 @@ export const cronRuns = sqliteTable('cron_runs', {
   // 2026-09-28 增量: 产出物路径数组 (JSON 序列化), wrapper 从 log "✓ label: /abs/path" 提取
   // 跨平台可读: dashboard / 后端统一消费这一列, 替代 grep log 的工作流
   outputs: text('outputs'),
+  // 2026-10-09 增量: 完整 log 文本 (末尾 ~50KB), 跟 output (截 2000 字) 互补
+  // 不影响原 output 字段, 仅在 wrapper 上传 log 后填
+  outputFull: text('output_full'),
 })
 
 // face-archive 同步表 — 2026-09-29 Sprint 5 P0 (face-archive 集成)
