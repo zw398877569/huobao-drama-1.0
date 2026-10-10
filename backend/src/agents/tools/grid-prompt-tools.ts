@@ -25,13 +25,14 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       const chars = db.select().from(schema.characters)
         .where(eq(schema.characters.dramaId, dramaId)).all()
         .filter(c => !c.deletedAt)
+      // V2 治本 (msg-20261010-001): 返回 appearancePermanent (PERMANENT 列), 不再返 deprecated appearance 列
       return {
         characters: chars.map(c => ({
           id: c.id,
           name: c.name,
           role: c.role || '',
           description: c.description || '',
-          appearance: c.appearance || '',
+          appearance_permanent: c.appearancePermanent || '',
           personality: c.personality || '',
         })),
       }
@@ -50,7 +51,8 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       if (!c) return { error: 'Character not found' }
 
       const parts: string[] = []
-      if (c.appearance) parts.push(c.appearance)
+      // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列)
+      if (c.appearancePermanent) parts.push(c.appearancePermanent)
       if (c.description) parts.push(c.description)
       if (c.role) parts.push(`role: ${c.role}`)
       if (c.personality) parts.push(`personality: ${c.personality}`)
@@ -58,7 +60,8 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       // Sprint 5 Task D: face-archive LLM-side 5-8 条 few-shot (ORDER BY RANDOM(), 用户拍板 D3)
       // 这是 deterministic 函数 (tool 不调 LLM), 但仍把 few-shot 作为'风格参考'附在 prompt 末尾
       // 后续若有真正的 character generation LLM 调用, 可直接复用 selectForLLMFewshot
-      const fewshotEntries = selectForLLMFewshot({ id: c.dramaId, style: null, characterAesthetic: null }, { id: c.id, name: c.name, personality: c.personality, dramaId: c.dramaId, appearancePermanent: c.appearancePermanent, appearance: c.appearance }, 8)
+      // V2 治本 (msg-20261010-001): appearance 列已 DROP, 不再传给 CharacterContext
+      const fewshotEntries = selectForLLMFewshot({ id: c.dramaId, style: null, characterAesthetic: null }, { id: c.id, name: c.name, personality: c.personality, dramaId: c.dramaId, appearancePermanent: c.appearancePermanent }, 8)
       if (fewshotEntries.length) logFewshotSelection({ scope: 'llm-fewshot', dramaId: c.dramaId, characterId: c.id, entries: fewshotEntries })
       const fewshotList = formatFewShotList(fewshotEntries)
       const fewshotNote = fewshotList ? '\n\n## 风格参考 (参考不复制, 必须原创):\n' + fewshotList + '\n注: 不要直接复用以上任何具体人物的脸型/发型/组合, 原创角色, 风格对齐但不复制。' : ''

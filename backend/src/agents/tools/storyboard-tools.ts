@@ -197,13 +197,13 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       const characters = chars
         .filter(c => !c.deletedAt)
         .filter(c => !linkedCharacterIds.size || linkedCharacterIds.has(c.id))
+        // V2 治本 (msg-20261010-001): character 不再暴露 plot_state 字段, 返回只含 PERMANENT
         .map(c => ({
           id: c.id,
           name: c.name,
           role: c.role || '',
           description: c.description || '',
           appearancePermanent: c.appearancePermanent || '',
-          appearancePlotState: c.appearancePlotState || '',
           personality: c.personality || '',
           voice_style: c.voiceStyle || '',
           image_url: c.imageUrl || '',
@@ -683,6 +683,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         result: z.string().nullish(),
         atmosphere: z.string().nullish(),
         intent_function: z.string().nullish(),
+        // V2 治本 (PM msg-20261010-001): shot JSON 强制分流 4 段, imagePrompt/videoPrompt 拼接源头不再读 character.appearancePlotState
+        image_prompt_permanent: z.string().nullish(),
+        image_prompt_plot_state: z.string().nullish(),
+        video_prompt_permanent: z.string().nullish(),
+        video_prompt_plot_state: z.string().nullish(),
       })),
     }),
     execute: async ({ shot_plan }) => {
@@ -702,6 +707,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         result: sp.result ?? '',
         atmosphere: sp.atmosphere ?? '',
         intent_function: sp.intent_function ?? '铺垫',
+        // V2 治本 (msg-20261010-001): 4 段拼接字段默认空 (LLM 漏填时用空字符串, code 拼接仍可从 character/scene 表兜底)
+        image_prompt_permanent: sp.image_prompt_permanent ?? '',
+        image_prompt_plot_state: sp.image_prompt_plot_state ?? '',
+        video_prompt_permanent: sp.video_prompt_permanent ?? '',
+        video_prompt_plot_state: sp.video_prompt_plot_state ?? '',
       }))
       return runGenerateShotPrompts({ episodeId, dramaId, shot_plan: safeShotPlan, characterAestheticTokens })
     },
@@ -934,6 +944,11 @@ export async function runGenerateShotPrompts(params: {
     // 修:planner 之前不输出这两字段,音效/配乐段只能 'none' 兜底 — 现在 planner 直出,code 侧优先用
     sound_effect?: string
     bgm_prompt?: string
+    // V2 治本 (PM msg-20261010-001): LLM 在 shot JSON 中强制分流 permanent + plot_state 4 段
+    image_prompt_permanent?: string
+    image_prompt_plot_state?: string
+    video_prompt_permanent?: string
+    video_prompt_plot_state?: string
   }>
   keepExisting?: boolean
   onProgress?: (progress: { shot: number; total: number; status: string }) => void
@@ -1130,13 +1145,14 @@ export async function runGenerateShotPrompts(params: {
     // [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] 终极安全网 (video API 硬约束)
     sp.duration = Math.max(VIDEO_MIN_DURATION, Math.min(VIDEO_MAX_DURATION, candidate))
 
-    // 角色外观兜底
-    // 2026-09-24 PM msg-20260924-002: 镜头图 imagePrompt 拼接 — 永久外貌 (PERMANENT) + 按 sp.intent_function 拼剧情态 (PLOT_STATE)
-    //   字段优先级: appearancePermanent > appearance (deprecated 兼容) > description > personality > role fallback
-    //   plot_state JSON parse 失败 → fallback 只用 PERMANENT (不影响生图)
+    // V2 治本 (PM msg-20261010-001): 角色外观兜底 — 拼接源头只读 PERMANENT 列
+    //   字段优先级: appearancePermanent > description > personality > role fallback
+    //   ❌ 不再读 c.appearance (Sprint 1 后被 manual migration DROP/RENAME)
+    //   ❌ 不再读 c.appearancePlotState (V2 治本后从 character 表彻底移除, plot_state 改存 storyboards.image_prompt_plot_state)
+    //   ✅ 物理保险: 即便 LLM 漏填 sp.image_prompt_permanent, code 仍注入 character.appearance_permanent 头标
+    //   ✅ plot_state 来源: sp.image_prompt_plot_state (planner LLM 在 shot JSON 中输出)
     const charDesc = charRefs.map(c => {
-      let look = c.appearancePermanent ||
-        c.appearance ||
+      const look = c.appearancePermanent ||
         c.description ||
         c.personality ||
         (() => {
@@ -1145,17 +1161,6 @@ export async function runGenerateShotPrompts(params: {
           if (roleLower.includes('女') || roleLower.includes('woman') || roleLower.includes('female')) return '女性'
           return '人物'
         })()
-      if (sp.intent_function && c.appearancePlotState) {
-        try {
-          const plotState = JSON.parse(c.appearancePlotState)
-          const section = plotState[sp.intent_function]
-          if (section && typeof section === 'string') {
-            look = `${look}。剧情态[${sp.intent_function}]:${section}`
-          }
-        } catch {
-          // plot_state parse 失败 — 静默 fallback PERMANENT only
-        }
-      }
       return `${c.name}永久外貌(年龄/脸型/发色/体型/服装,仅参考角色立绘,不重复 plot 道具/高潮动作):${look}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
 
@@ -1168,7 +1173,12 @@ export async function runGenerateShotPrompts(params: {
     const sceneLight = scene?.prompt
       ? `场景:${scene.location}${scene.time}，${scene.prompt}`
       : `地点:${sp.location}，时间:${sp.time}`
-    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${sp.description}。${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
+    // V2 治本: imagePrompt 拼接顺序 — 角色永久外貌 + 场景环境 + LLM 输出的 permanent 段 + LLM 输出的 plot_state 段
+    //   sp.image_prompt_permanent 是 LLM 决定的"哪些是本镜不变的" (semantic 判断)
+    //   sp.image_prompt_plot_state 是 LLM 决定的"本镜瞬时动作/表情/物件" (per-shot episode window)
+    const llmPermanent = sp.image_prompt_permanent?.trim() || ''
+    const llmPlotState = sp.image_prompt_plot_state?.trim() || ''
+    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${llmPermanent}${llmPermanent ? '。' : ''}${sp.description}。${llmPlotState}${llmPlotState ? '。' : ''}${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
 
     // H3 三段式 video_prompt 构造(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS):
     //   1) Integrated multimodal description + 5D(景别/焦距/运镜/景深/视角) + 时间戳 <n>X-Ys</n>(s 缩写)
@@ -1197,30 +1207,25 @@ export async function runGenerateShotPrompts(params: {
     // 角色 6 维外貌注入 — 对齐 planner prompt 5 规则「video_prompt 中提到角色时必须复制 6 维描述」,
     //   之前只 imagePrompt 注入了 ${charDesc}, videoPrompt 漏了, H3 模型只能靠 first_frame 参考图保持一致性 → 换脸/换体型
     //   修复: integrated 段开头插入 charRoles (角色名 + 外貌), 让 H3 模型在动起来之前明确知道角色长什么样
-    // 注意: 用 escapeXml 转义以防 character.appearance 里有 < / > / ' 等特殊字符
+    // 注意: 用 escapeXml 转义以防 character.appearance_permanent 里有 < / > / ' 等特殊字符 (V2 治本 msg-20261010-001)
     // QA ISSUE-003 (msg-20260920-006): charRefs 为空时 charRoles='', integrated 开头会变
     //   '延续上一镜末帧构图. . ${segs}...', 多一个 '. ', 格式丑但不崩.
     //   修复: 用 charRolesPrefix 判断, 空时不加这个 '. '
     // 2026-09-24 PM msg-20260924-002: 镜头图 videoPrompt 拼接 — 永久外貌 (PERMANENT) + 按 sp.intent_function 拼剧情态 (PLOT_STATE)
     //   字段优先级: appearancePermanent > appearance (deprecated 兼容) > description > personality
     //   plot_state JSON parse 失败 → fallback 只用 PERMANENT (不影响生图)
+    // V2 治本 (PM msg-20261010-001): 跟 imagePrompt 同源 — 角色外观兜底只读 PERMANENT 列
+    //   不再读 c.appearance / c.appearancePlotState (两列都已 DROP/RENAME)
+    //   plot_state 来源改走 sp.video_prompt_plot_state (planner LLM 输出)
     const charRoles = charRefs.map(c => {
-      let look = c.appearancePermanent || c.appearance || c.description || c.personality || '人物'
-      if (sp.intent_function && c.appearancePlotState) {
-        try {
-          const plotState = JSON.parse(c.appearancePlotState)
-          const section = plotState[sp.intent_function]
-          if (section && typeof section === 'string') {
-            look = `${look}。剧情态[${sp.intent_function}]:${section}`
-          }
-        } catch {
-          // plot_state parse 失败 — 静默 fallback PERMANENT only
-        }
-      }
+      const look = c.appearancePermanent || c.description || c.personality || '人物'
       return `${escapeXml(c.name)}永久外貌(年龄/脸型/发色/体型/服装,仅参考立绘不重复 plot 道具/高潮动作):${escapeXml(look)}${characterAestheticTokens ? '，' + characterAestheticTokens : ''}`
     }).join('；')
     const charRolesPrefix = charRoles ? `${charRoles}. ` : ''
-    const integrated = `延续上一镜末帧构图. ${charRolesPrefix}${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${sp.action}${dialogueInline}.${resultInline}`.replace(/\s+/g, ' ').trim()
+    // V2 治本: integrated 段在 permanent (LLM 决定) + plot_state (LLM 决定) 之间物理分隔
+    const vidPermanent = sp.video_prompt_permanent?.trim() || ''
+    const vidPlotState = sp.video_prompt_plot_state?.trim() || ''
+    const integrated = `延续上一镜末帧构图. ${charRolesPrefix}${segs}<location>${sp.location}</location>${sp.time}, ${shotTypeEn} ${focal}, ${angleEn}, ${movementEn}, ${depth}. ${vidPermanent}${vidPermanent ? '. ' : ''}${sp.action}${dialogueInline}.${vidPlotState}${vidPlotState ? '. ' : ''}${resultInline}`.replace(/\s+/g, ' ').trim()
     // H3 官方规范 (skills/storyboard_breaker/h3-official-prompt/fl2va.md):
     //   - Overall soundscape: 无环境音/音效时显式写 'N/A',不要 'none'
     //   - Non-diegetic music: 描述必须用配器/速度/节奏/动态变化,
@@ -1259,6 +1264,9 @@ export async function runGenerateShotPrompts(params: {
       atmosphere: sp.atmosphere,
       imagePrompt: safetyResult.cleaned,
       videoPrompt: cleanedVideo,
+      // V2 治本 (msg-20261010-001): shot 瞬时剧情态单独存, 拼接源头已分 PERMANENT + PLOT_STATE 两段
+      imagePromptPlotState: llmPlotState || null,
+      videoPromptPlotState: vidPlotState || null,
       bgmPrompt: music,
       soundEffect: soundscape,
       sceneId: sp.scene_id,
@@ -1272,6 +1280,15 @@ export async function runGenerateShotPrompts(params: {
       createdAt: ts, updatedAt: ts,
     }).run()
     syncStoryboardCharacters(Number(res.lastInsertRowid), sp.character_ids || [])
+    // V2 治本 (msg-20261010-001): shot prompt 拼接完成 log, hasPlotState 让 QA 排查 plot_state 污染
+    logTaskProgress('StoryboardTool', 'shot-prompt-assembled', {
+      episodeId,
+      shotNumber: sp.shot_number,
+      sceneId: sp.scene_id,
+      characterIds: sp.character_ids || [],
+      promptLength: imagePrompt.length,
+      hasPlotState: !!llmPlotState,
+    })
     onProgress?.({ shot: sp.shot_number, total: shot_plan.length, status: 'writing' })
     totalDuration += sp.duration || 10
     if (densityResult.suggestion) {

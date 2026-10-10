@@ -26,9 +26,7 @@ app.get('/:id', async (c) => {
     name: char.name,
     role: char.role,
     description: char.description,
-    appearance: char.appearance,
     appearance_permanent: char.appearancePermanent,
-    appearance_plot_state: char.appearancePlotState,
     personality: char.personality,
     voice_style: char.voiceStyle,
     voice_provider: char.voiceProvider,
@@ -48,7 +46,8 @@ app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
-  for (const key of ['name', 'role', 'description', 'appearance', 'appearancePermanent', 'appearancePlotState', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath']) {
+  // V2 治本 (msg-20261010-001): characters 表 plot_state 列被 DROP, 'appearance' 字段也已被 RENAME → 仅允许 appearancePermanent
+  for (const key of ['name', 'role', 'description', 'appearancePermanent', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath']) {
     const snakeKey = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase())
     if (snakeKey in body) updates[key] = body[snakeKey]
     else if (key in body) updates[key] = body[key]
@@ -104,7 +103,8 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const charDetail = char.appearancePermanent || char.appearance || char.description || ''
+  // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列), 不再 fallback deprecated appearance 列 (已被 RENAME)
+  const charDetail = char.appearancePermanent || char.description || ''
   const personality = char.personality || ''
   const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
     .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
@@ -112,11 +112,13 @@ app.post('/:id/generate-image', async (c) => {
   // 2026-09-23 PM msg-20260923-002 fix #2: 注入角色美学 token (独立维度, 与 stylePreset 解耦)
   const aestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
   // Sprint 5 Task D: face-archive code-side 1-2 条精选 (latest archivedAt DESC)
-  const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
+  // V2 治本 (msg-20261010-001): appearance 列已被 RENAME → DROP, 不再传给 CharacterContext
+  const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent }, 2)
   const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
   if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
   // Sprint 5 Task G: AGE ANCHOR 独立模块 (跟 face-archive 解耦, 三段并列硬拼)
-  const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.appearance || char.description)
+  // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列)
+  const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.description)
   const rawPrompt = [
     char.name,
     charDetail,
@@ -126,8 +128,9 @@ app.post('/:id/generate-image', async (c) => {
     faceArchiveTokens,
     ageAnchorTokens,
     'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
+    // V2 治本 (msg-20261010-001): 移除 'ignore PLOT_STATE' 文字指令 — 数据源头已分 PERMANENT / PLOT_STATE 两列,
+    //   拼接 image_prompt 时只读 character.appearance_permanent, 物理层面不可能再误读 plot_state。
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
-    'split identity into PERMANENT (age/face/body/hair/outfit) vs PLOT_STATE (post-transformation expressions/glowing eyes/grasping props) — render PERMANENT only, ignore PLOT_STATE,',
     'AGE ANCHOR: if a numeric age is mentioned (e.g. "25 years old", "around 30"), pin the character to that exact integer; if vague ("young", "middle-aged"), default to 25-30 for protagonist or elderly for aged roles; do NOT free-render into 50+ when "around 30" is given,',
     'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
     'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
@@ -174,16 +177,18 @@ app.post('/batch-generate-images', async (c) => {
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
-    const charDetail = char.appearancePermanent || char.appearance || char.description || ''
+    // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列), 不再 fallback deprecated appearance 列 (已被 RENAME)
+  const charDetail = char.appearancePermanent || char.description || ''
     const personality = char.personality || ''
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''
     // Sprint 5 Task D: face-archive code-side 1-2 条精选 (batch 路径)
-    const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, appearance: char.appearance }, 2)
+    const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent }, 2)
     const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
     if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
     // Sprint 5 Task G: AGE ANCHOR 独立模块 (batch 路径)
-    const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.appearance || char.description)
+    // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列)
+    const ageAnchorTokens = getAgeAnchorTokens(char.appearancePermanent || char.description)
     const rawPrompt = [
       char.name,
       charDetail,

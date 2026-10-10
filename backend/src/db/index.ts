@@ -432,8 +432,17 @@ ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 
 // 2026-09-24 split appearance: 拆 characters.appearance 为永久外貌 (PERMANENT) + 剧情态变化 (PLOT_STATE)
 // PM msg-20260924-002 — 解决角色立绘 plot 态污染 (dramaId=7 characterId=21 案例)
+// 2026-10-10 V2 治本 (PM msg-20261010-001): 见上方注释, plot_state 从 character 移到 storyboard, characters.appearance_plot_state 列被 manual migration DROP
+// 2026-10-10 V2 治本 (PM msg-20261010-001) — plot_state 归属从 character 移到 storyboard, character 不再存 plot_state
+//   characters.appearance_plot_state 列被 manual migration DROP, ensureColumn 这一行去掉 (no-op 也不能留, 会跟 manual DROP 冲突)
+//   characters.appearance_permanent 列保留 (Sprint 1 已加)
 ensureColumn('characters', 'appearance_permanent', 'TEXT')
-ensureColumn('characters', 'appearance_plot_state', 'TEXT')
+
+// 2026-10-10 V2 治本 (PM msg-20261010-001) — storyboards 加 shot 瞬时剧情态两列
+//   image_prompt_plot_state / video_prompt_plot_state 由 planner agent LLM 在 shot JSON 中填,
+//   拼接 imagePrompt / videoPrompt 时按 permanent + plot_state 两段拼装, 物理隔离防 plot_state 污染 character.appearance_permanent
+ensureColumn('storyboards', 'image_prompt_plot_state', 'TEXT')
+ensureColumn('storyboards', 'video_prompt_plot_state', 'TEXT')
 
 // 2026-09-28 增量: cron_runs 加 outputs 字段 (wrapper 从脚本 log 提 ✓ 路径)
 // 后端启动时 ALTER TABLE 自动加, 已有数据 outputs=NULL

@@ -160,6 +160,10 @@ export function createExtractTools(episodeId: number, dramaId: number) {
   })
 
   // 5. 智能保存角色（按名字去重，与现有数据合并）
+  // V2 治本 (PM msg-20261010-001): plot_state 归属从 character 移到 storyboard。
+  //   character 输入 schema 强制 JSON 分流: permanent_traits (年龄/脸型/发型/体态/气质 等永久外貌特性)
+  //   + permanent_outfit (永久服装/装饰数组)。两个数组拼装后写入 characters.appearance_permanent 列。
+  //   严禁: 反转/狂笑/按下按钮/后期突变/诡异/死亡/灵宠/血契 等 plot_state 关键词。
   const saveDedupCharacters = createTool({
     id: 'save_dedup_characters',
     description: 'Save extracted characters with deduplication. Existing characters (same name) are merged/updated; new ones are created. All are linked to the current episode.',
@@ -168,8 +172,9 @@ export function createExtractTools(episodeId: number, dramaId: number) {
         name: z.string(),
         role: z.string().optional(),
         description: z.string().optional(),
-        appearance: z.string().optional(),
         personality: z.string().optional(),
+        permanent_traits: z.array(z.string()).optional(),
+        permanent_outfit: z.array(z.string()).optional(),
       })),
     }),
     execute: async ({ characters }) => {
@@ -182,6 +187,16 @@ export function createExtractTools(episodeId: number, dramaId: number) {
       })
 
       for (const char of characters) {
+        // V2 治本 (msg-20261010-001): permanent_traits + permanent_outfit 拼装成 appearance_permanent 字符串。
+        //   traits + outfit 是两个数组, 拼装格式 "trait1; trait2; ... | outfit1; outfit2; ..." (section 分隔清晰)。
+        //   如果 LLM 漏填某个数组, fallback: 缺 traits 用现有 appearance_permanent, 缺 outfit 用空数组。
+        const traits = Array.isArray(char.permanent_traits) ? char.permanent_traits.filter(Boolean) : []
+        const outfits = Array.isArray(char.permanent_outfit) ? char.permanent_outfit.filter(Boolean) : []
+        const assembledPermanent = [
+          traits.join(' | '),
+          outfits.join(' | '),
+        ].filter(Boolean).join(' / ')
+
         const existing = db.select().from(schema.characters)
           .where(eq(schema.characters.dramaId, dramaId)).all()
           .filter(c => !c.deletedAt)
@@ -192,7 +207,8 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           db.update(schema.characters).set({
             role: char.role || existing.role,
             description: char.description || existing.description,
-            appearance: char.appearance || existing.appearance,
+            // permanent_traits + permanent_outfit 合并 → appearance_permanent; 老数据未拆时保留老值
+            appearancePermanent: assembledPermanent || existing.appearancePermanent || '',
             personality: char.personality || existing.personality,
             updatedAt: ts,
           }).where(eq(schema.characters.id, existing.id)).run()
@@ -204,7 +220,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
             name: char.name,
             role: char.role || '',
             description: char.description || '',
-            appearance: char.appearance || '',
+            appearancePermanent: assembledPermanent,
             personality: char.personality || '',
             dramaId,
             createdAt: ts,

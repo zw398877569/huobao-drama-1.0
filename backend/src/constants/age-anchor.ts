@@ -9,7 +9,9 @@
  *
  * 兼容性:
  *   - 跟 93e3e81 realistic preset 兼容 (realistic 是画风, AGE ANCHOR 是年龄态视觉)
- *   - 跟 existing prompts 字段兼容 (imagePrompt 三段并列硬拼, 不污染 PERMANENT/PLOT_STATE 拆分)
+ *   - 跟 existing prompts 字段兼容 (imagePrompt 三段并列硬拼, 走 character.appearance_permanent 列)
+ *   - V2 治本 (msg-20261010-001) 后 plot_state 已从 character 表移除, AGE ANCHOR tokens 只读 PERMANENT 列,
+ *     不存在跟 PLOT_STATE 拼接冲突的隐患
  *   - 跟 face-archive tokens 兼容 (两者并列入 imagePrompt 末尾)
  *
  * 注入位置:

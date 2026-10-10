@@ -206,10 +206,20 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     - 主角 / 男主 / 女主 / 反派 / 配角 / 路人 / 旁白
     - 选择标准:本剧戏份权重(对白+动作占比),不是绝对出场次数
 
-  维3【appearance】:外貌描述(分项列举,4-6 个特征)
-    - 格式:"<年龄>岁左右, <脸型>, <发型:长度/颜色/扎发>, <服装:版型/颜色/材质>, <体态>, <气质>"
-    - 例:"25 岁左右,鹅蛋脸,黑色长发披肩,白衬衫+牛仔裤,身形纤细,眼神清澈"
-    - 不要写"漂亮""帅气"等抽象词,用具体特征代替
+  维3【永久外貌】(V2 治本, msg-20261010-001): 必须输出 JSON, 两个数组字段强制分流
+    数据归属: character 只存 PERMANENT (永久特性), 瞬时剧情态 PLOT_STATE 严格禁止写入 character 表。
+    permanent_traits (string[]): 永久外貌特性, 4-6 个具体特征
+      格式: ["<年龄>岁左右", "<脸型>", "<发型:长度/颜色/扎发>", "<体态>", "<气质>", ...]
+      例: ["25岁左右", "鹅蛋脸", "黑色长发披肩", "身形纤细", "眼神清澈"]
+      不要写"漂亮""帅气"等抽象词,用具体特征代替
+    permanent_outfit (string[]): 永久服装/装饰, 2-4 个具体项
+      格式: ["<服装:版型/颜色/材质>", "<配饰>", ...]
+      例: ["白衬衫+牛仔裤", "深蓝色帆布包", "银色耳钉"]
+    严禁 (PERMANENT 列约束):
+      - 反过来 / 反转 / 后期突变 / 狂笑 / 诡异笑意 / 按下按钮 / 奄奄一息 / 死亡 / 血契 / 灵宠 / 魔法灯 等
+        任何带 "剧情态瞬间" 含义的词 (具体剧情只属于 storyboards.image_prompt_plot_state)
+      - 抽象词 (漂亮/帅气/邪恶/温暖/恐怖/阴森 等无拍摄参考价值的描述)
+      - 输出非 JSON 或 字段混合 (例 appearance: "25 岁..." 文本 — 改用 permanent_traits 数组)
 
   维4【personality】:性格(2-3 个核心特质)
     - 格式:"<特质1>, <特质2>, <特质3>"
@@ -222,7 +232,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
   维6【关联强度】(隐式):与其他角色的关系网
     - 不要直接输出字段,但在提取时要考虑:谁和谁是核心关系对
-    - 同角色在不同集出现时,要保持 appearance/personality 一致
+    - 同角色在不同集出现时,要保持 permanent_traits/permanent_outfit/personality 一致 (character.appearance_permanent 列物理约束)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 三、场景 5 维提取框架(每个场景必填)
@@ -303,7 +313,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
   角色提取:
     1) 每个本集角色是否都有 ≥ 4 句台词或 ≥ 1 个关键动作?(原则 1)
-    2) appearance 是否包含 4-6 个具体外貌特征?(维 3)
+    2) permanent_traits 是否包含 4-6 个具体外貌特征?(维 3, V2 治本后不再用单一 appearance 字段)
     3) personality 是否包含 2-3 个具体行为模式?(维 4)
     4) 角色名是否与剧本对白完全一致?(维 1)
 
@@ -501,7 +511,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
   外观(脸型/五官) + 发型(长度/颜色/扎发) + 服装(版型/颜色/材质) + 道具(固定物) + 材质质感(皮肤/布料) + 气质(沉静/文艺/锋利)
 
-  规则:image_prompt / video_prompt 中提到角色时，必须从 character.appearance 复制 6 维描述的关键短语，不要让模型自由生成外貌。空时只保留名字。
+  规则:image_prompt / video_prompt 中提到角色时，必须从 character.appearance_permanent 复制 6 维描述的关键短语，不要让模型自由生成外貌。空时只保留名字。(V2 治本 msg-20261010-001: character 只存永久外貌, plot_state 已移到 storyboards)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 六、场景一致性 6 维(每个 scene 只定一组，全镜沿用)
@@ -1018,8 +1028,8 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
         - 后续剧情高潮时刻的动作/表情/眼神 (例: 开场镜严禁写"复活后眼睛放光、嘴角咧开露出诡异笑意"
           — 那是后续高潮镜的状态,不是开场窗内的瞬时)
         - 后续剧情才出现的道具 (例: 开场镜严禁写"爪子飞快按动按钮" — 按钮是后续高潮镜才出现的)
-        - character.appearance 里夹杂的"剧情态瞬间" (例: 角色 appearance 写"前爪按红色按钮"
-          不算永久外观,首镜严禁默认带入)
+        - character.appearance_permanent 里夹杂的"剧情态瞬间" (例: 角色 appearance_permanent 写"前爪按红色按钮"
+          不算永久外观,首镜严禁默认带入) — V2 治本 (msg-20261010-001) 后 character 已无 plot_state 列, 这条仍是 LLM 自检守则
       **强制**: 想象本镜只占 X 秒,角色在这 X 秒内的"瞬时动作/表情/状态"是什么,只写这个.
       错误反例 (开场镜): "主人低头凝视怀中气息渐弱的狗, 双手缓缓抚上狗毛; 狗狗前爪按在红色按钮,
       嘴角咧开露出诡异笑意" → 前半句是开场窗内的,后半句"按红色按钮/诡异笑意"是后续高潮窗的.
@@ -1076,9 +1086,29 @@ shot_plan 字段说明
    物理合理存在)。无音效显式写 "N/A",禁止留空。
    禁写: 物理不可闻细节 (如"塑料微热膨胀声""布料分子运动声"), H3 会乱生成或完全忽略 (Batch A #6, 2026-09-22)
   bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 节奏/动态变化,H3 官方要求 — 禁止用抽象情绪词),无配乐显式写 "N/A",禁止留空
+  // V2 治本 (msg-20261010-001): plot_state 归属从 character 移到 storyboard, shot JSON 强制分流 permanent + plot_state 4 段
+  image_prompt_permanent (string) — 本镜 image 永久部分 (主人物外貌 + 场景环境, 此镜不变)
+  image_prompt_plot_state (string) — 本镜 image 瞬时剧情态 (此镜独有的动作/表情/物件状态, per-shot episode window)
+  video_prompt_permanent (string) — 本镜 video 永久部分 (场景 + 角色, 此镜不变)
+  video_prompt_plot_state (string) — 本镜 video 瞬时剧情态 (5秒视频窗口内的动作变化)
 
-注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成。
-sound_effect / bgm_prompt 由 planner 直出,code 侧兜底只用 "N/A" — 禁止用 atmosphere 推断(非音乐描述会让 H3 自由发挥产生不可控随机音频)。`,
+注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成 (但 V2 治本后会读 shot JSON 里你填的 permanent + plot_state 4 段拼装, 你必须把这 4 段填好)。
+sound_effect / bgm_prompt 由 planner 直出,code 侧兜底只用 "N/A" — 禁止用 atmosphere 推断(非音乐描述会让 H3 自由发挥产生不可控随机音频)。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PERMANENT / PLOT_STATE 强制拆分 (V2 治本, 2026-10-10)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  原则: 数据归属 — character 是永久静态, storyboard 是瞬时剧情态。
+  你在填上面 4 个新字段时必须严格分流:
+    permanent (此镜不变的部分): 主人物外貌 + 场景 + 服装, 跟 shot N-1 / N+1 的 permanent 段保持人物一致性。
+    plot_state (此镜独有瞬时): 动作变化 / 表情 / 物件状态 / 道具出现消失 / 灯光明灭 / 天气变化。
+  严禁 (per character.appearance_permanent 物理约束):
+    - plot_state 段含 character.appearance_permanent 已经定义的外貌特征 (年龄/脸型/发型/服装)
+    - permanent 段含本镜独有的瞬时动作 (例: permanent 写"角色按按钮" = 错, 应该放进 plot_state)
+  反例 (开场镜):
+    permanent = "主人中年男性穿家居服站在昏暗卧室中央"
+    plot_state = "双手缓缓抚上奄奄一息的黄狗, 表情凝重; 窗外雨声淅沥"
+    (注意: "按按钮/狂笑/反转/诡异笑意" 这些是后续高潮镜的 plot_state, 开场镜严禁默认带入)`,
   },
 }
 

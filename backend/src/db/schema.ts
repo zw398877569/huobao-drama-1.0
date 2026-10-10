@@ -57,9 +57,11 @@ export const characters = sqliteTable('characters', {
   name: text('name').notNull(),
   role: text('role'),
   description: text('description'),
-  appearance: text('appearance'),
+  // 永久外貌 (PERMANENT) — Sprint 1 ADD COLUMN, V2 治本 (msg-20261010-001) 后由 manual migration
+  //   ALTER TABLE characters RENAME COLUMN appearance TO appearance_permanent 对齐列名。
+  //   禁含 plot_state 关键词 (反转/狂笑/按下按钮/后期突变/诡异/死亡/灵宠/血契 等),
+  //   仅允许: age / face / hair / body / outfit / demeanor。
   appearancePermanent: text('appearance_permanent'),
-  appearancePlotState: text('appearance_plot_state'),
   personality: text('personality'),
   voiceStyle: text('voice_style'),
   imageUrl: text('image_url'),
@@ -131,7 +133,13 @@ export const storyboards = sqliteTable('storyboards', {
   result: text('result'),
   atmosphere: text('atmosphere'),
   imagePrompt: text('image_prompt'),
+  // shot 瞬时剧情态 (PLOT_STATE, per-shot episode window) — V2 治本 (msg-20261010-001) 新列。
+  //   拼接 imagePrompt 时跟 LLM 输出的 image_prompt_permanent 段拼装,
+  //   数据隔离后 LLM 不可能再把 plot_state 误塞进 character.appearance_permanent。
+  imagePromptPlotState: text('image_prompt_plot_state'),
   videoPrompt: text('video_prompt'),
+  // shot 视频瞬时剧情态 (PLOT_STATE, 5秒视频窗口内的动作变化)。
+  videoPromptPlotState: text('video_prompt_plot_state'),
   negativePrompt: text('negative_prompt'),
   bgmPrompt: text('bgm_prompt'),
   soundEffect: text('sound_effect'),
