@@ -466,6 +466,12 @@
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
               </button>
+              <!-- V4 wizard (PM msg-20261010-003): 拆 3 步 interactive 模式, 用户能调 shot 数/duration 或改 prompt -->
+              <button class="btn btn-sm" :disabled="rn || wizardLoading" @click="openWizard" title="拆 3 步: planning → details → persist, 每步可调">
+                <Loader2 v-if="wizardLoading" :size="11" class="animate-spin" />
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                分步拆解
+              </button>
             </div>
           </div>
 
@@ -1887,6 +1893,127 @@
       </div>
     </main>
     </div>
+
+    <!-- V4 wizard 3 步 modal (PM msg-20261010-003) -->
+    <Teleport to="body">
+      <div v-if="wizardOpen" class="wizard-overlay" @click.self="closeWizard">
+        <div class="wizard-modal">
+          <header class="wizard-head">
+            <h3 class="wizard-title">分步拆解分镜 (V4)</h3>
+            <div class="wizard-progress">
+              <span :class="['wizard-step', currentStep >= 1 ? 'done' : '', currentStep === 0 ? 'active' : '']">1. 规划</span>
+              <span class="wizard-arrow">→</span>
+              <span :class="['wizard-step', currentStep >= 2 ? 'done' : '', currentStep === 1 ? 'active' : '']">2. 详情</span>
+              <span class="wizard-arrow">→</span>
+              <span :class="['wizard-step', currentStep >= 3 ? 'done' : '', currentStep === 2 ? 'active' : '']">3. 写入</span>
+            </div>
+            <button class="wizard-close" @click="closeWizard" title="关闭">×</button>
+          </header>
+
+          <section class="wizard-body">
+            <!-- Step 1: 规划 -->
+            <template v-if="currentStep === 0 || currentStep === 1">
+              <p class="wizard-tip">step1: LLM 给出本集所有镜头的 shot_plan (scene_id + duration + intent + character_ids)。可调整 shot 数 / duration。</p>
+              <div v-if="currentStep === 0" class="wizard-action">
+                <button class="btn btn-primary" :disabled="wizardLoading" @click="runStep1">
+                  <Loader2 v-if="wizardLoading" :size="12" class="animate-spin" />
+                  开始 step1 (LLM 规划)
+                </button>
+              </div>
+              <div v-else class="wizard-table-wrap">
+                <table class="wizard-table">
+                  <thead>
+                    <tr><th>#</th><th>scene</th><th>duration</th><th>intent</th><th>action</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="shot in step1Plan" :key="shot.shot_number">
+                      <td>{{ shot.shot_number }}</td>
+                      <td>{{ shot.scene_id }}</td>
+                      <td>
+                        <input type="number" min="2" max="15" :value="shot.duration"
+                          @change="updateShotDuration(shot.shot_number, Number(($event.target as HTMLInputElement).value))" />
+                      </td>
+                      <td>{{ shot.intent_function }}</td>
+                      <td>{{ shot.action }}</td>
+                      <td>
+                        <button class="btn btn-sm" @click="wizardRemoveShot(shot.shot_number)">删除</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="wizard-stat">共 {{ step1Plan.length }} 镜, 总时长 {{ wizardTotalDuration }}s</p>
+                <button class="btn btn-sm" @click="wizardAddShot">+ 添加镜头</button>
+                <div class="wizard-actions">
+                  <button class="btn" @click="runStep1" :title="'重跑 step1 LLM'">重跑 step1</button>
+                  <button class="btn btn-primary" :disabled="wizardLoading" @click="runStep2">
+                    <Loader2 v-if="wizardLoading" :size="12" class="animate-spin" />
+                    下一步: step2 (LLM 详情)
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Step 2: 详情 -->
+            <template v-else-if="currentStep === 2">
+              <p class="wizard-tip">step2: LLM 给出每个镜头的 image_prompt_permanent (5 维 enum 结构) + plot_state。可编辑 prompt。</p>
+              <div class="wizard-table-wrap">
+                <table class="wizard-table">
+                  <thead>
+                    <tr><th>#</th><th>image_prompt_permanent (5 维)</th><th>plot_state</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="det in step2Details" :key="det.shot_number">
+                      <td>{{ det.shot_number }}</td>
+                      <td>
+                        <div v-if="det.image_prompt_permanent" class="wizard-perm">
+                          <div v-for="(t, i) in det.image_prompt_permanent.character_traits" :key="i" class="wizard-trait">
+                            <span class="wizard-cat">[{{ t.category }}]</span> {{ t.value }}
+                          </div>
+                          <div class="wizard-meta">
+                            shot: {{ det.image_prompt_permanent.shot_type_ref }} /
+                            angle: {{ det.image_prompt_permanent.angle }} /
+                            movement: {{ det.image_prompt_permanent.movement }}
+                          </div>
+                        </div>
+                        <textarea
+                          class="wizard-prompt-edit"
+                          :value="det.description || ''"
+                          @input="updateDetailPrompt(det.shot_number, 'description', ($event.target as HTMLTextAreaElement).value)"
+                          rows="2"
+                        />
+                      </td>
+                      <td>
+                        <textarea
+                          class="wizard-prompt-edit"
+                          :value="det.image_prompt_plot_state || ''"
+                          @input="updateDetailPrompt(det.shot_number, 'image_prompt_plot_state', ($event.target as HTMLTextAreaElement).value)"
+                          rows="3"
+                        />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="wizard-actions">
+                  <button class="btn" :disabled="wizardLoading" @click="() => runStep2(step1Plan)">重跑 step2</button>
+                  <button class="btn btn-primary" :disabled="wizardLoading" @click="runStep3">
+                    <Loader2 v-if="wizardLoading" :size="12" class="animate-spin" />
+                    下一步: step3 (写入 DB)
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Step 3: 完成 -->
+            <template v-else-if="currentStep === 3">
+              <div class="wizard-done">
+                <p>✓ V4 wizard 3 步完成: 创建 {{ step2Details.length }} 个分镜, 已写入 storyboards 表</p>
+                <button class="btn btn-primary" @click="closeWizard">关闭</button>
+              </div>
+            </template>
+          </section>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1903,6 +2030,7 @@ import { useVideoGeneration } from '~/composables/useVideoGeneration'
 import { useGridTool } from '~/composables/useGridTool'
 import { useStoryboardEdit } from '~/composables/useStoryboardEdit'
 import { useEpisodePipeline } from '~/composables/useEpisodePipeline'
+import { useStoryboardPlanner } from '~/composables/useStoryboardPlanner'
 import { useConfigLoading } from '~/composables/useConfigLoading'
 import { useShotTTS } from '~/composables/useShotTTS'
 import { useEpisodeAgents } from '~/composables/useEpisodeAgents'
@@ -2100,6 +2228,20 @@ const {
   runningType: rt,
   // Sprint 6 Task E — 分镜拆解模型选择传 useEpisodeAgents
   selectedTextConfigId,
+})
+
+// V4 拆 3 步 wizard (PM msg-20261010-003): 新 button '分步拆解' 触发, 老 button 'AI 拆解分镜' 保留走 1 步 auto mode
+const {
+  wizardOpen, currentStep, step1Plan, step2Details, loading: wizardLoading,
+  totalDuration: wizardTotalDuration,
+  openWizard, closeWizard, runStep1, runStep2, runStep3,
+  updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
+  updateDetailPrompt,
+} = useStoryboardPlanner({
+  dramaId: dramaId.value,
+  episodeId: () => epId.value,
+  selectedTextConfigId: () => selectedTextConfigId.value,
+  onComplete: () => { refresh(); closeWizard() },
 })
 
 const regeneratingOne = ref(false)
@@ -4539,4 +4681,34 @@ onMounted(() => { refresh() })
   border-color: var(--accent, #6366f1);
   background: var(--accent-bg, rgba(99, 102, 241, 0.08));
 }
+
+/* V4 wizard styles (PM msg-20261010-003) */
+.wizard-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.wizard-modal { background: #fff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 90vw; max-width: 1200px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; }
+.wizard-head { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; gap: 16px; }
+.wizard-title { margin: 0; font-size: 16px; font-weight: 600; }
+.wizard-progress { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.wizard-step { padding: 4px 12px; border-radius: 14px; background: #f3f4f6; color: #6b7280; font-size: 12px; }
+.wizard-step.active { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
+.wizard-step.done { background: #d1fae5; color: #065f46; }
+.wizard-arrow { color: #9ca3af; }
+.wizard-close { background: none; border: none; font-size: 24px; color: #6b7280; cursor: pointer; padding: 0 8px; }
+.wizard-close:hover { color: #111827; }
+.wizard-body { flex: 1; overflow-y: auto; padding: 20px; }
+.wizard-tip { background: #f9fafb; border-left: 3px solid #3b82f6; padding: 10px 14px; border-radius: 4px; margin: 0 0 16px; color: #4b5563; font-size: 13px; }
+.wizard-action { display: flex; justify-content: center; padding: 40px 0; }
+.wizard-table-wrap { overflow-x: auto; }
+.wizard-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.wizard-table th { background: #f9fafb; padding: 8px; text-align: left; border-bottom: 1px solid #e5e7eb; font-weight: 600; }
+.wizard-table td { padding: 8px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+.wizard-table input[type="number"] { width: 60px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
+.wizard-perm { font-size: 12px; line-height: 1.5; }
+.wizard-trait { padding: 2px 0; }
+.wizard-cat { display: inline-block; min-width: 50px; padding: 1px 6px; background: #e0e7ff; color: #3730a3; border-radius: 3px; font-size: 11px; margin-right: 4px; }
+.wizard-meta { color: #6b7280; font-size: 11px; margin-top: 4px; }
+.wizard-prompt-edit { width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px; font-family: inherit; resize: vertical; box-sizing: border-box; }
+.wizard-stat { margin: 12px 0; color: #4b5563; font-size: 13px; }
+.wizard-actions { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }
+.wizard-done { text-align: center; padding: 40px 20px; }
+.wizard-done p { font-size: 16px; color: #065f46; margin-bottom: 20px; }
 </style>
