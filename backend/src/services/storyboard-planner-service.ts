@@ -30,6 +30,7 @@ import {
   permanentToText,
   V3ImagePromptPermanentSchema,
 } from './llm-schema-validator.js'
+import { stripReasoningBlocks } from './ai.js'
 
 // ─── Planning Data Storage ──────────────────────────────────────────────
 
@@ -168,54 +169,99 @@ async function callLLMJson<T>(
   systemPrompt: string,
   userPrompt: string,
   validator: z.ZodType<T>,
+  opts: { retry?: number; ctx?: Record<string, unknown> } = {},
 ): Promise<T> {
+  // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
+  // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
+  const maxRetries = opts.retry ?? 1
   const url = config.baseUrl.replace(/\/$/, '') + '/v1/chat/completions'
-  let resp: Response
-  try {
-    resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0,
-        max_tokens: 8192,
-        extra_body: { reasoning: { enabled: false } },
-      }),
-      signal: AbortSignal.timeout(180_000),
-    })
-  } catch (err: any) {
-    throw new Error(`LLM HTTP failed: ${err?.message || String(err)}`)
-  }
+  let lastError: Error | null = null
 
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '')
-    throw new Error(`LLM ${resp.status}: ${errText.slice(0, 200)}`)
-  }
-
-  const data = await resp.json() as any
-  const raw = data?.choices?.[0]?.message?.content?.trim() || ''
-  if (!raw) throw new Error('LLM empty response')
-  // 剥 think 块 (跟 ai.ts callTextLLMForPrompt 一致)
-  const cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(cleaned)
-  } catch {
-    const m = cleaned.match(/\{[\s\S]*\}/)
-    if (m) {
-      try { parsed = JSON.parse(m[0]) } catch {}
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let resp: Response
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0,
+          max_tokens: 8192,
+          extra_body: { reasoning: { enabled: false } },
+        }),
+        signal: AbortSignal.timeout(180_000),
+      })
+    } catch (err: any) {
+      throw new Error(`LLM HTTP failed: ${err?.message || String(err)}`)
     }
-    if (!parsed) throw new Error(`LLM response not JSON: ${cleaned.slice(0, 200)}`)
+
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      throw new Error(`LLM ${resp.status}: ${errText.slice(0, 200)}`)
+    }
+
+    const data = await resp.json() as any
+    const message = data?.choices?.[0]?.message || {}
+    // 优先读 content, fallback 到 reasoning_content (MiniMax-M3 / DeepSeek / Anthropic thinking 等)
+    const raw = (message.content ?? message.reasoning_content ?? '').trim()
+    if (!raw) {
+      lastError = new Error('LLM empty response (content + reasoning_content both empty)')
+      logTaskWarn('LLMCall', 'json-parse-empty', {
+        ...opts.ctx, attempt, model: config.model,
+        choiceKeys: Object.keys(data?.choices?.[0] ?? {}),
+        messageKeys: Object.keys(message),
+      })
+      if (attempt < maxRetries) continue
+      throw lastError
+    }
+
+    // 用 stripReasoningBlocks helper (剥 3 种 think/reflection/reasoning 块, 跟 ai.ts 共用一致性)
+    const cleaned = stripReasoningBlocks(raw)
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(cleaned)
+    } catch {
+      // try extract first JSON object
+      const m = cleaned.match(/\{[\s\S]*\}/)
+      if (m) {
+        try { parsed = JSON.parse(m[0]) } catch {}
+      }
+      if (!parsed) {
+        lastError = new Error(`LLM response not JSON: ${cleaned.slice(0, 200)}`)
+        logTaskWarn('LLMCall', 'json-parse-failed', {
+          ...opts.ctx, attempt, model: config.model,
+          rawLen: raw.length, cleanedLen: cleaned.length,
+          rawPreview: raw.slice(0, 200),
+        })
+        if (attempt < maxRetries) continue
+        throw lastError
+      }
+    }
+
+    try {
+      return validator.parse(parsed)
+    } catch (err: any) {
+      lastError = err
+      logTaskWarn('LLMCall', 'zod-validation-failed', {
+        ...opts.ctx, attempt, model: config.model,
+        issueCount: err?.issues?.length ?? 0,
+        firstIssue: err?.issues?.[0],
+      })
+      if (attempt < maxRetries) continue
+      throw err
+    }
   }
-  return validator.parse(parsed)
+
+  throw lastError ?? new Error('LLM call failed (unknown)')
 }
 
 // ─── Step 1: shot_plan ────────────────────────────────────────────────
