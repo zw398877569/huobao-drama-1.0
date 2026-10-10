@@ -438,6 +438,13 @@ ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 //   characters.appearance_permanent 列保留 (Sprint 1 已加)
 ensureColumn('characters', 'appearance_permanent', 'TEXT')
 
+// 2026-10-10 V3 character 治本扩面 (QA msg-20261010-006 ISSUE-023): 加 2 列存结构化 JSON
+//   permanent_traits: 5 维 enum 结构化 JSON (LLM 输出 array of {category, value} 强约束)
+//   permanent_outfit: 服装/装饰自由 string 数组 JSON (限 max 50 字/项, max 10 项)
+// 老 character NULL 兼容 (新链路只对新建 drama 11+ 生效, 老 data 读时 fallback appearancePermanent text)
+ensureColumn('characters', 'permanent_traits', 'TEXT')
+ensureColumn('characters', 'permanent_outfit', 'TEXT')
+
 // 2026-10-10 V2 治本 (PM msg-20261010-001) — storyboards 加 shot 瞬时剧情态两列
 //   image_prompt_plot_state / video_prompt_plot_state 由 planner agent LLM 在 shot JSON 中填,
 //   拼接 imagePrompt / videoPrompt 时按 permanent + plot_state 两段拼装, 物理隔离防 plot_state 污染 character.appearance_permanent

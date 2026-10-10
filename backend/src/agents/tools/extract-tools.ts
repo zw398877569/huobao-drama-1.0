@@ -13,6 +13,12 @@ import { db, schema } from '../../db/index'
 import { eq, and } from 'drizzle-orm'
 import { now } from '../../utils/response'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger'
+import {
+  V3PermanentTraitsSchema,
+  V3PermanentOutfitSchema,
+  salvagePermanentTraits,
+  salvagePermanentOutfit,
+} from '../../services/llm-schema-validator.js'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 function linkCharToEpisode(episodeId: number, characterId: number) {
@@ -173,8 +179,12 @@ export function createExtractTools(episodeId: number, dramaId: number) {
         role: z.string().optional(),
         description: z.string().optional(),
         personality: z.string().optional(),
-        permanent_traits: z.array(z.string()).optional(),
-        permanent_outfit: z.array(z.string()).optional(),
+        // V3 character 治本扩面 (QA msg-20261010-006 ISSUE-023): permanent_traits 强制 5 维 enum 结构化对象
+        //   LLM 输出 array of {category: 'age'|'face'|'hair'|'body'|'outfit', value: string} 强约束
+        //   zod 拒绝任何不在 enum 内的 category, salvagePermanentTraits 兜底移到 description 字段
+        permanent_traits: V3PermanentTraitsSchema.optional(),
+        // permanent_outfit 自由 string 数组, max 50 字/项, max 10 项 (服装/装饰不限 enum)
+        permanent_outfit: V3PermanentOutfitSchema.optional(),
       })),
     }),
     execute: async ({ characters }) => {
@@ -187,15 +197,26 @@ export function createExtractTools(episodeId: number, dramaId: number) {
       })
 
       for (const char of characters) {
-        // V2 治本 (msg-20261010-001): permanent_traits + permanent_outfit 拼装成 appearance_permanent 字符串。
-        //   traits + outfit 是两个数组, 拼装格式 "trait1; trait2; ... | outfit1; outfit2; ..." (section 分隔清晰)。
-        //   如果 LLM 漏填某个数组, fallback: 缺 traits 用现有 appearance_permanent, 缺 outfit 用空数组。
-        const traits = Array.isArray(char.permanent_traits) ? char.permanent_traits.filter(Boolean) : []
-        const outfits = Array.isArray(char.permanent_outfit) ? char.permanent_outfit.filter(Boolean) : []
+        // V3 character 治本扩面 (QA msg-20261010-006 ISSUE-023):
+        //   1. salvagePermanentTraits: 清洗 5 维 enum (LLM 输出 category 不在 enum → 整条移到 description + log)
+        //   2. salvagePermanentOutfit: 限长截断 (max 50 字/项, max 10 项, 多余丢弃)
+        //   3. appearancePermanent text 列保留 V2 拼接格式 (兼容老 data + 现有 image_prompt 注入逻辑)
+        //      拼装格式: "trait_value | outfit | [fallback description]"
+        const { permanent_traits: cleanTraits, fallbackDescription } =
+          salvagePermanentTraits(char.permanent_traits, { dramaId, characterName: char.name })
+        const cleanOutfit = salvagePermanentOutfit(char.permanent_outfit, { dramaId, characterName: char.name })
+        const traitText = cleanTraits.map(t => `${t.category}: ${t.value}`).join(' | ')
+        const outfitText = cleanOutfit.join(' | ')
         const assembledPermanent = [
-          traits.join(' | '),
-          outfits.join(' | '),
+          traitText,
+          outfitText,
+          fallbackDescription ? `[plot_state_fallback]: ${fallbackDescription}` : '',
         ].filter(Boolean).join(' / ')
+
+        // description 字段: 如果 salvage 兜底有内容, 追加 fallback 后 (跟 appearancePermanent 同步)
+        const finalDescription = fallbackDescription
+          ? `${char.description || ''}${char.description ? ' / ' : ''}[plot_state_fallback]: ${fallbackDescription}`.trim()
+          : (char.description || '')
 
         const existing = db.select().from(schema.characters)
           .where(eq(schema.characters.dramaId, dramaId)).all()
@@ -206,8 +227,11 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           // 已存在：合并信息，保留 ID
           db.update(schema.characters).set({
             role: char.role || existing.role,
-            description: char.description || existing.description,
-            // permanent_traits + permanent_outfit 合并 → appearance_permanent; 老数据未拆时保留老值
+            description: finalDescription || existing.description,
+            // V3 5 维 enum 结构化数据持久化 (per-shot 拼接 source of truth)
+            permanentTraits: cleanTraits.length ? JSON.stringify(cleanTraits) : existing.permanentTraits,
+            permanentOutfit: cleanOutfit.length ? JSON.stringify(cleanOutfit) : existing.permanentOutfit,
+            // appearancePermanent text 列继续维护 (兼容老 image_prompt 注入, 不破坏下游消费)
             appearancePermanent: assembledPermanent || existing.appearancePermanent || '',
             personality: char.personality || existing.personality,
             updatedAt: ts,
@@ -219,7 +243,9 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           const res = db.insert(schema.characters).values({
             name: char.name,
             role: char.role || '',
-            description: char.description || '',
+            description: finalDescription,
+            permanentTraits: cleanTraits.length ? JSON.stringify(cleanTraits) : null,
+            permanentOutfit: cleanOutfit.length ? JSON.stringify(cleanOutfit) : null,
             appearancePermanent: assembledPermanent,
             personality: char.personality || '',
             dramaId,

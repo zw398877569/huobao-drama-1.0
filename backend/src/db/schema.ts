@@ -66,6 +66,13 @@ export const characters = sqliteTable('characters', {
   //   禁含 plot_state 关键词 (反转/狂笑/按下按钮/后期突变/诡异/死亡/灵宠/血契 等),
   //   仅允许: age / face / hair / body / outfit / demeanor。
   appearancePermanent: text('appearance_permanent'),
+  // V3 character 治本扩面 (QA msg-20261010-006 ISSUE-023): permanent_traits 5 维 enum 结构化 JSON
+  //   LLM 输出 array of {category: 'age'|'face'|'hair'|'body'|'outfit', value: string}, zod 强约束防 plot_state 混入。
+  //   落库独立列, 后续 SQL 可查具体维度 (跟 storyboards.image_prompt_permanent 同步, 跨剧情通用不需关键词白名单)
+  permanentTraits: text('permanent_traits'),
+  // V3 character 治本扩面 (QA msg-20261010-006 ISSUE-023): permanent_outfit 自由 string 数组 JSON
+  //   服装描述不需 enum (材质/款式/颜色变化多), 但限 max 50 字/项, max 10 项防 prompt 污染
+  permanentOutfit: text('permanent_outfit'),
   personality: text('personality'),
   voiceStyle: text('voice_style'),
   imageUrl: text('image_url'),

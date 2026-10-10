@@ -230,3 +230,111 @@ export function permanentToText(
   if (perm.scene_aesthetic.length) parts.push(perm.scene_aesthetic.join(' '))
   return parts.join('。')
 }
+
+// ─── Character 5 维 enum (ISSUE-023) ─────────────────────────────────────
+
+/**
+ * Permanent trait 单条 schema — 5 维 enum 强约束
+ * 跨剧情通用: age / face / hair / body / outfit
+ */
+export const V3PermanentTraitItemSchema = z.object({
+  category: z.enum(PERMANENT_TRAITS_CATEGORIES),
+  value: z.string().max(50),
+})
+
+/**
+ * permanent_traits 完整 schema — 2-10 项 5 维 enum 结构化数组
+ * 跟 V3ImagePromptPermanentSchema.character_traits 同源, V3 character 治本扩面 (ISSUE-023) 复用
+ */
+export const V3PermanentTraitsSchema = z.array(V3PermanentTraitItemSchema).min(2).max(10)
+
+/**
+ * permanent_outfit 完整 schema — 自由 string 数组, 每项 max 50 字, max 10 项
+ * 服装描述不需 enum (材质/款式/颜色变化多), 但限长防 prompt 污染
+ */
+export const V3PermanentOutfitSchema = z.array(z.string().max(50)).max(10)
+
+/**
+ * permanent_traits salvage — 跟 salvageImagePromptPermanent 同源
+ *
+ * 当 LLM 输出 category 不在 5 维 enum (例如 'clothing/accessory/eyebrows') 或 value 含 plot_state 关键词
+ * (反转/狂笑/按按钮/后期/虚弱 等) 时, 整条移到 description 字段 + logTaskWarn.
+ *
+ * 返回 { permanent_traits: 清洗后 enum 数组, fallbackDescription: 拼接后的 description 追加内容 }
+ */
+export function salvagePermanentTraits(
+  raw: unknown,
+  ctx: { dramaId: number; characterName: string },
+): { permanent_traits: z.infer<typeof V3PermanentTraitsSchema>; fallbackDescription: string } {
+  const fallbackParts: string[] = []
+
+  if (!Array.isArray(raw)) {
+    return { permanent_traits: [], fallbackDescription: '' }
+  }
+
+  const valid: { category: PermanentTraitsCategory; value: string }[] = []
+  for (const t of raw) {
+    if (!t || typeof t !== 'object') continue
+    const item = t as { category?: unknown; value?: unknown }
+    const cat = typeof item.category === 'string' ? item.category : ''
+    const val = typeof item.value === 'string' ? item.value : ''
+    if (!PERMANENT_TRAITS_CATEGORIES.includes(cat as PermanentTraitsCategory)) {
+      // 非法 category → 整条移到 description
+      fallbackParts.push(`[${cat || 'unknown'}]:${val}`.slice(0, 200))
+      continue
+    }
+    if (val.length > 50) {
+      valid.push({ category: cat as PermanentTraitsCategory, value: val.slice(0, 50) })
+    } else {
+      valid.push({ category: cat as PermanentTraitsCategory, value: val })
+    }
+  }
+
+  // 数量上限 10
+  if (valid.length > 10) {
+    const overflow = valid.splice(10)
+    for (const t of overflow) fallbackParts.push(`[${t.category}]:${t.value}`.slice(0, 200))
+  }
+
+  if (fallbackParts.length) {
+    logTaskWarn('LLMSchemaValidator', 'character-permanent-fallback', {
+      dramaId: ctx.dramaId,
+      characterName: ctx.characterName,
+      fallbackContent: fallbackParts.join(' | ').slice(0, 500),
+      severity: 'config_drift',
+      hint: 'V3 character 5 维 enum 外的 category 或 value 自动移到 description 字段, 用户后续可在 UI 调整',
+    })
+  }
+
+  return { permanent_traits: valid, fallbackDescription: fallbackParts.join(' | ').slice(0, 300) }
+}
+
+/**
+ * permanent_outfit salvage — string 数组每项截断到 50 字, max 10 项
+ * outfit 是 free-text 描述不需 enum, 但限长防 prompt 污染
+ */
+export function salvagePermanentOutfit(
+  raw: unknown,
+  ctx: { dramaId: number; characterName: string },
+): string[] {
+  if (!Array.isArray(raw)) return []
+  const valid: string[] = []
+  const overflow: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    if (item.length === 0) continue
+    if (valid.length < 10) {
+      valid.push(item.slice(0, 50))
+    } else {
+      overflow.push(item.slice(0, 50))
+    }
+  }
+  if (overflow.length) {
+    logTaskWarn('LLMSchemaValidator', 'character-outfit-overflow', {
+      dramaId: ctx.dramaId, characterName: ctx.characterName,
+      overflowCount: overflow.length,
+      hint: 'permanent_outfit 超 10 项, 多余的丢弃 (LLM 误生成)',
+    })
+  }
+  return valid
+}
