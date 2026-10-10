@@ -461,17 +461,8 @@
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
                 重新生成本镜头
               </button>
-              <button class="btn btn-sm" :disabled="rn" @click="doBreakdown">
-                <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
-                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
-              </button>
-              <!-- V4 wizard (PM msg-20261010-003): 拆 3 步 interactive 模式, 用户能调 shot 数/duration 或改 prompt -->
-              <button class="btn btn-sm" :disabled="rn || wizardLoading" @click="openWizard" title="拆 3 步: planning → details → persist, 每步可调">
-                <Loader2 v-if="wizardLoading" :size="11" class="animate-spin" />
-                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-                分步拆解
-              </button>
+              <!-- 老 + 新 button 整组已移到主区 (空 state 大 button + split-layout shot-list-head), 用户容易看到
+                   详见 PM msg-20261010-005 wizard button position adjust (QA msg-20261010-005) -->
             </div>
           </div>
 
@@ -483,7 +474,20 @@
                   <div class="shot-list-title">镜头序列</div>
                   <div class="shot-list-sub">按镜头顺序检查内容与素材状态</div>
                 </div>
-                <span class="tag mono">{{ totalDuration }}s</span>
+                <div class="shot-list-actions">
+                  <span class="tag mono">{{ totalDuration }}s</span>
+                  <!-- V4 wizard (PM msg-20261010-005): 主区可发现, 老 + 新 button 同 row -->
+                  <button class="btn btn-sm" :disabled="rn" @click="doBreakdown" title="1 步跑完 (auto mode)">
+                    <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
+                    <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    重新拆解
+                  </button>
+                  <button class="btn btn-sm btn-wizard" :disabled="rn || wizardLoading" @click="openWizard" title="拆 3 步: planning → details → persist, 每步可调">
+                    <Loader2 v-if="wizardLoading" :size="11" class="animate-spin" />
+                    <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    分步拆解
+                  </button>
+                </div>
               </div>
               <div class="shot-list-body">
                 <div
@@ -909,11 +913,19 @@
             <div class="empty-title">将剧本拆解为分镜序列</div>
             <div class="empty-desc">AI 自动分析剧本，生成镜头列表和视频提示词</div>
             <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
-            <button class="btn btn-primary" @click="doBreakdown">
-              <Loader2 v-if="rt === 'storyboard_breaker'" :size="13" class="animate-spin" />
-              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              AI 拆解分镜
-            </button>
+            <div class="empty-actions">
+              <button class="btn btn-primary" @click="doBreakdown">
+                <Loader2 v-if="rt === 'storyboard_breaker'" :size="13" class="animate-spin" />
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                AI 拆解分镜
+              </button>
+              <!-- V4 wizard (PM msg-20261010-005): 老在左, 新在最右, 同 row, 主区大 button 区域 -->
+              <button class="btn btn-primary btn-wizard" :disabled="rn || wizardLoading" @click="openWizard" title="拆 3 步: planning → details → persist, 每步可调">
+                <Loader2 v-if="wizardLoading" :size="13" class="animate-spin" />
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                分步拆解
+              </button>
+            </div>
           </div>
         </div>
 
@@ -4681,6 +4693,12 @@ onMounted(() => { refresh() })
   border-color: var(--accent, #6366f1);
   background: var(--accent-bg, rgba(99, 102, 241, 0.08));
 }
+
+/* V4 wizard button position adjust (PM msg-20261010-005) — 主区老按钮 + 新按钮并排 */
+.empty-actions { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.shot-list-actions { display: flex; align-items: center; gap: 8px; }
+.btn-wizard { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; color: #fff !important; border-color: transparent !important; }
+.btn-wizard:hover { opacity: 0.92; }
 
 /* V4 wizard styles (PM msg-20261010-003) */
 .wizard-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999; }
