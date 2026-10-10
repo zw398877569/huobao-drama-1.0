@@ -13,6 +13,7 @@ import { getCharacterAestheticTokens } from '../../constants/character-aesthetic
 // Import scene intention analysis function and templates
 import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
+import { V3ShotDetailsItemSchema, salvageImagePromptPermanent, permanentToText, V3ImagePromptPermanentSchema } from '../../services/llm-schema-validator.js'
 import { validateEventDensity } from '../../services/prompt-validation'
 import { checkPromptSafety } from '../../services/prompt-safety'
 import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
@@ -683,8 +684,12 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         result: z.string().nullish(),
         atmosphere: z.string().nullish(),
         intent_function: z.string().nullish(),
-        // V2 治本 (PM msg-20261010-001): shot JSON 强制分流 4 段, imagePrompt/videoPrompt 拼接源头不再读 character.appearancePlotState
-        image_prompt_permanent: z.string().nullish(),
+        // V3 治本 (PM msg-20261010-002): image_prompt_permanent 从 string 升级为 5 维 enum 结构化对象
+        //   字段: character_traits: [{category: 'age'|'face'|'hair'|'body'|'outfit', value}],
+        //         scene_aesthetic: [string], shot_type_ref: '全景'|'中景'|'近景'|'特写', angle, movement
+        //   LLM 想写 '深爱豆豆胜过自己' 会因没匹配 enum 被 Mastra zod reject 自动 retry。
+        // image_prompt_plot_state / video_prompt_* 仍是 string (V2 设计的剧情瞬时自由描述)。
+        image_prompt_permanent: V3ImagePromptPermanentSchema.nullish(),
         image_prompt_plot_state: z.string().nullish(),
         video_prompt_permanent: z.string().nullish(),
         video_prompt_plot_state: z.string().nullish(),
@@ -707,8 +712,8 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         result: sp.result ?? '',
         atmosphere: sp.atmosphere ?? '',
         intent_function: sp.intent_function ?? '铺垫',
-        // V2 治本 (msg-20261010-001): 4 段拼接字段默认空 (LLM 漏填时用空字符串, code 拼接仍可从 character/scene 表兜底)
-        image_prompt_permanent: sp.image_prompt_permanent ?? '',
+        // V3 治本 (msg-20261010-002): image_prompt_permanent 默认 null (结构化对象, V2 free-text string 已废弃)
+        image_prompt_permanent: sp.image_prompt_permanent ?? null,
         image_prompt_plot_state: sp.image_prompt_plot_state ?? '',
         video_prompt_permanent: sp.video_prompt_permanent ?? '',
         video_prompt_plot_state: sp.video_prompt_plot_state ?? '',
@@ -944,8 +949,8 @@ export async function runGenerateShotPrompts(params: {
     // 修:planner 之前不输出这两字段,音效/配乐段只能 'none' 兜底 — 现在 planner 直出,code 侧优先用
     sound_effect?: string
     bgm_prompt?: string
-    // V2 治本 (PM msg-20261010-001): LLM 在 shot JSON 中强制分流 permanent + plot_state 4 段
-    image_prompt_permanent?: string
+    // V3 治本 (PM msg-20261010-002): image_prompt_permanent 改为 5 维 enum 结构化对象 (V2 free-text string 已废弃)
+    image_prompt_permanent?: z.infer<typeof V3ImagePromptPermanentSchema> | null
     image_prompt_plot_state?: string
     video_prompt_permanent?: string
     video_prompt_plot_state?: string
@@ -1173,12 +1178,15 @@ export async function runGenerateShotPrompts(params: {
     const sceneLight = scene?.prompt
       ? `场景:${scene.location}${scene.time}，${scene.prompt}`
       : `地点:${sp.location}，时间:${sp.time}`
-    // V2 治本: imagePrompt 拼接顺序 — 角色永久外貌 + 场景环境 + LLM 输出的 permanent 段 + LLM 输出的 plot_state 段
-    //   sp.image_prompt_permanent 是 LLM 决定的"哪些是本镜不变的" (semantic 判断)
-    //   sp.image_prompt_plot_state 是 LLM 决定的"本镜瞬时动作/表情/物件" (per-shot episode window)
-    const llmPermanent = sp.image_prompt_permanent?.trim() || ''
-    const llmPlotState = sp.image_prompt_plot_state?.trim() || ''
-    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${llmPermanent}${llmPermanent ? '。' : ''}${sp.description}。${llmPlotState}${llmPlotState ? '。' : ''}${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
+    // V3 治本 (PM msg-20261010-002): imagePrompt 拼接顺序 — 角色永久外貌 + 场景环境 +
+    //   LLM 输出的 5 维 enum 结构化对象 (salvageImagePromptPermanent 清洗 enum 边界外的字符) +
+    //   LLM 输出的 plot_state 段 (V2 free-text string) +
+    //   V3 fallback 时 salvage 移到 plot_state 的内容 (拼到 llmPlotState 后面)
+    const { imagePromptPermanent: cleanedPermanent, plotState: salvagePlotState } =
+      salvageImagePromptPermanent(sp.image_prompt_permanent, { episodeId, shotNumber: sp.shot_number })
+    const llmPermanentText = cleanedPermanent ? permanentToText(cleanedPermanent) : ''
+    const llmPlotState = `${sp.image_prompt_plot_state?.trim() || ''}${salvagePlotState ? (sp.image_prompt_plot_state ? ' | ' : '') + salvagePlotState : ''}`
+    const imagePrompt = `${charDesc}。${sceneImgRef}${sceneLight}。${llmPermanentText}${llmPermanentText ? '。' : ''}${sp.description}。${llmPlotState}${llmPlotState ? '。' : ''}${stylePreset.positiveShotTokens}，${sp.atmosphere || ''}，${h3ImageHint}no text, no watermark`
 
     // H3 三段式 video_prompt 构造(对齐 backend/src/agents/index.ts storyboard_breaker DEFAULT_PROMPTS):
     //   1) Integrated multimodal description + 5D(景别/焦距/运镜/景深/视角) + 时间戳 <n>X-Ys</n>(s 缩写)
@@ -1267,6 +1275,9 @@ export async function runGenerateShotPrompts(params: {
       // V2 治本 (msg-20261010-001): shot 瞬时剧情态单独存, 拼接源头已分 PERMANENT + PLOT_STATE 两段
       imagePromptPlotState: llmPlotState || null,
       videoPromptPlotState: vidPlotState || null,
+      // V3 治本 (msg-20261010-002): image_prompt_permanent 列存结构化 5 维 enum JSON
+      //   老 shot NULL 兼容 (V3 起的 shot 才写); 老 column imagePrompt 仍存拼好的 string 向后兼容
+      imagePromptPermanent: cleanedPermanent ? JSON.stringify(cleanedPermanent) : null,
       bgmPrompt: music,
       soundEffect: soundscape,
       sceneId: sp.scene_id,

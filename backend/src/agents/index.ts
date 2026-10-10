@@ -1087,10 +1087,39 @@ shot_plan 字段说明
    禁写: 物理不可闻细节 (如"塑料微热膨胀声""布料分子运动声"), H3 会乱生成或完全忽略 (Batch A #6, 2026-09-22)
   bgm_prompt (string) — 该镜 Non-diegetic 配乐描述(配器 + 起止时间 + 节奏/动态变化,H3 官方要求 — 禁止用抽象情绪词),无配乐显式写 "N/A",禁止留空
   // V2 治本 (msg-20261010-001): plot_state 归属从 character 移到 storyboard, shot JSON 强制分流 permanent + plot_state 4 段
-  image_prompt_permanent (string) — 本镜 image 永久部分 (主人物外貌 + 场景环境, 此镜不变)
+  // V3 治本 (msg-20261010-002): image_prompt_permanent 从 string 升级为 5 维 enum 结构化对象
+  image_prompt_permanent (object) — 本镜 image 永久部分, 严格 5 维 enum 结构化 JSON:
+    {
+      "character_traits": [{"category": "age"|"face"|"hair"|"body"|"outfit", "value": "具体描述"}],
+      "scene_aesthetic": ["现代", "室内", "暖光"],   // 0-5 项, 不限 enum
+      "shot_type_ref": "全景"|"中景"|"近景"|"特写",
+      "angle": "平视"|"仰视"|"俯视"|...,
+      "movement": "固定"|"推镜"|"拉镜"|"摇镜"|...
+    }
+    跨剧情通用: 5 维 enum 是永久外貌的完整刻画, 不接受 'clothing/accessory/eyebrows/skin_tone' 扩展维度,
+    后端 zod 会 reject 任何不在 enum 内的 category, 超出内容自动 salvage 到 plot_state 字段 + logTaskWarn。
   image_prompt_plot_state (string) — 本镜 image 瞬时剧情态 (此镜独有的动作/表情/物件状态, per-shot episode window)
-  video_prompt_permanent (string) — 本镜 video 永久部分 (场景 + 角色, 此镜不变)
+  video_prompt_permanent (string) — 本镜 video 永久部分 (场景 + 角色, 此镜不变), V3 暂未 enum 化, 仍 free-text
   video_prompt_plot_state (string) — 本镜 video 瞬时剧情态 (5秒视频窗口内的动作变化)
+
+  // V3 few-shot 正反例对比 (跨剧情通用):
+  // 错误示例 (V2 软约束, LLM 容易塞 plot_state 进 character):
+  //   image_prompt_permanent: "主人深爱豆豆胜过自己, 愿意用寿命换狗的命"
+  //   → 整段作为 character trait value 写进 age/face 等, 物理上不可能, zod reject → salvage → plot_state
+  // 正确示例 (V3 5 维 enum 结构):
+  //   image_prompt_permanent: {
+  //     "character_traits": [
+  //       {"category": "age", "value": "35岁左右"},
+  //       {"category": "face", "value": "长方脸, 下颌线柔和"},
+  //       {"category": "hair", "value": "短发凌乱贴在额前"},
+  //       {"category": "body", "value": "中等偏瘦身材"},
+  //       {"category": "outfit", "value": "灰色旧夹克内搭褪色白 T 恤"}
+  //     ],
+  //     "scene_aesthetic": ["现代", "室内", "暖光"],
+  //     "shot_type_ref": "中景",
+  //     "angle": "平视",
+  //     "movement": "推镜"
+  //   }
 
 注意：不要生成 image_prompt / video_prompt / negative_prompt — 这 3 个由 code 侧 generate_shot_prompts 按 H3 三段式自动生成 (但 V2 治本后会读 shot JSON 里你填的 permanent + plot_state 4 段拼装, 你必须把这 4 段填好)。
 sound_effect / bgm_prompt 由 planner 直出,code 侧兜底只用 "N/A" — 禁止用 atmosphere 推断(非音乐描述会让 H3 自由发挥产生不可控随机音频)。
