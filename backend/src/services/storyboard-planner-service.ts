@@ -379,7 +379,7 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
   return result
 }
 
-// ─── Step 3: persist (Task A basic — DELETE + INSERT + link; Task B 加 zod + transaction) ─
+// ─── Step 3: persist (V4 治本: V3 zod 再校验 + DB 事务, 防 step2→step3 数据漂移) ─────────
 
 export async function runStep3(opts: {
   dramaId: number
@@ -393,87 +393,114 @@ export async function runStep3(opts: {
   const details = shotDetailsOverride || planningData.step2_details
   if (!details || !details.length) throw new Error('No step2 details found, run step2 first')
 
-  // DELETE old storyboards + storyboard_characters (V4 schema 没 FK cascade, 手动两表清)
-  const existingIds = db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId)).all()
-    .map(sb => sb.id)
-  for (const id of existingIds) {
-    db.delete(schema.storyboardCharacters)
-      .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
+  // Task B (PM msg-20261010-003 task_B): 用 V3 zod 再次校验 (防 step2→step3 之间数据被改 / wizard 模式下用户编辑过的 details override)
+  //   失败 throw 出去, 不进 DB 事务, 主流程返回 4xx
+  const revalidated = z.array(ShotDetailsItemSchema).safeParse(details)
+  if (!revalidated.success) {
+    logTaskWarn('StoryboardPlanner', 'step3-zod-revalidation-failed', {
+      episodeId,
+      issueCount: revalidated.error.issues.length,
+      firstIssue: revalidated.error.issues[0],
+    })
+    throw new Error(`step3 zod 校验失败: ${revalidated.error.issues[0]?.message || 'unknown'}`)
   }
-  if (existingIds.length) {
-    db.delete(schema.storyboards)
-      .where(eq(schema.storyboards.episodeId, episodeId)).run()
-  }
-  logTaskProgress('StoryboardPlanner', 'step3-cleared', {
-    episodeId, clearedCount: existingIds.length,
-  })
+  const validatedDetails = revalidated.data
 
-  // INSERT new storyboards (Task A basic; Task B 加 V3 zod 再校验 + DB 事务)
-  const createdStoryboardIds: number[] = []
-  for (const det of details) {
-    // V3 salvage: enum 边界外的字符自动移到 plot_state + log warn
+  // 准备 INSERT values (含 V3 salvage 清洗 + imagePrompt 拼接), 放进 DB 事务里
+  const insertPayloads = validatedDetails.map((det) => {
     const cleaned = salvageImagePromptPermanent(det.image_prompt_permanent, {
       episodeId, shotNumber: det.shot_number,
     })
-
-    // 拼接 imagePrompt 文本 (跟 V2 runGenerateShotPrompts 公式兼容)
     const permanentText = cleaned.imagePromptPermanent
       ? permanentToText(cleaned.imagePromptPermanent)
       : ''
     const plotStateText = `${det.image_prompt_plot_state?.trim() || ''}${cleaned.plotState ? (det.image_prompt_plot_state ? ' | ' : '') + cleaned.plotState : ''}`
-
-    const insertValues: any = {
-      episodeId,
-      storyboardNumber: det.shot_number,
-      title: `镜头#${det.shot_number}`,
-      shotType: det.shot_type || '',
-      angle: det.angle || '',
-      movement: det.movement || '',
-      location: det.location || '',
-      time: det.time || '',
-      action: det.action || '',
-      dialogue: det.dialogue || '',
-      description: det.description || '',
-      result: det.result || '',
-      atmosphere: det.atmosphere || '',
-      // imagePrompt 拼接: permanent + description + plot_state (跟 V2 公式简化版)
-      imagePrompt: [
-        permanentText,
-        det.description || '',
-        plotStateText,
-      ].filter(Boolean).join('。'),
-      videoPrompt: det.video_prompt_permanent || '',
-      // V2 治本: shot 瞬时剧情态单独存
-      imagePromptPlotState: plotStateText || null,
-      videoPromptPlotState: det.video_prompt_plot_state || null,
-      // V3 治本: image_prompt_permanent 列存结构化 5 维 enum JSON (老 shot NULL 兼容)
-      imagePromptPermanent: cleaned.imagePromptPermanent
-        ? JSON.stringify(cleaned.imagePromptPermanent)
-        : null,
-      sceneId: det.scene_id || null,
-      duration: det.duration || 10,
-      createdAt: now(),
-      updatedAt: now(),
+    return {
+      shot_number: det.shot_number,
+      insertValues: {
+        episodeId,
+        storyboardNumber: det.shot_number,
+        title: `镜头#${det.shot_number}`,
+        shotType: det.shot_type || '',
+        angle: det.angle || '',
+        movement: det.movement || '',
+        location: det.location || '',
+        time: det.time || '',
+        action: det.action || '',
+        dialogue: det.dialogue || '',
+        description: det.description || '',
+        result: det.result || '',
+        atmosphere: det.atmosphere || '',
+        imagePrompt: [
+          permanentText,
+          det.description || '',
+          plotStateText,
+        ].filter(Boolean).join('。'),
+        videoPrompt: det.video_prompt_permanent || '',
+        imagePromptPlotState: plotStateText || null,
+        videoPromptPlotState: det.video_prompt_plot_state || null,
+        imagePromptPermanent: cleaned.imagePromptPermanent
+          ? JSON.stringify(cleaned.imagePromptPermanent)
+          : null,
+        sceneId: det.scene_id || null,
+        duration: det.duration || 10,
+        createdAt: now(),
+        updatedAt: now(),
+      },
+      characterIds: det.character_ids || [],
     }
-    const res = db.insert(schema.storyboards).values(insertValues).run()
-    const storyboardId = Number(res.lastInsertRowid)
-    createdStoryboardIds.push(storyboardId)
+  })
 
-    // link storyboard_characters 中间表
-    if (det.character_ids && det.character_ids.length) {
-      for (const charId of det.character_ids) {
-        db.insert(schema.storyboardCharacters).values({ storyboardId, characterId: charId }).run()
+  // Task B: DB 事务包裹 DELETE + INSERT + link. 任一 INSERT 失败回滚, episodes.planning_data.step3_done_at 不更新.
+  const createdStoryboardIds: number[] = []
+  let clearedCount = 0
+  try {
+    db.transaction((tx) => {
+      // DELETE 老 storyboards + storyboard_characters (V4 schema 没 FK cascade, 手动两表清)
+      const existingIds = tx.select({ id: schema.storyboards.id })
+        .from(schema.storyboards)
+        .where(eq(schema.storyboards.episodeId, episodeId))
+        .all()
+        .map(r => r.id)
+      for (const id of existingIds) {
+        tx.delete(schema.storyboardCharacters)
+          .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
       }
-    }
+      if (existingIds.length) {
+        tx.delete(schema.storyboards)
+          .where(eq(schema.storyboards.episodeId, episodeId)).run()
+      }
+      clearedCount = existingIds.length
+
+      // INSERT 新 storyboards
+      for (const payload of insertPayloads) {
+        const res = tx.insert(schema.storyboards).values(payload.insertValues).run()
+        const storyboardId = Number(res.lastInsertRowid)
+        createdStoryboardIds.push(storyboardId)
+        for (const charId of payload.characterIds) {
+          tx.insert(schema.storyboardCharacters).values({ storyboardId, characterId: charId }).run()
+        }
+      }
+    })
+  } catch (err: any) {
+    // 事务已自动回滚 (better-sqlite3 throw → ROLLBACK), 这里只记日志 + 抛给上层
+    logTaskWarn('StoryboardPlanner', 'step3-transaction-failed', {
+      episodeId,
+      clearedCount,
+      payloadCount: insertPayloads.length,
+      error: err?.message || String(err),
+      hint: '事务已 ROLLBACK, episodes.planning_data.step3_done_at 未更新, 用户可重试 step3',
+    })
+    throw err
   }
 
+  logTaskProgress('StoryboardPlanner', 'step3-cleared', { episodeId, clearedCount })
   await savePlanningData(episodeId, {
     step3_done_at: now(),
     step3_storyboard_ids: createdStoryboardIds,
   })
   logTaskSuccess('StoryboardPlanner', 'step3-done', {
-    episodeId, createdCount: createdStoryboardIds.length,
+    episodeId, clearedCount, createdCount: createdStoryboardIds.length,
   })
   return { createdStoryboardIds }
 }
