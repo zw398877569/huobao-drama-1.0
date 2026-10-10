@@ -247,7 +247,8 @@
                       <div class="extract-name">{{ c.name }}</div>
                       <span class="tag">{{ c.role || '角色' }}</span>
                     </div>
-                    <div class="extract-meta wrap">{{ c.description || c.appearance || c.personality || '暂无描述' }}</div>
+                    <!-- V2 治本 (msg-20261010-001): c.appearance 列已 DROP, 改读 appearance_permanent (snake/camel 双兼容) -->
+                    <div class="extract-meta wrap">{{ c.description || (c as any).appearance_permanent || c.appearancePermanent || c.personality || '暂无描述' }}</div>
                   </div>
                 </div>
               </div>
@@ -391,7 +392,7 @@
                 </div>
 
                 <div class="voice-card-copy">
-                  <div class="voice-card-text">{{ c.description || c.personality || c.appearance || '暂无角色描述，可根据人物定位手动挑选音色。' }}</div>
+                  <div class="voice-card-text">{{ c.description || c.personality || (c as any).appearance_permanent || c.appearancePermanent || '暂无角色描述，可根据人物定位手动挑选音色。' }}</div>
                 </div>
 
                 <div class="voice-select-block">

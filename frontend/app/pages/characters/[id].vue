@@ -1,6 +1,7 @@
 <!--
   /characters/[id] — 角色编辑页 (2026-09-24 PM msg-20260924-002 task_D)
-  - 加载角色 → 编辑外貌 (PERMANENT + PLOT_STATE) → 保存
+  - 加载角色 → 编辑外貌 (PERMANENT) → 保存
+  - 2026-10-10 PM msg-20261010-001 (V2 治本) — plot_state 编辑器从 character 编辑页下架 (移到 per-shot storyboard 级别)
   - 校验失败禁用保存按钮 (CharacterAppearanceEditor 暴露 validityChange)
   - 不动的字段: 暂不暴露 voice/role 等, 后续按角色管理需求扩展
 -->
@@ -17,10 +18,9 @@ const loading = ref(true)
 const saving = ref(false)
 const isValid = ref(false)
 const character = ref<any>(null)
-const appearanceData = ref<{ appearancePermanent: string; appearancePlotState: string; appearance: string }>({
+// V2 治本 (msg-20261010-001): character 只存 PERMANENT, 不再有 appearancePlotState / appearance 字段
+const appearanceData = ref<{ appearancePermanent: string }>({
   appearancePermanent: '',
-  appearancePlotState: '',
-  appearance: '',
 })
 
 const loadCharacter = async () => {
@@ -30,8 +30,6 @@ const loadCharacter = async () => {
     character.value = data
     appearanceData.value = {
       appearancePermanent: data.appearance_permanent || '',
-      appearancePlotState: data.appearance_plot_state || '',
-      appearance: data.appearance || '',
     }
   } catch (err: any) {
     toast.error(err?.message || '加载角色失败')
@@ -40,7 +38,7 @@ const loadCharacter = async () => {
   }
 }
 
-const onUpdateAppearance = (val: { appearancePermanent: string; appearancePlotState: string; appearance: string }) => {
+const onUpdateAppearance = (val: { appearancePermanent: string }) => {
   appearanceData.value = val
 }
 
@@ -54,10 +52,9 @@ const save = async () => {
   if (!canSave.value) return
   saving.value = true
   try {
+    // V2 治本 (msg-20261010-001): 只 PUT appearance_permanent, 不再同步 appearance_plot_state / appearance
     await characterAPI.update(characterId, {
       appearance_permanent: appearanceData.value.appearancePermanent,
-      appearance_plot_state: appearanceData.value.appearancePlotState,
-      appearance: appearanceData.value.appearancePermanent, // deprecated 同步, 兼容老前端读 .appearance
     })
     toast.success('角色外貌已保存')
   } catch (err: any) {

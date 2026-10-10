@@ -80,7 +80,8 @@ export function useImageGeneration(deps: Deps) {
         kind: 'character',
         label: `${char.name}角色形象`,
         characterName: char.name,
-        characterAppearance: (char.appearance || char.description || '').trim(),
+        // V2 治本 (msg-20261010-001): characters.appearance 列被 DROP, 改读 appearance_permanent (snake/camel 双兼容)
+        characterAppearance: ((char as any).appearance_permanent || char.appearancePermanent || char.description || '').trim(),
       })
     }
 

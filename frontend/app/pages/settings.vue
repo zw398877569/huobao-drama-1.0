@@ -825,7 +825,7 @@ const defaultPrompts = {
 
   外观(脸型/五官) + 发型(长度/颜色/扎发) + 服装(版型/颜色/材质) + 道具(固定物) + 材质质感(皮肤/布料) + 气质(沉静/文艺/锋利)
 
-  规则:image_prompt / video_prompt 中提到角色时，必须从 character.appearance 复制 6 维描述的关键短语，不要让模型自由生成外貌。空时只保留名字。
+  规则:image_prompt / video_prompt 中提到角色时，必须从 character.appearance_permanent 复制 6 维描述的关键短语，不要让模型自由生成外貌。空时只保留名字。(V2 治本 msg-20261010-001: character 只存永久外貌, plot_state 已移到 storyboards)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 六、场景一致性 6 维(每个 scene 只定一组，全镜沿用)
