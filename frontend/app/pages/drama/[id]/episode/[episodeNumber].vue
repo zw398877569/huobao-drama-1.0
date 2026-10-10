@@ -1911,13 +1911,35 @@
       <div v-if="wizardOpen" class="wizard-overlay" @click.self="closeWizard">
         <div class="wizard-modal">
           <header class="wizard-head">
-            <h3 class="wizard-title">分步拆解分镜 (V4)</h3>
+            <h3 class="wizard-title">
+              分步拆解分镜 (V4)
+              <span v-if="stepStatus[1] === 'done'" class="wizard-title-msg">— 🎉 step1 完成! 现在调整 shot_plan 或继续 step2</span>
+              <span v-else-if="stepStatus[2] === 'done'" class="wizard-title-msg">— 🎉 step2 完成! 检查 prompt 或继续 step3</span>
+            </h3>
             <div class="wizard-progress">
-              <span :class="['wizard-step', currentStep >= 1 ? 'done' : '', currentStep === 0 ? 'active' : '']">1. 规划</span>
+              <span :class="['wizard-step', stepStatus[1]]">
+                <Loader2 v-if="stepStatus[1] === 'running'" :size="13" class="animate-spin" />
+                <svg v-else-if="stepStatus[1] === 'done'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg v-else-if="stepStatus[1] === 'error'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/></svg>
+                1. 规划
+              </span>
               <span class="wizard-arrow">→</span>
-              <span :class="['wizard-step', currentStep >= 2 ? 'done' : '', currentStep === 1 ? 'active' : '']">2. 详情</span>
+              <span :class="['wizard-step', stepStatus[2]]">
+                <Loader2 v-if="stepStatus[2] === 'running'" :size="13" class="animate-spin" />
+                <svg v-else-if="stepStatus[2] === 'done'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg v-else-if="stepStatus[2] === 'error'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/></svg>
+                2. 详情
+              </span>
               <span class="wizard-arrow">→</span>
-              <span :class="['wizard-step', currentStep >= 3 ? 'done' : '', currentStep === 2 ? 'active' : '']">3. 写入</span>
+              <span :class="['wizard-step', stepStatus[3]]">
+                <Loader2 v-if="stepStatus[3] === 'running'" :size="13" class="animate-spin" />
+                <svg v-else-if="stepStatus[3] === 'done'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg v-else-if="stepStatus[3] === 'error'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/></svg>
+                3. 写入
+              </span>
             </div>
             <button class="wizard-close" @click="closeWizard" title="关闭">×</button>
           </header>
@@ -1926,6 +1948,16 @@
             <!-- Step 1: 规划 -->
             <template v-if="currentStep === 0 || currentStep === 1">
               <p class="wizard-tip">step1: LLM 给出本集所有镜头的 shot_plan (scene_id + duration + intent + character_ids)。可调整 shot 数 / duration。</p>
+              <!-- QA msg-20261010-008 ISSUE-B: modal 内联 status banner (不只 toast), running 蓝 / done 绿 / error 红 -->
+              <div v-if="stepStatus[1] === 'running'" class="wizard-status wizard-status-running">
+                <Loader2 :size="16" class="animate-spin" />
+                <span>正在执行 step1 (LLM 规划)... 大约 30-60 秒</span>
+              </div>
+              <div v-else-if="stepStatus[1] === 'error'" class="wizard-status wizard-status-error">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span>step1 失败: {{ error }}</span>
+                <button class="btn btn-sm" @click="runStep1">重试</button>
+              </div>
               <div v-if="currentStep === 0" class="wizard-action">
                 <button class="btn btn-primary" :disabled="wizardLoading" @click="runStep1">
                   <Loader2 v-if="wizardLoading" :size="12" class="animate-spin" />
@@ -1968,6 +2000,15 @@
             <!-- Step 2: 详情 -->
             <template v-else-if="currentStep === 2">
               <p class="wizard-tip">step2: LLM 给出每个镜头的 image_prompt_permanent (5 维 enum 结构) + plot_state。可编辑 prompt。</p>
+              <div v-if="stepStatus[2] === 'running'" class="wizard-status wizard-status-running">
+                <Loader2 :size="16" class="animate-spin" />
+                <span>正在执行 step2 (LLM 详情)... 大约 30-60 秒</span>
+              </div>
+              <div v-else-if="stepStatus[2] === 'error'" class="wizard-status wizard-status-error">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span>step2 失败: {{ error }}</span>
+                <button class="btn btn-sm" @click="runStep2()">重试</button>
+              </div>
               <div class="wizard-table-wrap">
                 <table class="wizard-table">
                   <thead>
@@ -2017,7 +2058,16 @@
 
             <!-- Step 3: 完成 -->
             <template v-else-if="currentStep === 3">
-              <div class="wizard-done">
+              <div v-if="stepStatus[3] === 'running'" class="wizard-status wizard-status-running">
+                <Loader2 :size="16" class="animate-spin" />
+                <span>正在执行 step3 (持久化 + DB 事务)... 大约 5-15 秒</span>
+              </div>
+              <div v-else-if="stepStatus[3] === 'error'" class="wizard-status wizard-status-error">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <span>step3 失败: {{ error }}</span>
+                <button class="btn btn-sm" @click="runStep3">重试</button>
+              </div>
+              <div v-else class="wizard-done">
                 <p>✓ V4 wizard 3 步完成: 创建 {{ step2Details.length }} 个分镜, 已写入 storyboards 表</p>
                 <button class="btn btn-primary" @click="closeWizard">关闭</button>
               </div>
@@ -2243,8 +2293,9 @@ const {
 })
 
 // V4 拆 3 步 wizard (PM msg-20261010-003): 新 button '分步拆解' 触发, 老 button 'AI 拆解分镜' 保留走 1 步 auto mode
+// QA msg-20261010-008 ISSUE-A: wizardLoading / stepStatus 直接导出, page 端不再 destructure rename
 const {
-  wizardOpen, currentStep, step1Plan, step2Details, loading: wizardLoading,
+  wizardOpen, currentStep, step1Plan, step2Details, wizardLoading, stepStatus,
   totalDuration: wizardTotalDuration,
   openWizard, closeWizard, runStep1, runStep2, runStep3,
   updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
@@ -4707,9 +4758,20 @@ onMounted(() => { refresh() })
 .wizard-title { margin: 0; font-size: 16px; font-weight: 600; }
 .wizard-progress { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .wizard-step { padding: 4px 12px; border-radius: 14px; background: #f3f4f6; color: #6b7280; font-size: 12px; }
+.wizard-step { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 14px; background: #f3f4f6; color: #6b7280; font-size: 12px; }
 .wizard-step.active { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
 .wizard-step.done { background: #d1fae5; color: #065f46; }
+.wizard-step.running { background: #dbeafe; color: #1d4ed8; font-weight: 600; }
+.wizard-step.error { background: #fee2e2; color: #991b1b; font-weight: 600; }
 .wizard-arrow { color: #9ca3af; }
+/* QA msg-20261010-008 ISSUE-B: modal 内联 status banner (不只 toast), running/done/error 视觉区分 */
+.wizard-status { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; font-weight: 500; font-size: 14px; }
+.wizard-status-running { background: #dbeafe; color: #1e40af; }
+.wizard-status-done { background: #dcfce7; color: #166534; }
+.wizard-status-error { background: #fee2e2; color: #991b1b; }
+.wizard-status-error button { margin-left: auto; }
+/* QA msg-20261010-008 ISSUE-C: modal 标题区 step 完成提示文字 */
+.wizard-title-msg { font-size: 13px; font-weight: 400; color: #059669; }
 .wizard-close { background: none; border: none; font-size: 24px; color: #6b7280; cursor: pointer; padding: 0 8px; }
 .wizard-close:hover { color: #111827; }
 .wizard-body { flex: 1; overflow-y: auto; padding: 20px; }

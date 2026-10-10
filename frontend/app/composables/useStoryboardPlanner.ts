@@ -63,13 +63,21 @@ export function useStoryboardPlanner(opts: {
   selectedTextConfigId?: () => string | null
   onComplete?: () => void
 }) {
-  // reactive state
+  // reactive state (QA msg-20261010-008 ISSUE-A: 重命名 loading → wizardLoading 直接导出,
+  //   避免 page 端 destructure 时 rename 丢失 reactivity)
   const wizardOpen = ref(false)
   const currentStep = ref<0 | 1 | 2 | 3>(0)
   const step1Plan = ref<ShotPlanItem[]>([])
   const step2Details = ref<ShotDetailsItem[]>([])
-  const loading = ref(false)
+  const wizardLoading = ref(false)
   const error = ref<string | null>(null)
+  // QA msg-20261010-008 ISSUE-B: 每步状态机, 给 progress bar + modal status banner 用
+  //   'pending' (初始) / 'running' (跑中) / 'done' (完成) / 'error' (失败)
+  const stepStatus = ref<{ 1: 'pending' | 'running' | 'done' | 'error'; 2: 'pending' | 'running' | 'done' | 'error'; 3: 'pending' | 'running' | 'done' | 'error' }>({
+    1: 'pending',
+    2: 'pending',
+    3: 'pending',
+  })
   const totalDuration = computed(() =>
     step1Plan.value.reduce((s, p) => s + (p.duration || 0), 0),
   )
@@ -91,8 +99,9 @@ export function useStoryboardPlanner(opts: {
     currentStep.value = 0
     step1Plan.value = []
     step2Details.value = []
+    wizardLoading.value = false
     error.value = null
-    loading.value = false
+    stepStatus.value = { 1: 'pending', 2: 'pending', 3: 'pending' }
   }
 
   function openWizard() {
@@ -106,7 +115,8 @@ export function useStoryboardPlanner(opts: {
 
   // ─── Step 1: 跑 LLM plan, 存 step1Plan ──────────────────────────
   async function runStep1(): Promise<void> {
-    loading.value = true
+    wizardLoading.value = true
+    stepStatus.value[1] = 'running'
     error.value = null
     try {
       const body: any = {
@@ -116,25 +126,31 @@ export function useStoryboardPlanner(opts: {
       const textConfigId = getTextConfigId()
       if (textConfigId) body.text_config_id = textConfigId
 
+      // QA msg-20261010-008 ISSUE-D: $fetch 默认 30s timeout, LLM 偶尔 30-60s 跑超时报错 modal 状态卡住.
+      //   跟 backend callLLMJson 180s 一致 + retry: 0 (callLLMJson 内部已 retry 1 次, 前端不重复 retry 防双倍请求)
       const resp = await $fetch<{ shot_plan: ShotPlanItem[]; total_duration: number; scene_distribution: Record<string, number> }>(
         '/api/v1/agent/storyboard_breaker/planning/step1',
-        { method: 'POST', body },
+        { method: 'POST', body, timeout: 180_000, retry: 0 },
       )
       step1Plan.value = resp.shot_plan
       currentStep.value = 1
+      stepStatus.value[1] = 'done'
       toast.success(`step1 完成: ${resp.shot_plan.length} 镜头, 总时长 ${resp.total_duration}s`)
     } catch (e: any) {
-      error.value = e?.data?.message || e?.message || 'step1 失败'
+      const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
+      error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step1 失败')
+      stepStatus.value[1] = 'error'
       toast.error(`step1: ${error.value}`)
       throw e
     } finally {
-      loading.value = false
+      wizardLoading.value = false
     }
   }
 
   // ─── Step 2: 跑 LLM details (Q4 B: body 可传 shot_plan 覆盖 wizard 编辑) ─
   async function runStep2(shotPlanOverride?: ShotPlanItem[]): Promise<void> {
-    loading.value = true
+    wizardLoading.value = true
+    stepStatus.value[2] = 'running'
     error.value = null
     try {
       const plan = shotPlanOverride || step1Plan.value
@@ -148,23 +164,27 @@ export function useStoryboardPlanner(opts: {
 
       const resp = await $fetch<{ shot_details: ShotDetailsItem[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step2',
-        { method: 'POST', body },
+        { method: 'POST', body, timeout: 180_000, retry: 0 },
       )
       step2Details.value = resp.shot_details
       currentStep.value = 2
+      stepStatus.value[2] = 'done'
       toast.success(`step2 完成: ${resp.shot_details.length} 个分镜详情`)
     } catch (e: any) {
-      error.value = e?.data?.message || e?.message || 'step2 失败'
+      const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
+      error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step2 失败')
+      stepStatus.value[2] = 'error'
       toast.error(`step2: ${error.value}`)
       throw e
     } finally {
-      loading.value = false
+      wizardLoading.value = false
     }
   }
 
   // ─── Step 3: persist (Q5 A: body 可传 shot_details 覆盖 wizard 编辑) ───
   async function runStep3(shotDetailsOverride?: ShotDetailsItem[]): Promise<void> {
-    loading.value = true
+    wizardLoading.value = true
+    stepStatus.value[3] = 'running'
     error.value = null
     try {
       const details = shotDetailsOverride || step2Details.value
@@ -175,17 +195,20 @@ export function useStoryboardPlanner(opts: {
       }
       const resp = await $fetch<{ createdStoryboardIds: number[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step3',
-        { method: 'POST', body },
+        { method: 'POST', body, timeout: 180_000, retry: 0 },
       )
       currentStep.value = 3
+      stepStatus.value[3] = 'done'
       toast.success(`step3 完成: 创建 ${resp.createdStoryboardIds.length} 个分镜`)
       opts.onComplete?.()
     } catch (e: any) {
-      error.value = e?.data?.message || e?.message || 'step3 失败'
+      const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
+      error.value = isTimeout ? '持久化超时 (180s), 可重试' : (e?.data?.message || e?.message || 'step3 失败')
+      stepStatus.value[3] = 'error'
       toast.error(`step3: ${error.value}`)
       throw e
     } finally {
-      loading.value = false
+      wizardLoading.value = false
     }
   }
 
@@ -223,12 +246,13 @@ export function useStoryboardPlanner(opts: {
   }
 
   return {
-    // state
+    // state (QA msg-20261010-008 ISSUE-A: wizardLoading 直接导出, page 端直接解构不再 rename)
     wizardOpen,
     currentStep,
     step1Plan,
     step2Details,
-    loading,
+    wizardLoading,
+    stepStatus,
     error,
     totalDuration,
     // actions
