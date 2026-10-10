@@ -444,6 +444,12 @@ ensureColumn('characters', 'appearance_permanent', 'TEXT')
 ensureColumn('storyboards', 'image_prompt_plot_state', 'TEXT')
 ensureColumn('storyboards', 'video_prompt_plot_state', 'TEXT')
 
+// 2026-10-10 V3 治本 (PM msg-20261010-002) — storyboards 加 image_prompt_permanent 列
+//   存结构化 5 维 enum JSON (character_traits / scene_aesthetic / shot_type_ref / angle / movement),
+//   5 维 enum 强约束防 plot_state 关键词混入 V2 imagePrompt 拼接段, 跨剧情通用不需关键词白名单
+//   老 shot NULL 兼容 (不 UPDATE 老数据, PM 拍板"不做 UPDATE")
+ensureColumn('storyboards', 'image_prompt_permanent', 'TEXT')
+
 // 2026-09-28 增量: cron_runs 加 outputs 字段 (wrapper 从脚本 log 提 ✓ 路径)
 // 后端启动时 ALTER TABLE 自动加, 已有数据 outputs=NULL
 ensureColumn('cron_runs', 'outputs', 'TEXT')

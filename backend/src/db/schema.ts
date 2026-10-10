@@ -140,6 +140,13 @@ export const storyboards = sqliteTable('storyboards', {
   videoPrompt: text('video_prompt'),
   // shot 视频瞬时剧情态 (PLOT_STATE, 5秒视频窗口内的动作变化)。
   videoPromptPlotState: text('video_prompt_plot_state'),
+  // V3 治本核心列 (PM msg-20261010-002): 存结构化 5 维 enum JSON。
+  //   结构: { character_traits: [{category: 'age'|'face'|'hair'|'body'|'outfit', value: string}],
+  //           scene_aesthetic: [string], shot_type_ref: '全景'|'中景'|'近景'|'特写',
+  //           angle: string, movement: string }
+  //   5 维 enum 强约束 (LLM 想写 '深爱豆豆胜过自己' 因没匹配 category 被 zod reject,
+  //   不需关键词白名单, 跨剧情通用)。老 shot NULL 兼容 (V3 起的 shot 才写)。
+  imagePromptPermanent: text('image_prompt_permanent'),
   negativePrompt: text('negative_prompt'),
   bgmPrompt: text('bgm_prompt'),
   soundEffect: text('sound_effect'),
