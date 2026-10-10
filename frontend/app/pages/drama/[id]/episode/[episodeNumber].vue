@@ -2293,9 +2293,12 @@ const {
 })
 
 // V4 拆 3 步 wizard (PM msg-20261010-003): 新 button '分步拆解' 触发, 老 button 'AI 拆解分镜' 保留走 1 步 auto mode
+// QA msg-20261010-010 急修: page destructure 加 error, modal status banner 才能显示具体 error 文本
+//   (之前 commit f6c3f16 漏加 error 导致 modal 显示 'step1 失败: ' 空文本)
 // QA msg-20261010-008 ISSUE-A: wizardLoading / stepStatus 直接导出, page 端不再 destructure rename
 const {
   wizardOpen, currentStep, step1Plan, step2Details, wizardLoading, stepStatus,
+  error,
   totalDuration: wizardTotalDuration,
   openWizard, closeWizard, runStep1, runStep2, runStep3,
   updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
