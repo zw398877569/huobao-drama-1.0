@@ -456,6 +456,11 @@ ensureColumn('cron_runs', 'outputs', 'TEXT')
 // 2026-10-09 增量: cron_runs 加 output_full 字段 (Mac 完整 log 末尾 ~50KB)
 // 不影响原 output 截断字段 (后端启动 ALTER TABLE, 已有数据 output_full=NULL)
 ensureColumn('cron_runs', 'output_full', 'TEXT')
+
+// 2026-10-10 V4 架构 (PM msg-20261010-003) — episodes 加 planning_data 列
+//   存 3 步 endpoint 中间态 JSON (step1 plan + step2 details),
+//   失败可从中间态恢复, 不需要重跑 LLM. 老 episode NULL 兼容 (老 endpoint 走 V3 拼接逻辑, 0 兼容成本).
+ensureColumn('episodes', 'planning_data', 'TEXT')
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db

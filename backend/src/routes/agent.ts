@@ -6,6 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
+import { runStep1, runStep2, runStep3, runAllStepsLegacy } from '../services/storyboard-planner-service.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { db, schema } from '../db/index.js'
@@ -189,7 +190,9 @@ app.get('/:type/debug', async (c) => {
 
 // ─── 两阶段分镜拆解 ────────────────────────────────────────────────────────────
 
-// POST /agent/storyboard_breaker/planning — 阶段 1: 结构规划
+// POST /agent/storyboard_breaker/planning — V4 架构: 老 endpoint 保留 (向后兼容)
+// 内部 redirect 到 runAllStepsLegacy (auto mode, 跳过 user review). 老 UI 老按钮 'AI 拆解分镜' 用户无感.
+// SSE 协议兼容老前端 (event: status / progress / done / error 跟旧版相同).
 app.post('/storyboard_breaker/planning', async (c) => {
   const body = await c.req.json()
   const { drama_id, episode_id } = body
@@ -200,117 +203,48 @@ app.post('/storyboard_breaker/planning', async (c) => {
   // Sprint 6 PM msg-20260930-001 Task B — text_config_id 可选 (用户测 DeepSeek 分镜)
   // 复合格式 "configId:modelName" 或纯数字 configId; null 时走 getActiveConfig('text') fallback
   const parsed = parseConfigIdWithModel(body.text_config_id)
-  const agentOptions: { textConfigId?: number; modelOverride?: string } = {}
-  if (parsed.configId) agentOptions.textConfigId = parsed.configId
-  if (parsed.model) agentOptions.modelOverride = parsed.model
+  const opts: { textConfigId?: number; modelOverride?: string } = {}
+  if (parsed.configId) opts.textConfigId = parsed.configId
+  if (parsed.model) opts.modelOverride = parsed.model
 
-  logTaskStart('Agent', 'storyboard_breaker-planning', {
+  logTaskStart('Agent', 'storyboard_breaker-planning-v4', {
     dramaId: drama_id, episodeId: episode_id,
-    textConfigId: agentOptions.textConfigId ?? null,
-    modelOverride: agentOptions.modelOverride ?? null,
+    textConfigId: opts.textConfigId ?? null,
+    modelOverride: opts.modelOverride ?? null,
+    note: 'V4 老 endpoint redirect to 3-step service (auto mode)',
   })
 
-  const agent = createAgent('storyboard_planner', episode_id, drama_id, agentOptions)
-  if (!agent) return badRequest(c, 'storyboard_planner agent not found')
-
   return streamSSE(c, async (stream) => {
+    const startTime = performance.now()
     try {
-      // Clear existing storyboards first to avoid appending to old data
-      const existingIds = db.select().from(schema.storyboards)
-        .where(eq(schema.storyboards.episodeId, episode_id)).all()
-        .map(sb => sb.id)
-      for (const id of existingIds) {
-        db.delete(schema.storyboardCharacters)
-          .where(eq(schema.storyboardCharacters.storyboardId, id)).run()
-      }
-      db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episode_id)).run()
-      logTaskProgress('Agent', 'storyboard_breaker-planning', {
-        dramaId: drama_id, episodeId: episode_id, clearedCount: existingIds.length,
-      })
-
-      await stream.writeSSE({ event: 'status', data: JSON.stringify({ phase: 'planning', status: 'running', tip: '已清空旧分镜，正在读取剧本和场景数据...' }) })
-
-      const startTime = performance.now()
-      // Heartbeat: emit progress every 8s while LLM is running
-      const heartbeat = setInterval(async () => {
-        await stream.writeSSE({ event: 'progress', data: JSON.stringify({ tip: 'AI 正在规划分镜结构，请稍候...' }) })
-      }, 8000)
-
-      // 2026-09-25 PM msg-20260924-001 (storyboard-planner step logging):
-      //   拆解阶段总耗时 437s, 但 intentions-analyzed (T+17s) 到 generate-shot-prompts-begin (T+211s) 之间
-      //   194s 没有任何日志事件 — agent LLM 在跑 maxSteps=15 多步推理, 但代码没打点.
-      //   加 onStepFinish callback 让每步推理可见 (traceId 自动从 ALS 拿)
-      const llmStepStart = performance.now()
-      // 2026-09-28 QA msg-20260925-006 ISSUE-013 (P3): AI SDK StepResult 没有 stepNumber 字段,
-      //   用闭包 stepCounter 推导 (initial step = 0, 每次回调 +1)
-      let stepCounter = 0
-      const result = await agent.generate(
-        [{ role: 'user', content: '请规划所有镜头的 shot_plan，然后调 generate_shot_prompts 保存。' }],
-        {
-          maxSteps: 15,
-          onStepFinish: (event: any) => {
-            const stepElapsedMs = Math.round(performance.now() - llmStepStart)
-            const stepNumber = stepCounter++
-            const toolCalls = event?.toolCalls ?? []
-            // toolName 兼容多种 shape: AI SDK ToolCall.toolName / OpenAI function.name / MCP 风格
-            const toolNames = toolCalls.map((tc: any) => tc?.toolName || tc?.function?.name || tc?.input?.toolName).filter(Boolean)
-            // usage 兼容 v4/v5 AI SDK (camelCase), 部分 provider 也用 prompt_tokens (snake)
-            const usage = event?.usage ?? {}
-            const promptTokens = usage.promptTokens ?? usage.inputTokens ?? usage.prompt_tokens
-            const completionTokens = usage.completionTokens ?? usage.outputTokens ?? usage.completion_tokens
-            try {
-              // 2026-09-28 QA msg-20260925-007 ISSUE-014 (P3): 永久 logTaskProgress dump (不再 dev-only console.log)
-              //   原因: console.log NODE_ENV gate 让 prod 看不到, 没法二次排查 toolCall 字段名
-              //   用 logTaskProgress('Agent', 'planner-step-debug') 入流日志, 任何环境都能 grep
-              if (stepNumber === 0) {
-                logTaskProgress('Agent', 'planner-step-debug', {
-                  eventKeys: Object.keys(event ?? {}),
-                  firstToolCallKeys: toolCalls[0] ? Object.keys(toolCalls[0]) : [],
-                  firstToolCallSample: toolCalls[0] ? JSON.stringify(toolCalls[0]).slice(0, 200) : null,
-                })
-              }
-              logTaskProgress('Agent', 'planner-step-finished', {
-                stepNumber,
-                stepType: event?.stepType,
-                finishReason: event?.finishReason,
-                textLen: event?.text?.length ?? 0,
-                toolCallCount: toolCalls.length,
-                toolNames,
-                promptTokens,
-                completionTokens,
-                totalTokens: usage.totalTokens,
-                stepElapsedMs,
-              })
-            } catch {
-              // log 失败不能让整个 agent.generate 挂掉, 静默
-            }
-            // SSE progress 推前端 (UI 显示步骤进度, 灰度)
-            stream.writeSSE({
-              event: 'progress',
-              data: JSON.stringify({ tip: `LLM step ${stepNumber} finished (${stepElapsedMs}ms)`, stepNumber }),
-            }).catch(() => { /* SSE 已关闭, 静默 */ })
-          },
+      // V4 架构: 老 endpoint 内部调 runAllStepsLegacy 连续跑 3 步 (跳过 user review)
+      //   SSE event 跟旧版兼容 (status / done), 老前端解析逻辑不变.
+      const result = await runAllStepsLegacy({
+        dramaId: drama_id, episodeId: episode_id,
+        textConfigId: opts.textConfigId, modelOverride: opts.modelOverride,
+        onProgress: async (p) => {
+          // 把 p 字段放在前面, 显式 phase/status/tip 后覆盖 (避免 TS2783 'phase specified more than once')
+          await stream.writeSSE({
+            event: 'status',
+            data: JSON.stringify({ ...p, phase: p.phase, status: p.status, tip: p.tip ?? '' }),
+          }).catch(() => { /* SSE 已关闭, 静默 */ })
         },
-      )
-      clearInterval(heartbeat)
-
+      })
       const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+      const totalDuration = result.shot_details.reduce((s, d) => s + (d.duration || 10), 0)
+      logTaskSuccess('Agent', 'storyboard_breaker-planning-v4', { elapsedSeconds: elapsed })
 
-      const toolCalls = result.toolCalls || []
-      const toolResults: any[] = result.toolResults || []
-      const planningResult = toolResults.find((tr: any) => normalizeToolName(tr) === 'generate_shot_prompts')
-
-      logTaskSuccess('Agent', 'storyboard_breaker-planning', { elapsedSeconds: elapsed })
       await stream.writeSSE({
         event: 'done',
         data: JSON.stringify({
           phase: 'planning',
           status: 'done',
-          shotCount: planningResult?.result?.count || 0,
-          totalDuration: planningResult?.result?.total_duration || 0,
-          densityWarnings: planningResult?.result?.density_warnings || 0,
-          safetyWarnings: planningResult?.result?.safety_warnings || 0,
+          shotCount: result.shot_plan.length,
+          totalDuration,
+          densityWarnings: 0,
+          safetyWarnings: 0,
           elapsed,
+          createdStoryboardIds: result.createdStoryboardIds,
         }),
       })
     } catch (err: any) {
@@ -332,7 +266,7 @@ app.post('/storyboard_breaker/planning', async (c) => {
           }),
         })
       } else {
-        logTaskError('Agent', 'storyboard_breaker-planning', { error: errMsg })
+        logTaskError('Agent', 'storyboard_breaker-planning-v4', { error: errMsg })
         await stream.writeSSE({
           event: 'error',
           data: JSON.stringify({ message: errMsg }),
@@ -343,6 +277,85 @@ app.post('/storyboard_breaker/planning', async (c) => {
     }
   })
 })
+
+// POST /agent/storyboard_breaker/planning/step1 — V4 wizard interactive mode
+// 跑 step1 LLM plan, 存 episodes.planning_data.step1, 返回 shot_plan JSON
+// body: { drama_id, episode_id, text_config_id? }
+app.post('/storyboard_breaker/planning/step1', async (c) => {
+  const body = await c.req.json()
+  const { drama_id, episode_id } = body
+  if (!episode_id || !drama_id) {
+    return badRequest(c, 'drama_id and episode_id are required')
+  }
+  const parsed = parseConfigIdWithModel(body.text_config_id)
+  const opts: { textConfigId?: number; modelOverride?: string } = {}
+  if (parsed.configId) opts.textConfigId = parsed.configId
+  if (parsed.model) opts.modelOverride = parsed.model
+
+  try {
+    const result = await runStep1({
+      dramaId: drama_id, episodeId: episode_id, ...opts,
+    })
+    return success(c, {
+      shot_plan: result.shot_plan,
+      total_duration: result.total_duration,
+      scene_distribution: result.scene_distribution,
+    })
+  } catch (err: any) {
+    logTaskError('Agent', 'storyboard_breaker-planning-step1', { error: err?.message || String(err) })
+    return badRequest(c, err?.message || 'step1 failed')
+  }
+})
+
+// POST /agent/storyboard_breaker/planning/step2 — V4 wizard interactive mode (Q4 B 拍板)
+// 跑 step2 LLM details, 存 episodes.planning_data.step2, 返回 shot_details JSON
+// body: { drama_id, episode_id, text_config_id?, shot_plan? }  (shot_plan 可选, 传则覆盖 planning_data.step1)
+app.post('/storyboard_breaker/planning/step2', async (c) => {
+  const body = await c.req.json()
+  const { drama_id, episode_id, shot_plan } = body
+  if (!episode_id || !drama_id) {
+    return badRequest(c, 'drama_id and episode_id are required')
+  }
+  const parsed = parseConfigIdWithModel(body.text_config_id)
+  const opts: { textConfigId?: number; modelOverride?: string; shotPlanOverride?: any[] } = {}
+  if (parsed.configId) opts.textConfigId = parsed.configId
+  if (parsed.model) opts.modelOverride = parsed.model
+  if (Array.isArray(shot_plan)) opts.shotPlanOverride = shot_plan
+
+  try {
+    const result = await runStep2({
+      dramaId: drama_id, episodeId: episode_id, ...opts,
+    })
+    return success(c, { shot_details: result.shot_details })
+  } catch (err: any) {
+    logTaskError('Agent', 'storyboard_breaker-planning-step2', { error: err?.message || String(err) })
+    return badRequest(c, err?.message || 'step2 failed')
+  }
+})
+
+// POST /agent/storyboard_breaker/planning/step3 — V4 wizard interactive mode (Q5 A 拍板)
+// step3 persist zod + DB 事务 (Task B 加), 写 episodes.planning_data.step3_storyboard_ids
+// body: { drama_id, episode_id, shot_details? }  (shot_details 可选, 传则覆盖 planning_data.step2)
+app.post('/storyboard_breaker/planning/step3', async (c) => {
+  const body = await c.req.json()
+  const { drama_id, episode_id, shot_details } = body
+  if (!episode_id || !drama_id) {
+    return badRequest(c, 'drama_id and episode_id are required')
+  }
+  const opts: { shotDetailsOverride?: any[] } = {}
+  if (Array.isArray(shot_details)) opts.shotDetailsOverride = shot_details
+
+  try {
+    const result = await runStep3({
+      dramaId: drama_id, episodeId: episode_id, ...opts,
+    })
+    return success(c, { createdStoryboardIds: result.createdStoryboardIds })
+  } catch (err: any) {
+    logTaskError('Agent', 'storyboard_breaker-planning-step3', { error: err?.message || String(err) })
+    return badRequest(c, err?.message || 'step3 failed')
+  }
+})
+
 
 // POST /agent/storyboard_breaker/execute — 阶段 2: 直接写入（不经过 LLM）
 // shot_plan 由前端/用户提供，直接调代码侧函数生成 17 字段并保存

@@ -46,6 +46,10 @@ export const episodes = sqliteTable('episodes', {
   textConfigId: integer('text_config_id'),
   // PM 派单 msg-20260920-004 Step 3.D: user-set target duration (s), null = estimator fallback
   targetDuration: integer('target_duration'),
+  // V4 治本架构 (PM msg-20261010-003): 存 3 步 endpoint 中间态 (step1 plan + step2 details)
+  //   JSON 序列化: { step1_done_at, step1_plan, step2_done_at, step2_details, step3_done_at, step3_storyboard_ids }
+  //   失败可从中间态恢复, 不需要重跑 LLM. 老 drama 不写 (NULL), 0 兼容成本.
+  planningData: text('planning_data'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
