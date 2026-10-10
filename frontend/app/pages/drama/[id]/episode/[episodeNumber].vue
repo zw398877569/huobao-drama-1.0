@@ -14,7 +14,7 @@
           <div class="studio-meta-row">
             <span class="studio-meta-pill">{{ currentSubStageLabel }}</span>
             <span class="studio-meta-pill is-progress">{{ pipelineProgress }}/11</span>
-            <span class="studio-meta-inline">{{ chars.length }} 角色 · {{ sbs.length }} 镜头</span>
+            <span class="studio-meta-inline">{{ chars?.length ?? 0 }} 角色 · {{ sbs?.length ?? 0 }} 镜头</span>
           </div>
         </div>
       </div>
@@ -499,7 +499,7 @@
                   <div class="shot-item-header">
                     <div class="shot-num">#{{ String(i+1).padStart(2,'0') }}</div>
                     <span class="tag" style="font-size:10px">{{ sb.shot_type || sb.shotType || '—' }}</span>
-                    <span v-if="getStoryboardCharacterIds(sb).length" class="tag" style="font-size:10px">{{ getStoryboardCharacterIds(sb).length }} 角色</span>
+                    <span v-if="getStoryboardCharacterIds(sb)?.length" class="tag" style="font-size:10px">{{ getStoryboardCharacterIds(sb).length }} 角色</span>
                     <div class="shot-status">
                       <div v-if="sb.imageUrl || sb.composedImage || sb.firstFrameImage" class="shot-dot has-img" title="已生成图片"></div>
                       <div v-if="sb.videoUrl || sb.composedVideoUrl" class="shot-dot has-video" title="已生成视频"></div>
@@ -512,7 +512,7 @@
                   <div class="shot-meta">
                     <span class="mono dim" style="font-size:10px">{{ sb.duration || 10 }}s</span>
                     <span v-if="sb.location" class="shot-location">{{ sb.location }}</span>
-                    <span v-if="getStoryboardCharacterNames(sb).length" class="shot-location">{{ getStoryboardCharacterNames(sb).join(' / ') }}</span>
+                    <span v-if="getStoryboardCharacterNames(sb)?.length" class="shot-location">{{ getStoryboardCharacterNames(sb).join(' / ') }}</span>
                     <span v-if="sb.dialogue" class="shot-dialogue">{{ sb.dialogue }}</span>
                   </div>
                 </div>
@@ -1985,7 +1985,7 @@
                     </tr>
                   </tbody>
                 </table>
-                <p class="wizard-stat">共 {{ step1Plan.length }} 镜, 总时长 {{ wizardTotalDuration }}s</p>
+                <p class="wizard-stat">共 {{ step1Plan?.length ?? 0 }} 镜, 总时长 {{ wizardTotalDuration ?? 0 }}s</p>
                 <button class="btn btn-sm" @click="wizardAddShot">+ 添加镜头</button>
                 <div class="wizard-actions">
                   <button class="btn" @click="runStep1" :title="'重跑 step1 LLM'">重跑 step1</button>
@@ -2068,7 +2068,7 @@
                 <button class="btn btn-sm" @click="runStep3">重试</button>
               </div>
               <div v-else class="wizard-done">
-                <p>✓ V4 wizard 3 步完成: 创建 {{ step2Details.length }} 个分镜, 已写入 storyboards 表</p>
+                <p>✓ V4 wizard 3 步完成: 创建 {{ step2Details?.length ?? 0 }} 个分镜, 已写入 storyboards 表</p>
                 <button class="btn btn-primary" @click="closeWizard">关闭</button>
               </div>
             </template>
