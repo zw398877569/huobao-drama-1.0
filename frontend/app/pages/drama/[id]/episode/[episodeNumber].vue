@@ -25,9 +25,9 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             刷新
           </button>
-          <button class="btn btn-primary" @click="panel = mergeUrl ? 'export' : (sbs.length ? 'production' : 'script')">
+          <button class="btn btn-primary" @click="panel = mergeUrl ? 'export' : ((sbs?.length ?? 0) > 0 ? 'production' : 'script')">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-            {{ mergeUrl ? '查看成片' : (sbs.length ? '继续制作' : '开始制作') }}
+            {{  mergeUrl ? '查看成片' : ((sbs?.length ?? 0) > 0 ? '继续制作' : '开始制作')  }}
           </button>
         </div>
       </div>
@@ -72,7 +72,7 @@
             <div class="progress-fill" :style="{ width: (pipelineProgress / 11 * 100) + '%' }"></div>
           </div>
         </div>
-        <div class="sidebar-jumper" v-if="sidebarJumpSteps.length">
+        <div class="sidebar-jumper" v-if="sidebarJumpSteps?.length">
           <button
             v-for="step in sidebarJumpSteps"
             :key="step.key"
@@ -90,7 +90,7 @@
 
     <!-- ========== MAIN CONTENT ========== -->
     <main class="main">
-      <div v-if="activeSubSteps.length" class="stage-subnav">
+      <div v-if="activeSubSteps?.length" class="stage-subnav">
         <button
           v-for="sub in activeSubSteps"
           :key="sub.key"
@@ -187,7 +187,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ keyProps.length }} 道具</span>
+              <span class="char-count">{{  chars?.length ?? 0  }} 角色 · {{  scenes?.length ?? 0  }} 场景 · {{  keyProps?.length ?? 0  }} 道具</span>
               <button v-if="hasAnyAsset" class="btn btn-sm" @click="doExtract" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -196,7 +196,7 @@
             </div>
           </div>
 
-          <div v-if="!chars.length && !rn" class="step-empty">
+          <div v-if="!chars?.length && !rn" class="step-empty">
             <div class="empty-visual">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </div>
@@ -219,15 +219,15 @@
               <div class="extract-summary-stats">
                 <div class="extract-summary-stat">
                   <span>角色</span>
-                  <strong>{{ chars.length }}</strong>
+                  <strong>{{  chars?.length ?? 0  }}</strong>
                 </div>
                 <div class="extract-summary-stat">
                   <span>场景</span>
-                  <strong>{{ scenes.length }}</strong>
+                  <strong>{{  scenes?.length ?? 0  }}</strong>
                 </div>
                 <div class="extract-summary-stat">
                   <span>道具</span>
-                  <strong>{{ keyProps.length }}</strong>
+                  <strong>{{  keyProps?.length ?? 0  }}</strong>
                 </div>
               </div>
               <div class="extract-summary-note">如果角色描述过于简短，后续分配音色和生成形象时建议先补充人物特征。</div>
@@ -237,7 +237,7 @@
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 <span>角色</span>
-                <span class="tag tag-accent">{{ chars.length }}</span>
+                <span class="tag tag-accent">{{  chars?.length ?? 0  }}</span>
               </div>
               <div class="extract-list">
                 <div v-for="c in chars" :key="c.id" class="extract-row">
@@ -254,11 +254,11 @@
               </div>
             </div>
 
-            <div class="card extract-card" v-if="scenes.length">
+            <div class="card extract-card" v-if="scenes?.length">
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
                 <span>场景</span>
-                <span class="tag tag-accent">{{ scenes.length }}</span>
+                <span class="tag tag-accent">{{  scenes?.length ?? 0  }}</span>
               </div>
               <div class="extract-list">
                 <div v-for="s in scenes" :key="s.id" class="extract-row">
@@ -280,9 +280,9 @@
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
                 <span>关键道具</span>
-                <span class="tag tag-purple">{{ keyProps.length }}</span>
+                <span class="tag tag-purple">{{  keyProps?.length ?? 0  }}</span>
               </div>
-              <div v-if="keyProps.length" class="extract-list">
+              <div v-if="keyProps?.length" class="extract-list">
                 <div v-for="p in keyProps" :key="p.id" class="extract-row" :class="`prop-weight-${p.appearance_weight || 'minor'}`">
                   <div class="prop-icon">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
@@ -316,7 +316,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="charsVoiced" class="char-count">{{ charsVoiced }}/{{ chars.length }} 已分配</span>
+              <span v-if="charsVoiced" class="char-count">{{  charsVoiced  }}/{{  chars?.length ?? 0  }} 已分配</span>
               <span v-if="voiceSampleCount" class="char-count">{{ voiceSampleCount }}/{{ charsVoiced }} 试听文件</span>
               <button v-if="charsVoiced" class="btn btn-sm" @click="doVoice" :disabled="rn">
                 <Loader2 v-if="rn && rt === 'voice_assigner'" :size="11" class="animate-spin" />
@@ -353,7 +353,7 @@
               <div class="voice-stage-stats">
                 <div class="voice-stage-stat">
                   <span class="voice-stage-stat-label">已分配</span>
-                  <strong>{{ charsVoiced }}/{{ chars.length }}</strong>
+                  <strong>{{  charsVoiced  }}/{{  chars?.length ?? 0  }}</strong>
                 </div>
                 <div class="voice-stage-stat">
                   <span class="voice-stage-stat-label">试听文件</span>
@@ -362,7 +362,7 @@
               </div>
               <div class="voice-library-meta">
                 <span>音色库</span>
-                <span>{{ voiceProfiles.length }} 条</span>
+                <span>{{  voiceProfiles?.length ?? 0  }} 条</span>
               </div>
               <div class="voice-library">
                 <div v-for="voice in voiceProfiles" :key="voice.id" class="voice-library-item">
@@ -442,12 +442,12 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="sbs.length" class="char-count">{{ sbs.length }} 镜头 · {{ totalDuration }}s</span>
-              <button v-if="sbs.length" class="btn btn-sm" @click="addShot">
+              <span v-if="sbs?.length" class="char-count">{{  sbs?.length ?? 0  }} 镜头 · {{  totalDuration  }}s</span>
+              <button v-if="sbs?.length" class="btn btn-sm" @click="addShot">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 添加
               </button>
-              <template v-if="!sbs.length">
+              <template v-if="!sbs?.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
               <!-- Sprint 6 Task E — 分镜模型选择器 (D2: 只覆盖 storyboard_planner) -->
@@ -456,7 +456,7 @@
                 分镜模型 · {{ currentTextModelLabel }}
                 <span v-if="selectedTextConfigId" class="tag" style="font-size:10px">自定义</span>
               </button>
-              <button class="btn btn-sm" :disabled="rn || !selectedSb?.id || regeneratingOne" @click="regeneratingOne = true; (async () => { const sb = selectedSb?.id ? selectedSb : (sbs[sbs.length - 1] || sbs[0]); if (!sb?.id) { regeneratingOne = false; toast.error('没有可重生成的镜头'); return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${sb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(sb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
+              <button class="btn btn-sm" :disabled="rn || !selectedSb?.id || regeneratingOne" @click="regeneratingOne = true; (async () => { const sb = selectedSb?.id ? selectedSb : (sbs[Math.max(0, (sbs?.length ?? 0) - 1)] || sbs[0]); if (!sb?.id) { regeneratingOne = false; toast.error('没有可重生成的镜头'); return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${sb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(sb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
                 <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
                 重新生成本镜头
@@ -466,7 +466,7 @@
             </div>
           </div>
 
-          <div v-if="sbs.length" class="split-layout">
+          <div v-if="sbs?.length" class="split-layout">
             <!-- Shot List -->
             <div class="shot-list">
               <div class="shot-list-head">
@@ -687,7 +687,7 @@
                         >
                           {{ char.name }}
                         </button>
-                        <span v-if="!chars.length" class="dim" style="font-size:12px">当前集还没有角色</span>
+                        <span v-if="!chars?.length" class="dim" style="font-size:12px">当前集还没有角色</span>
                       </div>
                     </label>
                     <label class="field">
@@ -869,7 +869,7 @@
                   <div class="detail-section-head">
                     <span class="detail-section-title">IP 安全检查</span>
                     <span class="detail-section-copy">pre-flight 重写 — 检测并替换 prompt 中的名人 / 商标 / IP 角色</span>
-                    <span v-if="safetyFlagged(selectedSb)" class="safety-flag-tag">已改写 {{ safetyNotes(selectedSb).length }} 处</span>
+                    <span v-if="safetyFlagged(selectedSb)" class="safety-flag-tag">已改写 {{  safetyNotes(selectedSb).length ?? 0  }} 处</span>
                     <span v-else class="safety-flag-tag safety-flag-clean">通过</span>
                   </div>
                   <div v-if="safetyFlagged(selectedSb)" class="safety-diff">
@@ -934,7 +934,7 @@
       <!-- ===== PRODUCTION PANEL ===== -->
       <div v-else-if="panel === 'production'" class="content-panel">
         <!-- Guard: need script -->
-        <div v-if="!scriptContent || !sbs.length" class="step-empty" style="flex:1">
+        <div v-if="!scriptContent || !sbs?.length" class="step-empty" style="flex:1">
           <div class="empty-visual">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           </div>
@@ -956,7 +956,7 @@
           <!-- Sub: Characters -->
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
+              <span class="dim" style="font-size:12px">{{  visualChars?.length ?? 0  }} 个需生成形象角色</span>
               <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'chars' ? null : 'chars'" :title="'切换图片模型: ' + currentModelLabel">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                 {{ currentModelLabel }}
@@ -964,7 +964,7 @@
               </button>
               <span v-if="imageConfigIds['chars']" class="tag" style="font-size:10px">自定义</span>
               <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
-              <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
+              <span v-if="chars.length > visualChars?.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCharImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1002,7 +1002,7 @@
           <!-- Sub: Scenes -->
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
+              <span class="dim" style="font-size:12px">{{  scenes?.length ?? 0  }} 个场景</span>
               <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'scenes' ? null : 'scenes'" :title="'切换图片模型: ' + currentModelLabel">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                 {{ currentModelLabel }}
@@ -1047,7 +1047,7 @@
           <!-- Sub: Props -->
           <div v-else-if="prodTab === 'props'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ keyProps.length }} 个道具</span>
+              <span class="dim" style="font-size:12px">{{  keyProps?.length ?? 0  }} 个道具</span>
               <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'props' ? null : 'props'" :title="'切换图片模型: ' + currentModelLabel">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                 {{ currentModelLabel }}
@@ -1062,7 +1062,7 @@
                 </button>
               </div>
             </div>
-            <div v-if="!keyProps.length" class="step-empty" style="min-height:160px">
+            <div v-if="!keyProps?.length" class="step-empty" style="min-height:160px">
               <div class="empty-title">当前没有关键道具</div>
               <div class="empty-desc">先在提取页让 AI 提取关键道具，这里会出现道具卡片供生成参考图。</div>
             </div>
@@ -1100,10 +1100,10 @@
               <span class="tag mono">{{ ttsGeneratedCount }}/{{ ttsEligibleCount }} 已生成</span>
               <span class="tag">{{ lockedAudioConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="pendingTTSIds.length > 0" @click="batchShotTTS">
-                  <Loader2 v-if="pendingTTSIds.length > 0" :size="11" class="animate-spin" />
+                <button class="btn btn-sm" :disabled="(pendingTTSIds?.length ?? 0) > 0" @click="batchShotTTS">
+                  <Loader2 v-if="pendingTTSIds?.length > 0" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
-                  {{ pendingTTSIds.length > 0 ? '生成中…' : '批量生成' }}
+                  {{  pendingTTSIds?.length ?? 0 > 0 ? '生成中…' : '批量生成'  }}
                 </button>
               </div>
             </div>
@@ -1136,7 +1136,7 @@
                 <div class="dub-foot">
                   <div v-if="hasTTS(sb) && getTTSSegments(sb)" class="dub-segments" :title="getTTSSegments(sb).map(s => s.speaker + ':' + s.text).join('\n')">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                  <span class="dub-segments-count">{{ getTTSSegments(sb).length }} 段对白</span>
+                  <span class="dub-segments-count">{{  getTTSSegments(sb).length ?? 0  }} 段对白</span>
                   <span class="dub-segments-list">{{ getTTSSegments(sb).map(s => s.speaker).join(' / ') }}</span>
                 </div>
                 <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
@@ -1153,8 +1153,8 @@
           <!-- Sub: Shots -->
           <div v-else-if="prodTab === 'shots'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
-              <span class="tag mono">{{ shotImgCount }}/{{ sbs.length }} 已有帧图</span>
+              <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 个镜头</span>
+              <span class="tag mono">{{  shotImgCount  }}/{{  sbs?.length ?? 0  }} 已有帧图</span>
               <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'shots' ? null : 'shots'" :title="'切换图片模型: ' + currentModelLabel">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 {{ currentModelLabel }}
@@ -1173,7 +1173,7 @@
               </div>
             </div>
 
-            <div v-if="gridHistory.length" class="grid-history-panel">
+            <div v-if="gridHistory?.length" class="grid-history-panel">
               <div v-if="gridImagePath" class="latest-grid-strip">
                 <button class="latest-grid-strip-thumb" @click="openImageViewer('/' + gridImagePath, '当前宫格图')">
                   <img :src="'/' + gridImagePath" class="previewable-image" />
@@ -1201,7 +1201,7 @@
                 </div>
                 <button class="btn btn-sm" @click="showAllGridHistory = !showAllGridHistory">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline :points="showAllGridHistory ? '18 15 12 9 6 15' : '6 9 12 15 18 9'"/></svg>
-                  {{ showAllGridHistory ? '收起历史宫格图' : `展开全部 (${gridHistory.length})` }}
+                  {{ showAllGridHistory ? '收起历史宫格图' : `展开全部 (${gridHistory?.length ?? 0})` }}
                 </button>
               </div>
               <div v-if="showAllGridHistory" class="grid-history-list">
@@ -1271,7 +1271,7 @@
                       <span
                         v-if="safetyFlagged(sb)"
                         class="safety-warn-icon"
-                        :title="`安全检查：检测到 ${safetyNotes(sb).length} 处可能涉及商标/版权/名人，已自动改写`"
+                        :title="`安全检查：检测到 ${safetyNotes(sb)?.length ?? 0} 处可能涉及商标/版权/名人，已自动改写`"
                         @click.stop="selectedSb = sb"
                       >
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1373,7 +1373,7 @@
                     <div class="field" style="flex:1">
                       <span class="field-label">
                         {{ gridMode === 'multi_ref' ? '选择目标镜头' : '选择镜头' }}
-                        <span class="dim" v-if="gridMode !== 'multi_ref'">(已选 {{ gridSelected.length }})</span>
+                        <span class="dim" v-if="gridMode !== 'multi_ref'">(已选 {{  gridSelected?.length ?? 0  }})</span>
                       </span>
                     </div>
                     <div style="align-self:flex-end" v-if="gridMode !== 'multi_ref'">
@@ -1418,7 +1418,7 @@
                       <div class="grid-blank-cell-index">#{{ cell.shot_number }} {{ {first_frame:'首帧',last_frame:'尾帧',reference:'参考'}[cell.frame_type] || '' }}</div>
                       <div class="grid-blank-cell-desc">{{ cell.prompt }}</div>
                     </div>
-                    <div v-for="i in Math.max(0, (gridAutoLayout.rows * gridAutoLayout.cols) - gridCellPrompts.length)" :key="'empty-'+i" class="grid-blank-cell empty">
+                    <div v-for="i in Math.max(0, (gridAutoLayout.rows * gridAutoLayout.cols) - (gridCellPrompts?.length ?? 0))" :key="'empty-'+i" class="grid-blank-cell empty">
                       <div class="grid-blank-cell-index">空</div>
                       <div class="grid-blank-cell-desc">—</div>
                     </div>
@@ -1470,8 +1470,8 @@
                       </div>
                       <div class="grid-adjust-summary">
                         <span class="tag mono">{{ gridActualLayout.rows }}x{{ gridActualLayout.cols }} = {{ gridActualLayout.rows * gridActualLayout.cols }}格</span>
-                        <span class="dim" style="font-size:12px">{{ gridAssignedCount }}/{{ gridAssignments.length }} 格已分配</span>
-                        <span class="tag" v-if="gridAssignedCount < gridAssignments.length">未分配格子会被忽略，不会写回分镜</span>
+                        <span class="dim" style="font-size:12px">{{  gridAssignedCount  }}/{{  gridAssignments?.length ?? 0  }} 格已分配</span>
+                        <span class="tag" v-if="gridAssignedCount < gridAssignments?.length">未分配格子会被忽略，不会写回分镜</span>
                       </div>
                     </div>
                     <div class="grid-assignment-pane">
@@ -1482,7 +1482,7 @@
                       <div v-if="gridAssignmentTotalPages > 1" class="grid-assign-pagination">
                         <button class="btn btn-sm" :disabled="gridAssignmentPage === 0" @click="gridAssignmentPage--">上一页</button>
                         <span class="dim">第 {{ gridAssignmentPage + 1 }}/{{ gridAssignmentTotalPages }} 页</span>
-                        <span class="dim">{{ gridAssignmentPageStart + 1 }}-{{ gridAssignmentPageEnd }} / {{ gridAssignments.length }}</span>
+                        <span class="dim">{{  gridAssignmentPageStart + 1  }}-{{  gridAssignmentPageEnd  }} / {{  gridAssignments?.length ?? 0  }}</span>
                         <button class="btn btn-sm ml-auto" :disabled="gridAssignmentPage >= gridAssignmentTotalPages - 1" @click="gridAssignmentPage++">下一页</button>
                       </div>
                       <div class="grid-assign-columns">
@@ -1535,8 +1535,8 @@
           <!-- Sub: Videos -->
           <div v-else-if="prodTab === 'videos'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
-              <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
+              <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 个镜头</span>
+              <span class="tag mono">{{  shotVidCount  }}/{{  sbs?.length ?? 0  }} 已生成</span>
               <button class="btn btn-sm model-btn" @click="videoModelPopoverOpen = !videoModelPopoverOpen" :title="'切换视频模型: ' + currentVideoModelLabel">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
                 {{ currentVideoModelLabel }}
@@ -1594,8 +1594,8 @@
           <!-- Sub: Compose -->
           <div v-else-if="prodTab === 'compose'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
-              <span class="tag mono">{{ composedCount }}/{{ sbs.length }} 已合成</span>
+              <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 个镜头</span>
+              <span class="tag mono">{{  composedCount  }}/{{  sbs?.length ?? 0  }} 已合成</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCompose">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
@@ -1684,7 +1684,7 @@
 
         <!-- 子视图: 拼接导出 -->
         <div v-if="exportTab === 'merge'" class="export-host">
-          <div v-if="!sbs.length" class="step-empty" style="flex:1">
+          <div v-if="!sbs?.length" class="step-empty" style="flex:1">
             <div class="empty-visual">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             </div>
@@ -1698,7 +1698,7 @@
                 <video :src="'/' + mergeUrl" controls class="export-video" />
                 <div class="export-bar">
                   <span class="tag tag-success">拼接完成</span>
-                  <span class="dim" style="font-size:12px">{{ sbs.length }} 镜头 · {{ totalDuration }}s</span>
+                  <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 镜头 · {{  totalDuration  }}s</span>
                   <a :href="'/' + mergeUrl" download class="btn btn-primary ml-auto">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     下载视频
@@ -1821,7 +1821,7 @@
           :disabled="panel === 'production' && prodTab === 'compose' && !canExport"
           @click="goNextProd"
         >
-          {{ prodTabIdx < prodTabDefs.length - 1 ? (prodTabDefs[prodTabIdx + 1]?.label || '下一步') : '进入导出' }}
+          {{  prodTabIdx < (prodTabDefs?.length ?? 0) - 1 ? (prodTabDefs[prodTabIdx + 1]?.label || '下一步') : '进入导出'  }}
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
           </svg>
@@ -2421,7 +2421,8 @@ async function onTextConfigChange(v: string | null) {
 }
 
 // 2026-09-10 review: 提取按钮显示条件 — 任一资产(角色/场景/道具)非空就行
-const hasAnyAsset = computed(() => chars.value.length || scenes.value.length || keyProps.value.length)
+// V4 防御 — 全文 audit (QA msg-20261010-019): ref.value 可能 race condition undefined, 加 ? 防 throw
+const hasAnyAsset = computed(() => (chars.value?.length ?? 0) > 0 || (scenes.value?.length ?? 0) > 0 || (keyProps.value?.length ?? 0) > 0)
 
 
 function openImageViewer(src, title = '') {
@@ -2472,7 +2473,7 @@ async function refresh() {
       if (selectedSb.value) {
         const refreshed = sbs.value.find(s => s.id === selectedSb.value.id)
         if (refreshed) selectedSb.value = refreshed
-      } else if (sbs.value.length) {
+        } else if ((sbs.value?.length ?? 0) > 0) {
         selectedSb.value = sbs.value[0]
       }
 
@@ -2497,7 +2498,7 @@ async function refresh() {
 
       const epHasContent = !!(episode.value?.content)
       const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
-      const epHasSbs = sbs.value.length > 0
+      const epHasSbs = (sbs.value?.length ?? 0) > 0
 
       // Sprint 6 Task E — 加载分镜拆解选中的 text config (持久化, 跟 image/video/audio config_id 一致)
       selectedTextConfigId.value = (episode.value?.text_config_id ?? episode.value?.textConfigId ?? null)
@@ -2512,7 +2513,7 @@ async function refresh() {
 
       if (epHasSbs) scriptStep.value = 4
       else if (epHasScript && chars.value.some(c => c.voice_style || c.voiceStyle)) scriptStep.value = 3
-      else if (epHasScript && chars.value.length) scriptStep.value = 2
+      else if (epHasScript && (chars.value?.length ?? 0) > 0) scriptStep.value = 2
       else if (epHasScript || epHasContent) scriptStep.value = 1
       else scriptStep.value = 0
       await loadLatestGridImage()

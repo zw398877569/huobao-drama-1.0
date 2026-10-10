@@ -79,7 +79,7 @@ export function useStoryboardPlanner(opts: {
     3: 'pending',
   })
   const totalDuration = computed(() =>
-    step1Plan.value.reduce((s, p) => s + (p.duration || 0), 0),
+    (step1Plan.value || []).reduce((s, p) => s + (p.duration || 0), 0),
   )
 
   // helpers
