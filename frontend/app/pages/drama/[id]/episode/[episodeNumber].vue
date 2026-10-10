@@ -2172,7 +2172,7 @@ const {
   isPendingCharImage, isPendingSceneImage, isPendingPropImage, isPendingShotFrame,
   genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
 } = useImageGeneration({
-  ctx: { chars, scenes, keyProps, sbs, epId, dramaId: dramaId.value },
+  ctx: { chars, scenes, keyProps, sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
   refresh,
   getFirstFrame,
   getLastFrame,
@@ -2194,7 +2194,7 @@ const {
   isPendingVideo, videoFailMessage, isPendingCompose, composeFailMessage,
   genVid, batchVideos, doCompose, batchCompose, pollVideoGeneration, pollComposeStatus,
 } = useVideoGeneration({
-  ctx: { sbs, epId, dramaId: dramaId.value },
+  ctx: { sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
   refresh,
   getFirstFrame,
   getLastFrame,
@@ -2228,7 +2228,7 @@ const {
   getGridPromptShotIds, generateGridPrompt, startGridGen, pollGridStatus,
   loadLatestGridImage, doGridSplit,
 } = useGridTool({
-  ctx: { sbs, epId, dramaId: dramaId.value },
+  ctx: { sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
   refresh,
 })
 
@@ -2304,7 +2304,7 @@ const {
   updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
   updateDetailPrompt,
 } = useStoryboardPlanner({
-  dramaId: dramaId.value,
+  dramaId,  // QA-012: dramaId 是 const number 不带 .value (主因: wizard 后端 400)
   episodeId: () => epId.value,
   selectedTextConfigId: () => selectedTextConfigId.value,
   onComplete: () => { refresh(); closeWizard() },
