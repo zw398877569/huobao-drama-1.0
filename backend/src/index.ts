@@ -10,17 +10,22 @@ setGlobalDispatcher(new Agent({
   bodyTimeout: 10 * 60 * 1000,
 }))
 
-// 一次性 LLM 请求 debug 日志 (2026-09-21, 用户要求排查 5+ 分钟慢响应):
-//   写两个文件:
-//     /app/data/llm-debug-meta.log  — 每请求一行 meta (小, <300B)
+// 一次性 LLM 请求 + 响应 debug 日志:
+//   写三个文件 (QA msg-20261010-006 ISSUE-024 加 response log):
+//     /app/data/llm-debug-meta.log  — 每请求/响应一行 meta (小, <300B)
 //     /app/data/llm-debug-body.log  — 每请求完整 body (多 KB-MB, 含 messages 文本 + tools schema)
-//   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug-{meta,body}.log
-//   关闭: DEBUG_LLM_FILE_META=/DEBUG_LLM_BODY_FILE 设空值, 或问题定位完删代码.
+//     /app/data/llm-debug-resp.log  — 每响应 meta 一行 + 完整 response body (max 50KB truncate, 防膨胀)
+//   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug-{meta,body,resp}.log
+//   关闭: DEBUG_LLM_FILE_META/DEBUG_LLM_FILE_BODY/DEBUG_LLM_FILE_RESP 任一设空值, 或问题定位完删代码.
 import fs from 'fs'
 const DEBUG_LLM_FILE_META = process.env.DEBUG_LLM_FILE_META ?? '/app/data/llm-debug-meta.log'
 const DEBUG_LLM_FILE_BODY = process.env.DEBUG_LLM_FILE_BODY ?? '/app/data/llm-debug-body.log'
+const DEBUG_LLM_FILE_RESP = process.env.DEBUG_LLM_FILE_RESP ?? '/app/data/llm-debug-resp.log'
 const metaStream = DEBUG_LLM_FILE_META ? fs.createWriteStream(DEBUG_LLM_FILE_META, { flags: 'a' }) : null
 const bodyStream = DEBUG_LLM_FILE_BODY ? fs.createWriteStream(DEBUG_LLM_FILE_BODY, { flags: 'a' }) : null
+const respStream = DEBUG_LLM_FILE_RESP ? fs.createWriteStream(DEBUG_LLM_FILE_RESP, { flags: 'a' }) : null
+// response body truncate 上限 (50KB), 防 response 超大撑爆日志
+const RESP_LOG_MAX_BYTES = 50 * 1024
 const origFetch = globalThis.fetch
 // @ts-ignore --globalThis.fetch 类型推断覆盖
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -62,7 +67,27 @@ globalThis.fetch = (async (input: any, init?: any) => {
     bodyStream.write(JSON.stringify(b, null, 2) + '\n')
   }
 
-  return origFetch(input, init)
+  // ISSUE-024 (QA msg-20261010-006): 记录 response 实际内容, 方便定位 LLM 兼容问题
+  //   fetch response.body 是 ReadableStream, 只能读一次 — clone 后读 clone, 原 response 返回给 caller
+  const resp = await origFetch(input, init)
+  if (respStream) {
+    try {
+      const cloned = resp.clone()
+      const respText = await cloned.text()
+      const truncated = respText.length > RESP_LOG_MAX_BYTES
+        ? respText.slice(0, RESP_LOG_MAX_BYTES) + '\n... [truncated ' + RESP_LOG_MAX_BYTES + ' bytes]'
+        : respText
+      // meta 行: 时间 + url + status + bodyLen
+      respStream.write(`[LLM-RESP] ${ts} ${url} ${resp.status} ${respText.length}\n`)
+      // 完整 body (max 50KB)
+      respStream.write(`\n=== ${ts} ${url} ${resp.status} ===\n`)
+      respStream.write(truncated + '\n')
+    } catch (e) {
+      // clone 失败不应阻塞 caller (例如某些 provider 的 SSE 流式 response clone 会失败)
+      try { respStream.write(`[LLM-RESP-ERROR] ${ts} ${url} ${resp.status} ${(e as Error)?.message || String(e)}\n`) } catch {}
+    }
+  }
+  return resp
 }) as typeof fetch
 
 import { serve } from '@hono/node-server'
