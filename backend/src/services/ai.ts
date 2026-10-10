@@ -225,6 +225,10 @@ export function stripReasoningBlocks(text: string): string {
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<reflection>[\s\S]*?<\/reflection>/gi, '')
     .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+    // QA msg-20261010-014 ISSUE-014 Fix 2: LLM 经常用 ```json ... ``` markdown fence 包裹 JSON 输出
+    //   (LLM 系统 prompt 说 '严格 JSON', 但实际还是 markdown), 剥 fence 后再 JSON.parse
+    .replace(/^\s*```(?:json)?\s*\n?/i, '')
+    .replace(/\n?```\s*$/i, '')
     .trim()
 }
 

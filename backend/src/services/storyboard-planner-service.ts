@@ -173,7 +173,8 @@ async function callLLMJson<T>(
 ): Promise<T> {
   // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
   // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
-  const maxRetries = opts.retry ?? 1
+  // QA msg-20261010-014 ISSUE-014 Fix 4: retry 1 → 2, LLM think 耗尽 token 概率较高, 多给一次机会
+  const maxRetries = opts.retry ?? 2
   const url = config.baseUrl.replace(/\/$/, '') + '/v1/chat/completions'
   let lastError: Error | null = null
 
@@ -194,7 +195,8 @@ async function callLLMJson<T>(
           ],
           response_format: { type: 'json_object' },
           temperature: 0,
-          max_tokens: 8192,
+          // QA msg-20261010-014 ISSUE-014 Fix 1: max_tokens 8192 → 16384 (LLM think 完要 16K token 才不截断, 实测 MiniMax-M3 reasoning 用 8043 + content 149 = 8192 触顶, shot_plan 截断在 shot 1-2 中间)
+        max_tokens: 16384,
           extra_body: { reasoning: { enabled: false } },
         }),
         signal: AbortSignal.timeout(180_000),
@@ -209,6 +211,26 @@ async function callLLMJson<T>(
     }
 
     const data = await resp.json() as any
+    // QA msg-20261010-014 ISSUE-014 Fix 3: 专门 catch finish_reason=length (max_tokens 截断) / content_filter (敏感词被拒)
+            //   之前 status=200 finish_reason=length 视为成功, JSON.parse 失败才 throw, 错误信息只显示 raw content 看不出根因
+            //   现在明确报错: truncated (建议减小 max_tokens 或分多步生成) / content filter (输入有敏感词)
+            const finishReason = data?.choices?.[0]?.finish_reason
+            const usage = data?.usage ?? {}
+            if (finishReason === 'length') {
+              lastError = new Error(`LLM response truncated (max_tokens=${data?.usage?.completion_tokens ?? '?'} 触顶, LLM 还在生成 content). 建议: 减少 max_tokens + 让 LLM 输出更紧凑, 或分多步生成`)
+              logTaskWarn('LLMCall', 'json-parse-truncated', {
+                ...opts.ctx, attempt, model: config.model,
+                finishReason, completionTokens: usage.completion_tokens,
+                promptTokens: usage.prompt_tokens,
+                maxTokens: 16384,
+                hint: 'max_tokens 触顶, LLM 还在生成 JSON content. 看 llm-debug-resp.log 确认 reasoning_tokens 占用',
+              })
+              if (attempt < maxRetries) continue
+              throw lastError
+            }
+            if (finishReason === 'content_filter') {
+              throw new Error('LLM 触发 content filter, 内容被拒. 检查输入是否含敏感词 (鲜血/武器/死亡/燃烧 等)')
+            }
     const message = data?.choices?.[0]?.message || {}
     // 优先读 content, fallback 到 reasoning_content (MiniMax-M3 / DeepSeek / Anthropic thinking 等)
     const raw = (message.content ?? message.reasoning_content ?? '').trim()
