@@ -169,7 +169,7 @@ async function callLLMJson<T>(
   systemPrompt: string,
   userPrompt: string,
   validator: z.ZodType<T>,
-  opts: { retry?: number; maxTokens?: number; ctx?: Record<string, unknown> } = {},
+  opts: { retry?: number; maxTokens?: number; reasoningEffort?: 'low' | 'medium' | 'high' | 'max'; ctx?: Record<string, unknown> } = {},
 ): Promise<T> {
   // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
   // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
@@ -198,6 +198,9 @@ async function callLLMJson<T>(
           // QA msg-20261010-033 sprint 27: max_tokens 16384 → 32768. sprint 14 ISSUE-014 16K 是基于 V2 free-text 估算, V3 5 维 enum step 2 输出 ~30KB (20 shot × 1.5KB), 16K 严重不足.
           //   提到 32K: thinking 8K + content 24K 仍可控, 覆盖 V3 step 2 治本完整场景. cost 涨 2x 但治本优先
           max_tokens: opts.maxTokens ?? 32768,
+          // QA msg-20261010-035 sprint 28: MiniMax-M3 OpenAI 兼容协议省略 reasoning_effort 默认 'max', thinking 8K+ 致 180s timeout.
+          //   改 medium (thinking 1-3K + content 24-28K), step 2 30-60s 内返回, 不再 180s timeout. step 1/2/3 调用方可按需覆盖
+          reasoning_effort: opts.reasoningEffort ?? 'medium',
           extra_body: { reasoning: { enabled: false } },
         }),
         signal: AbortSignal.timeout(180_000),
