@@ -111,7 +111,7 @@ function getGlobalIdx(gi, oi) {
 }
 
 function resolveIdx(globalIdx) {
-  for (let gi = 0; gi < filteredGroups.value.length; gi++) {
+  for (let gi = 0; gi < (filteredGroups.value?.length ?? 0); gi++) {
     const cnt = filteredGroups.value[gi].options.length
     if (globalIdx < cnt) return [gi, globalIdx]
     globalIdx -= cnt
@@ -169,7 +169,7 @@ function positionDropdown() {
 function onSearchKeydown(e) {
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    highlightedIdx.value = Math.min(highlightedIdx.value + 1, flatOptions.value.length - 1)
+    highlightedIdx.value = Math.min(highlightedIdx.value + 1, (flatOptions.value?.length ?? 0) - 1)
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
     highlightedIdx.value = Math.max(highlightedIdx.value - 1, 0)

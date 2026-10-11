@@ -34,7 +34,7 @@ export function useConfigLoading(deps: Deps) {
   // 每个选项的 value 是 "configId:modelName" 格式 (与 image 一致), 用于精确匹配
   // 2D group 结构为将来 ComfyUI workflow 分组预留 (Q3=y)
   const videoConfigSelectOptions = computed(() => {
-    if (!videoConfigs.value.length) return []
+    if (!((videoConfigs.value?.length ?? 0) > 0)) return []
     const byProvider = new Map<string, Array<{ label: string; value: string }>>()
     for (const c of videoConfigs.value) {
       // 跳过停用配置: 和 image 一致, 避免选了之后被后端 getConfigById 拒
@@ -88,7 +88,7 @@ export function useConfigLoading(deps: Deps) {
   // R3 review: 空 config 时返回空数组, 前端用 v-if 隐藏 select, 显示 "未配置" tag
   // 2026-09-12
   const imageConfigSelectOptions = computed(() => {
-    if (!imageConfigs.value.length) return []
+    if (!((imageConfigs.value?.length ?? 0) > 0)) return []
     const byProvider = new Map<string, Array<{ label: string; value: string }>>()
     for (const c of imageConfigs.value) {
       // 跳过停用配置：避免选了之后请求被后端 getConfigById 拒掉
@@ -122,7 +122,7 @@ export function useConfigLoading(deps: Deps) {
 
   // Sprint 6 Task D — text config options (分镜拆解模型选择器用, 跟 imageConfigSelectOptions 同结构)
   const textConfigSelectOptions = computed(() => {
-    if (!textConfigs.value.length) return []
+    if (!((textConfigs.value?.length ?? 0) > 0)) return []
     const byProvider = new Map<string, Array<{ label: string; value: string }>>()
     for (const c of textConfigs.value) {
       if (!c.is_active) continue

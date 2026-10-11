@@ -135,7 +135,7 @@ export function useStoryboardPlanner(opts: {
       step1Plan.value = resp.shot_plan
       currentStep.value = 1
       stepStatus.value[1] = 'done'
-      toast.success(`step1 完成: ${resp.shot_plan.length} 镜头, 总时长 ${resp.total_duration}s`)
+      toast.success(`step1 完成: ${resp.shot_plan?.length ?? 0} 镜头, 总时长 ${resp.total_duration}s`)
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
       error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step1 失败')
@@ -169,7 +169,7 @@ export function useStoryboardPlanner(opts: {
       step2Details.value = resp.shot_details
       currentStep.value = 2
       stepStatus.value[2] = 'done'
-      toast.success(`step2 完成: ${resp.shot_details.length} 个分镜详情`)
+      toast.success(`step2 完成: ${resp.shot_details?.length ?? 0} 个分镜详情`)
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
       error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step2 失败')
@@ -199,7 +199,7 @@ export function useStoryboardPlanner(opts: {
       )
       currentStep.value = 3
       stepStatus.value[3] = 'done'
-      toast.success(`step3 完成: 创建 ${resp.createdStoryboardIds.length} 个分镜`)
+      toast.success(`step3 完成: 创建 ${resp.createdStoryboardIds?.length ?? 0} 个分镜`)
       opts.onComplete?.()
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'

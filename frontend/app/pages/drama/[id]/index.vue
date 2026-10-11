@@ -307,9 +307,9 @@ async function loadConfigs() {
     imageConfigs.value = imgs || []
     videoConfigs.value = vids || []
     audioConfigs.value = auds || []
-    if (!newEpisodeImageConfigId.value && imageConfigs.value.length) newEpisodeImageConfigId.value = imageConfigs.value[0].id
-    if (!newEpisodeVideoConfigId.value && videoConfigs.value.length) newEpisodeVideoConfigId.value = videoConfigs.value[0].id
-    if (!newEpisodeAudioConfigId.value && audioConfigs.value.length) newEpisodeAudioConfigId.value = audioConfigs.value[0].id
+    if (!newEpisodeImageConfigId.value && (imageConfigs.value?.length ?? 0)) newEpisodeImageConfigId.value = imageConfigs.value[0].id
+    if (!newEpisodeVideoConfigId.value && (videoConfigs.value?.length ?? 0)) newEpisodeVideoConfigId.value = videoConfigs.value[0].id
+    if (!newEpisodeAudioConfigId.value && (audioConfigs.value?.length ?? 0)) newEpisodeAudioConfigId.value = audioConfigs.value[0].id
   } catch (e) {
     toast.error(e.message)
   }

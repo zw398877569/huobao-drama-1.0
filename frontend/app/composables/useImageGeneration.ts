@@ -56,7 +56,7 @@ export function useImageGeneration(deps: Deps) {
   function buildShotReferenceAssets(sb: any, excludeFirstFrame = false) {
     const assets: any[] = []
     const pushAsset = (asset: any) => {
-      if (!asset?.path || assets.some(a => a.path === asset.path) || assets.length >= 6) return
+      if (!asset?.path || assets.some(a => a.path === asset.path) || (assets?.length ?? 0) >= 6) return
       assets.push(asset)
     }
 
@@ -143,7 +143,7 @@ export function useImageGeneration(deps: Deps) {
 
     // 参考图说明 + 角色一致性要求(nano-banana 的 images 字段不强制 character
     // consistency,必须用 prompt 显式声明谁对应哪张图,并要求保持脸部特征)
-    if (assets.length) {
+    if ((assets?.length ?? 0) > 0) {
       const legend = assets.map(a => {
         const detail = a.characterAppearance
           ? `${a.characterName}(${a.characterAppearance})`
@@ -151,7 +151,7 @@ export function useImageGeneration(deps: Deps) {
         return `${a.imageLabel}=${detail}`
       }).join('；')
       sections.push(`参考图: ${legend}`)
-      if (characterAssets.length) {
+      if ((characterAssets?.length ?? 0) > 0) {
         sections.push(
           `角色一致性: ${characterAssets.map(a => a.imageLabel).join('、')} 是 ${characterAssets.map(a => a.characterName).join('、')} 的形象参考,`
           + `首帧中必须严格保持其脸部特征、发型、年龄、衣着,不要换脸或改变体型。`
@@ -221,7 +221,7 @@ export function useImageGeneration(deps: Deps) {
         )
         let allDone = true
         let anyFailed = false
-        for (let j = 0; j < results.length; j++) {
+        for (let j = 0; j < (results?.length ?? 0); j++) {
           const res = results[j]
           const charId = charIds[j]
           if (res?.status === 'completed' || res?.status === 'succeeded') {
@@ -282,7 +282,7 @@ export function useImageGeneration(deps: Deps) {
     const ids = ctx.chars.value
       .filter(c => !isNarratorCharacter(c) && !(c.image_url || c.imageUrl))
       .map(c => c.id)
-    if (!ids.length) {
+    if (!((ids?.length ?? 0) > 0)) {
       toast.info('所有角色图片已生成')
       return
     }
@@ -337,7 +337,7 @@ export function useImageGeneration(deps: Deps) {
 
   function batchSceneImages() {
     const ids = ctx.scenes.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
-    if (!ids.length) {
+    if (!((ids?.length ?? 0) > 0)) {
       toast.info('所有场景图片已生成')
       return
     }
@@ -351,7 +351,7 @@ export function useImageGeneration(deps: Deps) {
       )
       if (!allDone) return false
       pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => !ids.includes(item))
-      const failedCount = scenes.filter(s => s?.status === 'failed').length
+      const failedCount = (scenes?.filter(s => s?.status === 'failed') || []).length
       if (failedCount > 0) {
         toast.error(`${failedCount} 个场景图片生成失败`)
       } else {
@@ -405,7 +405,7 @@ export function useImageGeneration(deps: Deps) {
         drama_id: ctx.dramaId,
         prompt,
         frame_type: frameType,
-        reference_images: referenceImages.length ? referenceImages : undefined,
+        reference_images: (referenceImages?.length ?? 0) > 0 ? referenceImages : undefined,
       }
       // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
       if (imageConfigIdRef?.value != null) body.config_id = imageConfigIdRef.value

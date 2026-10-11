@@ -346,7 +346,7 @@ export function useStoryboardEdit(deps: Deps) {
     const idx = ctx.sbs.value.indexOf(sb)
     await storyboardAPI.del(sb.id)
     await refresh()
-    if (ctx.sbs.value.length) selectedSb.value = ctx.sbs.value[Math.min(idx, ctx.sbs.value.length - 1)]
+    if ((ctx.sbs.value?.length ?? 0) > 0) selectedSb.value = ctx.sbs.value[Math.min(idx, (ctx.sbs.value?.length ?? 1) - 1)]
     else selectedSb.value = null
   }
 
