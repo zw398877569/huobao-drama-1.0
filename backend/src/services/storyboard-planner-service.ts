@@ -169,7 +169,7 @@ async function callLLMJson<T>(
   systemPrompt: string,
   userPrompt: string,
   validator: z.ZodType<T>,
-  opts: { retry?: number; ctx?: Record<string, unknown> } = {},
+  opts: { retry?: number; maxTokens?: number; ctx?: Record<string, unknown> } = {},
 ): Promise<T> {
   // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
   // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
@@ -195,8 +195,9 @@ async function callLLMJson<T>(
           ],
           response_format: { type: 'json_object' },
           temperature: 0,
-          // QA msg-20261010-014 ISSUE-014 Fix 1: max_tokens 8192 → 16384 (LLM think 完要 16K token 才不截断, 实测 MiniMax-M3 reasoning 用 8043 + content 149 = 8192 触顶, shot_plan 截断在 shot 1-2 中间)
-        max_tokens: 16384,
+          // QA msg-20261010-033 sprint 27: max_tokens 16384 → 32768. sprint 14 ISSUE-014 16K 是基于 V2 free-text 估算, V3 5 维 enum step 2 输出 ~30KB (20 shot × 1.5KB), 16K 严重不足.
+          //   提到 32K: thinking 8K + content 24K 仍可控, 覆盖 V3 step 2 治本完整场景. cost 涨 2x 但治本优先
+          max_tokens: opts.maxTokens ?? 32768,
           extra_body: { reasoning: { enabled: false } },
         }),
         signal: AbortSignal.timeout(180_000),
@@ -217,15 +218,28 @@ async function callLLMJson<T>(
             const finishReason = data?.choices?.[0]?.finish_reason
             const usage = data?.usage ?? {}
             if (finishReason === 'length') {
-              lastError = new Error(`LLM response truncated (max_tokens=${data?.usage?.completion_tokens ?? '?'} 触顶, LLM 还在生成 content). 建议: 减少 max_tokens + 让 LLM 输出更紧凑, 或分多步生成`)
+              lastError = new Error(`LLM response truncated (max_tokens=${data?.usage?.completion_tokens ?? '?'} 触顶, LLM 还在生成 content). 建议: 减小 max_tokens + 让 LLM 输出更紧凑, 或分多步生成`)
               logTaskWarn('LLMCall', 'json-parse-truncated', {
                 ...opts.ctx, attempt, model: config.model,
                 finishReason, completionTokens: usage.completion_tokens,
                 promptTokens: usage.prompt_tokens,
-                maxTokens: 16384,
+                maxTokens: opts.maxTokens ?? 32768,
                 hint: 'max_tokens 触顶, LLM 还在生成 JSON content. 看 llm-debug-resp.log 确认 reasoning_tokens 占用',
               })
-              if (attempt < maxRetries) continue
+              // QA msg-20261010-033 sprint 27 Fix 2: 智能 retry — finish_reason=length 还有 retry 余量时, max_tokens × 2 续写
+              //   默认 max_tokens=32768, retry 1 时 max_tokens=65536 (32K→64K), 极端 case (drama 10+30 shot 复杂 prompt) 容错
+              if (attempt < maxRetries) {
+                const newMaxTokens = (opts.maxTokens ?? 32768) * 2
+                logTaskWarn('LLMCall', 'json-parse-truncated-retry', {
+                  ...opts.ctx, attempt, oldMaxTokens: opts.maxTokens ?? 32768, newMaxTokens,
+                  hint: 'finish_reason=length 触发 retry, max_tokens 自动 2x 续写, 避免再次截断',
+                })
+                return await callLLMJson(config, systemPrompt, userPrompt, validator, {
+                  ...opts,
+                  retry: maxRetries - attempt - 1,
+                  maxTokens: newMaxTokens,
+                })
+              }
               throw lastError
             }
             if (finishReason === 'content_filter') {
