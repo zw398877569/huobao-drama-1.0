@@ -19,6 +19,7 @@
  */
 import { ref, computed } from 'vue'
 import { toast } from 'vue-sonner'
+import { agentAPI } from './useApi'
 
 export interface ShotPlanItem {
   shot_number: number
@@ -104,8 +105,43 @@ export function useStoryboardPlanner(opts: {
     stepStatus.value = { 1: 'pending', 2: 'pending', 3: 'pending' }
   }
 
-  function openWizard() {
-    resetWizard()
+  // V4 wizard 重进 modal 恢复进度 (PM msg-20261010-027 Part B)
+  //   先 await backend getPlanningState, 拿到 step1_plan / step2_details / current_step,
+  //   再 resetWizard 清空旧 state, 最后用 backend state 设置前端 reactive.
+  //   - 没跑过 wizard: backend state 全 null/0 → currentStep=0 全 pending (跟之前一样)
+  //   - step 1 完成过: currentStep=1 + step1Plan=数据 + stepStatus[1]=done
+  //   - step 3 完成过: currentStep=3 + 进度条全 done
+  //   - backend planning_data 损坏/缺失: fallback currentStep=0 (safe default)
+  async function fetchState(): Promise<void> {
+    try {
+      const state = await agentAPI.planningState({ drama_id: getDramaId(), episode_id: getEpisodeId() })
+      // apply backend state to frontend
+      step1Plan.value = (state as any).data?.step1_plan ?? []
+      step2Details.value = (state as any).data?.step2_details ?? []
+      currentStep.value = (state as any).data?.current_step ?? 0
+      const s1Done = !!(state as any).data?.step1_plan
+      const s2Done = !!(state as any).data?.step2_details
+      const s3Done = !!(state as any).data?.step3_storyboard_ids
+      stepStatus.value = {
+        1: s1Done ? 'done' : 'pending',
+        2: s2Done ? 'done' : 'pending',
+        3: s3Done ? 'done' : 'pending',
+      } as any
+    } catch (e: any) {
+      // fetch 失败不影响打开 modal, fallback currentStep=0
+      toast.warn(`拉取 wizard 进度失败: ${e?.data?.message || e?.message || 'unknown'}, 按全新跑处理`)
+    }
+  }
+
+  async function openWizard() {
+    // 重进时先拉 backend state, 再 resetWizard 清空, 再恢复
+    await fetchState()
+    // close 后重进 → reset 已是空的, 直接用 fetchState 的设置
+    // 但 fetchState 已经 setValue 过了, 这里再 reset 会清掉 — 改 resetWizard 加 'preserve' 参数, 默认保留
+    // 简化: 直接用 fetchState 的值, 不调 resetWizard
+    if (currentStep.value === 0 && step1Plan.value.length === 0) {
+      resetWizard()  // 首次打开 (没跑过 wizard), 正常 reset
+    }
     wizardOpen.value = true
   }
 
@@ -132,10 +168,10 @@ export function useStoryboardPlanner(opts: {
         '/api/v1/agent/storyboard_breaker/planning/step1',
         { method: 'POST', body, timeout: 180_000, retry: 0 },
       )
-      step1Plan.value = resp.shot_plan
+      step1Plan.value = resp.data?.shot_plan ?? []
       currentStep.value = 1
       stepStatus.value[1] = 'done'
-      toast.success(`step1 完成: ${resp.shot_plan?.length ?? 0} 镜头, 总时长 ${resp.total_duration}s`)
+      toast.success(`step1 完成: ${resp.data?.shot_plan?.length ?? 0} 镜头, 总时长 ${resp.data?.total_duration ?? 0}s`)
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
       error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step1 失败')
@@ -166,10 +202,10 @@ export function useStoryboardPlanner(opts: {
         '/api/v1/agent/storyboard_breaker/planning/step2',
         { method: 'POST', body, timeout: 180_000, retry: 0 },
       )
-      step2Details.value = resp.shot_details
+      step2Details.value = resp.data?.shot_details ?? []
       currentStep.value = 2
       stepStatus.value[2] = 'done'
-      toast.success(`step2 完成: ${resp.shot_details?.length ?? 0} 个分镜详情`)
+      toast.success(`step2 完成: ${resp.data?.shot_details?.length ?? 0} 个分镜详情`)
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'
       error.value = isTimeout ? 'LLM 调用超时 (180s), 可重试或换模型' : (e?.data?.message || e?.message || 'step2 失败')
@@ -199,7 +235,7 @@ export function useStoryboardPlanner(opts: {
       )
       currentStep.value = 3
       stepStatus.value[3] = 'done'
-      toast.success(`step3 完成: 创建 ${resp.createdStoryboardIds?.length ?? 0} 个分镜`)
+      toast.success(`step3 完成: 创建 ${resp.data?.createdStoryboardIds?.length ?? 0} 个分镜`)
       opts.onComplete?.()
     } catch (e: any) {
       const isTimeout = e?.code === 'ETIMEDOUT' || e?.message?.includes('timeout') || e?.name === 'AbortError'

@@ -176,6 +176,12 @@ export const agentAPI = {
         ;(resp as any)._ctrl = ctrl
       }).catch(reject)
     }),
+
+  // V4 wizard 重进 modal 时恢复 step1/step2/step3 进度 (PM msg-20261010-027 Part B)
+  //   GET /api/v1/agent/storyboard_breaker/planning/state?drama_id=X&episode_id=Y
+  //   返回 { step1_plan, step2_details, step3_storyboard_ids, current_step }
+  planningState: (body: { drama_id: number; episode_id: number }) =>
+    api.get('/agent/storyboard_breaker/planning/state', { params: body }),
 }
 
 export const aiConfigAPI = {

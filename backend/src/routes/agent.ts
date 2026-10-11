@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
-import { runStep1, runStep2, runStep3, runAllStepsLegacy } from '../services/storyboard-planner-service.js'
+import { runStep1, runStep2, runStep3, runAllStepsLegacy, getPlanningState } from '../services/storyboard-planner-service.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { db, schema } from '../db/index.js'
@@ -353,6 +353,25 @@ app.post('/storyboard_breaker/planning/step3', async (c) => {
   } catch (err: any) {
     logTaskError('Agent', 'storyboard_breaker-planning-step3', { error: err?.message || String(err) })
     return badRequest(c, err?.message || 'step3 failed')
+  }
+})
+
+// GET /agent/storyboard_breaker/planning/state — V4 wizard 重进 modal 时恢复进度 (PM msg-20261010-027 Part B)
+//   返回 step1_plan / step2_details / step3_storyboard_ids / current_step
+//   frontend openWizard 先 await fetchState, 不需要从 step 1 重跑 LLM
+app.get('/storyboard_breaker/planning/state', async (c) => {
+  const url = new URL(c.req.url)
+  const dramaId = Number(url.searchParams.get('drama_id'))
+  const episodeId = Number(url.searchParams.get('episode_id'))
+  if (!dramaId || !episodeId) {
+    return badRequest(c, 'drama_id and episode_id are required (query params)')
+  }
+  try {
+    const state = await getPlanningState({ dramaId, episodeId })
+    return success(c, state)
+  } catch (err: any) {
+    logTaskError('Agent', 'storyboard_breaker-planning-state', { error: err?.message || String(err) })
+    return badRequest(c, err?.message || 'state fetch failed')
   }
 })
 

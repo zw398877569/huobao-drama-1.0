@@ -613,3 +613,35 @@ export async function runAllStepsLegacy(opts: {
     createdStoryboardIds: step3Result.createdStoryboardIds,
   }
 }
+
+// ─── Get Planning State (PM msg-20261010-027 Part B) ──────────────────────
+//   V4 wizard 重进 modal 时, 从 episodes.planning_data 恢复 step1/step2/step3 进度
+//   不需要重跑 LLM, 直接读 backend 中间态 JSON
+export async function getPlanningState(opts: {
+  dramaId: number
+  episodeId: number
+}): Promise<{
+  step1_plan: ShotPlanItem[] | null
+  step2_details: ShotDetailsItem[] | null
+  step3_storyboard_ids: number[] | null
+  current_step: 0 | 1 | 2 | 3
+}> {
+  logTaskProgress('StoryboardPlanner', 'state-fetch-begin', { dramaId: opts.dramaId, episodeId: opts.episodeId })
+  const pd = await getPlanningData(opts.episodeId)
+  // 推断当前进度: step3 done > step2 done > step1 done > 0
+  const currentStep: 0 | 1 | 2 | 3 =
+    pd.step3_done_at ? 3 :
+    pd.step2_done_at ? 2 :
+    pd.step1_done_at ? 1 : 0
+  logTaskSuccess('StoryboardPlanner', 'state-fetch-done', {
+    dramaId: opts.dramaId, episodeId: opts.episodeId,
+    currentStep,
+    hasStep1: !!pd.step1_plan, hasStep2: !!pd.step2_details, hasStep3: !!pd.step3_storyboard_ids,
+  })
+  return {
+    step1_plan: pd.step1_plan ?? null,
+    step2_details: pd.step2_details ?? null,
+    step3_storyboard_ids: pd.step3_storyboard_ids ?? null,
+    current_step: currentStep,
+  }
+}
