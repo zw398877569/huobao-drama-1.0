@@ -187,7 +187,7 @@ export const agentAPI = {
   //   GET /api/v1/agent/storyboard_breaker/planning/state?drama_id=X&episode_id=Y
   //   返回 { step1_plan, step2_details, step3_storyboard_ids, current_step }
   planningState: (body: { drama_id: number; episode_id: number }) =>
-    api.get('/agent/storyboard_breaker/planning/state', { params: body }),
+    api.get('/agent/storyboard_breaker/planning/state', body),  // 直接 body 当 params (URLSearchParams 接受 plain object), 不要 axios-style { params: body } 包装
 }
 
 export const aiConfigAPI = {
