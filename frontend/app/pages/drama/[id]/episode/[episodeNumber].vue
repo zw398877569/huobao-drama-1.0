@@ -1377,7 +1377,7 @@
                       </span>
                     </div>
                     <div style="align-self:flex-end" v-if="gridMode !== 'multi_ref'">
-                      <button class="btn btn-sm" @click="gridSelectAll">{{ gridSelected.length === sbs.length ? '取消全选' : '全选' }}</button>
+                      <button class="btn btn-sm" @click="gridSelectAll">{{ (gridSelected?.length ?? 0) === (sbs?.length ?? 0) ? '取消全选' : '全选' }}</button>
                     </div>
                   </div>
 

@@ -226,11 +226,11 @@ export function useStoryboardPlanner(opts: {
   }
 
   function addShot() {
-    const last = step1Plan.value[step1Plan.value.length - 1]
+    const last = step1Plan.value[step1Plan.value?.length ?? 0 - 1]
     step1Plan.value = [
       ...step1Plan.value,
       {
-        shot_number: step1Plan.value.length + 1,
+        shot_number: step1Plan.value?.length ?? 0 + 1,
         scene_id: last?.scene_id ?? 0,
         duration: 8,
         intent_function: '铺垫',

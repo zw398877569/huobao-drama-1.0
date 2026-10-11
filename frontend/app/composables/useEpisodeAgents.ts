@@ -119,8 +119,8 @@ export function useEpisodeAgents(deps: Deps) {
   async function addShot() {
     await storyboardAPI.create({
       episode_id: ctx.epId.value,
-      storyboard_number: ctx.sbs.value.length + 1,
-      title: `镜头${ctx.sbs.value.length + 1}`,
+      storyboard_number: ctx.sbs.value?.length ?? 0 + 1,
+      title: `镜头${ctx.sbs.value?.length ?? 0 + 1}`,
       duration: 10,
     })
     refresh()

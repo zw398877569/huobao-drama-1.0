@@ -72,7 +72,7 @@ export function useGridTool(deps: Deps) {
 
   const gridCanStart = computed(() => {
     if (gridMode.value === 'multi_ref') return !!gridSingleTarget.value
-    return gridSelected.value.length > 0
+    return gridSelected.value?.length ?? 0 > 0
   })
 
   const gridSummary = computed(() => {
@@ -80,8 +80,8 @@ export function useGridTool(deps: Deps) {
       const idx = ctx.sbs.value.findIndex(s => s.id === gridSingleTarget.value) + 1
       return gridSingleTarget.value ? `${gridLayoutShape.value.rows}x${gridLayoutShape.value.cols} 参考图 → 镜头 #${idx}` : '请选择一个镜头'
     }
-    if (!gridSelected.value.length) return '请选择镜头'
-    const count = gridSelected.value.length
+    if (!gridSelected.value?.length ?? 0) return '请选择镜头'
+    const count = gridSelected.value?.length ?? 0
     if (gridMode.value === 'first_last') {
       const { rows, cols } = gridLayoutShape.value
       return `${count} 个镜头 → ${rows}x${cols} 宫格（按首尾帧风格生成，切分后再手动分配）`
@@ -102,13 +102,13 @@ export function useGridTool(deps: Deps) {
 
   const gridAssignableShotIds = computed(() => {
     const assignedIds = [...new Set(gridAssignments.value.map(item => item?.storyboard_id).filter(Boolean))]
-    const ids = Array.isArray(gridActiveShotIds.value) && gridActiveShotIds.value.length
+    const ids = Array.isArray(gridActiveShotIds.value) && (gridActiveShotIds.value?.length ?? 0)
       ? gridActiveShotIds.value
       : assignedIds.length
         ? assignedIds
       : gridMode.value === 'multi_ref'
         ? (gridSingleTarget.value ? [gridSingleTarget.value] : [])
-        : gridSelected.value.length
+        : gridSelected.value?.length ?? 0
           ? [...gridSelected.value]
           : ctx.sbs.value.map(s => s.id)
     return ids.filter(id => ctx.sbs.value.some(s => s.id === id))
@@ -135,15 +135,15 @@ export function useGridTool(deps: Deps) {
   const gridAssignedCount = computed(() => gridAssignments.value.filter(item => !!item.storyboard_id).length)
 
   const gridAssignmentPageSize = computed(() => {
-    if (gridAssignments.value.length >= 25) return 8
-    if (gridAssignments.value.length >= 16) return 10
-    if (gridAssignments.value.length >= 9) return 9
-    return Math.max(1, gridAssignments.value.length || 1)
+    if (gridAssignments.value?.length ?? 0 >= 25) return 8
+    if (gridAssignments.value?.length ?? 0 >= 16) return 10
+    if (gridAssignments.value?.length ?? 0 >= 9) return 9
+    return Math.max(1, gridAssignments.value?.length ?? 0)
   })
 
-  const gridAssignmentTotalPages = computed(() => Math.max(1, Math.ceil(gridAssignments.value.length / gridAssignmentPageSize.value)))
+  const gridAssignmentTotalPages = computed(() => Math.max(1, Math.ceil(gridAssignments.value?.length ?? 0 / gridAssignmentPageSize.value)))
   const gridAssignmentPageStart = computed(() => gridAssignmentPage.value * gridAssignmentPageSize.value)
-  const gridAssignmentPageEnd = computed(() => Math.min(gridAssignments.value.length, gridAssignmentPageStart.value + gridAssignmentPageSize.value))
+  const gridAssignmentPageEnd = computed(() => Math.min(gridAssignments.value?.length ?? 0, gridAssignmentPageStart.value + gridAssignmentPageSize.value))
 
   const pagedGridAssignments = computed(() => {
     return gridAssignments.value
@@ -200,7 +200,7 @@ export function useGridTool(deps: Deps) {
   }
 
   function gridSelectAll() {
-    if (gridSelected.value.length === ctx.sbs.value.length) gridSelected.value = []
+    if (gridSelected.value?.length ?? 0 === ctx.sbs.value?.length ?? 0) gridSelected.value = []
     else gridSelected.value = ctx.sbs.value.map(s => s.id)
   }
 
@@ -270,7 +270,7 @@ export function useGridTool(deps: Deps) {
       recoveredAt: cachedEntry.recoveredAt || item.createdAtLabel,
       recoveredMode: cachedEntry.recoveredMode || item.modeLabel,
     })
-    if (!gridAssignmentsState.value.length) resetGridAssignments()
+    if (!(gridAssignmentsState.value?.length ?? 0)) resetGridAssignments()
     persistGridImagePath(item.localPath)
   }
 
@@ -280,7 +280,7 @@ export function useGridTool(deps: Deps) {
       return
     }
     gridDialog.value = true
-    if (!gridAssignmentsState.value.length) resetGridAssignments()
+    if (!(gridAssignmentsState.value?.length ?? 0)) resetGridAssignments()
     gridStep.value = 3
   }
 
@@ -295,7 +295,7 @@ export function useGridTool(deps: Deps) {
       toast.warning('还没有可继续切割的宫格图')
       return
     }
-    if (!gridAssignmentsState.value.length) resetGridAssignments()
+    if (!(gridAssignmentsState.value?.length ?? 0)) resetGridAssignments()
     gridDialog.value = true
     gridStep.value = 3
   }
@@ -359,7 +359,7 @@ export function useGridTool(deps: Deps) {
     }
     gridActiveShotIds.value = ids.filter(Boolean)
     gridActualLayout.value = { rows, cols }
-    if (!gridAssignmentsState.value.length) resetGridAssignments()
+    if (!(gridAssignmentsState.value?.length ?? 0)) resetGridAssignments()
     gridStep.value = 2
     gridStatusText.value = '提交生成请求...'
     try {
@@ -439,7 +439,7 @@ export function useGridTool(deps: Deps) {
           recoveredAt: cachedEntry.recoveredAt || current.createdAtLabel,
           recoveredMode: cachedEntry.recoveredMode || current.modeLabel,
         })
-        if (!gridAssignmentsState.value.length) resetGridAssignments()
+        if (!(gridAssignmentsState.value?.length ?? 0)) resetGridAssignments()
         persistGridImagePath(current.localPath)
         return
       }
