@@ -47,23 +47,23 @@ export function useEpisodePipeline(deps: Deps) {
   const ttsGeneratedCount = computed(() => ctx.sbs.value.filter(s => hasDialogue(s) && hasTTS(s)).length)
   const shotImgCount = computed(() => ctx.sbs.value.filter(s => s.first_frame_image || s.firstFrameImage || s.last_frame_image || s.lastFrameImage || s.composed_image || s.composedImage).length)
   const shotVidCount = computed(() => ctx.sbs.value.filter(s => s.video_url || s.videoUrl).length)
-  const visualCharTotal = computed(() => visualChars.value.length)
+  const visualCharTotal = computed(() => (visualChars.value?.length ?? 0))
 
   function prodStepDone(id: string) {
     if (id === 'chars') return !visualCharTotal.value || charImgCount.value === visualCharTotal.value
-    if (id === 'scenes') return !!ctx.scenes.value.length && sceneImgCount.value === ctx.scenes.value.length
-    if (id === 'props') return !!ctx.keyProps.value.length && propImgCount.value === ctx.keyProps.value.length
-    if (id === 'dubbing') return !!ctx.sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)
-    if (id === 'shots') return !!ctx.sbs.value.length && shotImgCount.value === ctx.sbs.value.length
-    if (id === 'videos') return !!ctx.sbs.value.length && shotVidCount.value === ctx.sbs.value.length
-    if (id === 'compose') return !!ctx.sbs.value.length && ctx.composedCount.value === ctx.sbs.value.length
+    if (id === 'scenes') return !!(ctx.scenes.value?.length ?? 0) && sceneImgCount.value === (ctx.scenes.value?.length ?? 0)
+    if (id === 'props') return !!(ctx.keyProps.value?.length ?? 0) && propImgCount.value === (ctx.keyProps.value?.length ?? 0)
+    if (id === 'dubbing') return !!(ctx.sbs.value?.length ?? 0) && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)
+    if (id === 'shots') return !!(ctx.sbs.value?.length ?? 0) && shotImgCount.value === (ctx.sbs.value?.length ?? 0)
+    if (id === 'videos') return !!(ctx.sbs.value?.length ?? 0) && shotVidCount.value === (ctx.sbs.value?.length ?? 0)
+    if (id === 'compose') return !!(ctx.sbs.value?.length ?? 0) && ctx.composedCount.value === (ctx.sbs.value?.length ?? 0)
     return false
   }
 
-  const canExport = computed(() => !!ctx.sbs.value.length && ctx.composedCount.value === ctx.sbs.value.length)
+  const canExport = computed(() => !!(ctx.sbs.value?.length ?? 0) && ctx.composedCount.value === (ctx.sbs.value?.length ?? 0))
 
   function goNextProd() {
-    if (prodTabIdx.value < prodTabDefs.value.length - 1) {
+    if (prodTabIdx.value < (prodTabDefs.value?.length ?? 0) - 1) {
       prodTabIdx.value++
     } else {
       ctx.panel.value = 'export'
@@ -80,9 +80,9 @@ export function useEpisodePipeline(deps: Deps) {
   const canGoNext = computed(() => {
     if (ctx.scriptStep.value === 0) return !!ctx.localRaw.value.trim()
     if (ctx.scriptStep.value === 1) return !!ctx.localScript.value.trim() || !!ctx.scriptContent.value
-    if (ctx.scriptStep.value === 2) return ctx.chars.value.length > 0
+    if (ctx.scriptStep.value === 2) return (ctx.chars.value?.length ?? 0) > 0
     if (ctx.scriptStep.value === 3) return ctx.charsVoiced.value > 0
-    if (ctx.scriptStep.value === 4) return ctx.sbs.value.length > 0
+    if (ctx.scriptStep.value === 4) return (ctx.sbs.value?.length ?? 0) > 0
     return false
   })
   function goPrevStep() { if (ctx.scriptStep.value > 0) ctx.scriptStep.value-- }
@@ -95,12 +95,12 @@ export function useEpisodePipeline(deps: Deps) {
 
   const prodTabDefs = computed(() => [
     { id: 'chars', label: '角色形象', icon: 'Users', badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
-    { id: 'scenes', label: '场景图片', icon: 'MapPin', badge: sceneImgCount.value ? `${sceneImgCount.value}/${ctx.scenes.value.length}` : '' },
-    { id: 'props', label: '道具图片', icon: 'Package', badge: propImgCount.value ? `${propImgCount.value}/${ctx.keyProps.value.length}` : '' },
+    { id: 'scenes', label: '场景图片', icon: 'MapPin', badge: sceneImgCount.value ? `${sceneImgCount.value}/${(ctx.scenes.value?.length ?? 0)}` : '' },
+    { id: 'props', label: '道具图片', icon: 'Package', badge: propImgCount.value ? `${propImgCount.value}/${(ctx.keyProps.value?.length ?? 0)}` : '' },
     { id: 'dubbing', label: '配音生成', icon: 'Mic2', badge: '' },
-    { id: 'shots', label: '镜头图片', icon: 'ImageIcon', badge: shotImgCount.value ? `${shotImgCount.value}/${ctx.sbs.value.length}` : '' },
-    { id: 'videos', label: '视频生成', icon: 'Videotape', badge: shotVidCount.value ? `${shotVidCount.value}/${ctx.sbs.value.length}` : '' },
-    { id: 'compose', label: '视频合成', icon: 'Layers', badge: ctx.composedCount.value ? `${ctx.composedCount.value}/${ctx.sbs.value.length}` : '' },
+    { id: 'shots', label: '镜头图片', icon: 'ImageIcon', badge: shotImgCount.value ? `${shotImgCount.value}/${(ctx.sbs.value?.length ?? 0)}` : '' },
+    { id: 'videos', label: '视频生成', icon: 'Videotape', badge: shotVidCount.value ? `${shotVidCount.value}/${(ctx.sbs.value?.length ?? 0)}` : '' },
+    { id: 'compose', label: '视频合成', icon: 'Layers', badge: ctx.composedCount.value ? `${ctx.composedCount.value}/${(ctx.sbs.value?.length ?? 0)}` : '' },
   ])
 
   const mainStageDefs = [
@@ -117,9 +117,9 @@ export function useEpisodePipeline(deps: Deps) {
       items: [
         { key: 'script:raw', label: '原始内容', desc: '', icon: 'FileText', done: !!ctx.rawContent.value },
         { key: 'script:rewrite', label: 'AI 改写', desc: '', icon: 'FileText', done: !!ctx.scriptContent.value },
-        { key: 'script:extract', label: '提取', desc: '', icon: 'Users', done: !!ctx.chars.value.length },
-        { key: 'script:voice', label: '音色', desc: '', icon: 'Mic2', done: !!ctx.chars.value.length && ctx.charsVoiced.value === ctx.chars.value.length },
-        { key: 'script:storyboard', label: '分镜', desc: '', icon: 'Clapperboard', done: !!ctx.sbs.value.length },
+        { key: 'script:extract', label: '提取', desc: '', icon: 'Users', done: !!(ctx.chars.value?.length ?? 0) },
+        { key: 'script:voice', label: '音色', desc: '', icon: 'Mic2', done: !!(ctx.chars.value?.length ?? 0) && ctx.charsVoiced.value === (ctx.chars.value?.length ?? 0) },
+        { key: 'script:storyboard', label: '分镜', desc: '', icon: 'Clapperboard', done: !!(ctx.sbs.value?.length ?? 0) },
       ],
     },
     {
@@ -159,13 +159,13 @@ export function useEpisodePipeline(deps: Deps) {
   function mainStageDone(stageId: string) {
     if (stageId === 'script') return !!ctx.scriptContent.value
     if (stageId === 'assets') {
-      const charsReady = !!ctx.chars.value.length && ctx.charsVoiced.value === ctx.chars.value.length
+      const charsReady = !!(ctx.chars.value?.length ?? 0) && ctx.charsVoiced.value === (ctx.chars.value?.length ?? 0)
       const charImagesReady = !visualCharTotal.value || charImgCount.value === visualCharTotal.value
-      const sceneImagesReady = !ctx.scenes.value.length || sceneImgCount.value === ctx.scenes.value.length
+      const sceneImagesReady = !(ctx.scenes.value?.length ?? 0) || sceneImgCount.value === (ctx.scenes.value?.length ?? 0)
       return charsReady && charImagesReady && sceneImagesReady
     }
     if (stageId === 'storyboard') {
-      const shotsReady = !ctx.sbs.value.length || (shotImgCount.value === ctx.sbs.value.length && shotVidCount.value === ctx.sbs.value.length && ctx.composedCount.value === ctx.sbs.value.length)
+      const shotsReady = !(ctx.sbs.value?.length ?? 0) || (shotImgCount.value === (ctx.sbs.value?.length ?? 0) && shotVidCount.value === (ctx.sbs.value?.length ?? 0) && ctx.composedCount.value === (ctx.sbs.value?.length ?? 0))
       return shotsReady
     }
     if (stageId === 'export') return !!ctx.mergeUrl.value
@@ -275,9 +275,9 @@ export function useEpisodePipeline(deps: Deps) {
 
   const scriptSteps = computed(() => {
     const hasScript = !!ctx.scriptContent.value
-    const hasChars = ctx.chars.value.length > 0 && hasScript
+    const hasChars = (ctx.chars.value?.length ?? 0) > 0 && hasScript
     const hasVoice = ctx.charsVoiced.value > 0 && hasChars
-    const hasSbs = ctx.sbs.value.length > 0
+    const hasSbs = (ctx.sbs.value?.length ?? 0) > 0
     return [
       { label: '原始内容', state: ctx.rawContent.value ? 'done' : 'active', spinning: false },
       { label: 'AI 改写', state: hasScript ? 'done' : (ctx.rawContent.value ? 'active' : ''), spinning: ctx.agentRunningType.value === 'script_rewriter' },
