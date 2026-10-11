@@ -25,7 +25,13 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
 }
 
 export const api = {
-  get: <T = any>(p: string) => req<T>('GET', p),
+  get: <T = any>(p: string, params?: any) => {
+    if (params) {
+      const qs = new URLSearchParams(params).toString()
+      p = `${p}?${qs}`
+    }
+    return req<T>('GET', p)
+  },
   post: <T = any>(p: string, b?: any) => req<T>('POST', p, b),
   put: <T = any>(p: string, b?: any) => req<T>('PUT', p, b),
   del: <T = any>(p: string) => req<T>('DELETE', p),

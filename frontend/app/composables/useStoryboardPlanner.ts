@@ -129,7 +129,7 @@ export function useStoryboardPlanner(opts: {
       } as any
     } catch (e: any) {
       // fetch 失败不影响打开 modal, fallback currentStep=0
-      toast.warn(`拉取 wizard 进度失败: ${e?.data?.message || e?.message || 'unknown'}, 按全新跑处理`)
+      toast.warning(`拉取 wizard 进度失败: ${e?.data?.message || e?.message || 'unknown'}, 按全新跑处理`)
     }
   }
 
