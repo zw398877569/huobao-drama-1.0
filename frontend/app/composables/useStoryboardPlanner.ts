@@ -168,7 +168,7 @@ export function useStoryboardPlanner(opts: {
       //   跟 backend callLLMJson 180s 一致 + retry: 0 (callLLMJson 内部已 retry 1 次, 前端不重复 retry 防双倍请求)
       const resp = await $fetch<{ shot_plan: ShotPlanItem[]; total_duration: number; scene_distribution: Record<string, number> }>(
         '/api/v1/agent/storyboard_breaker/planning/step1',
-        { method: 'POST', body, timeout: 180_000, retry: 0 },
+        { method: 'POST', body, timeout: 420_000, retry: 0 },
       )
       step1Plan.value = resp.data?.shot_plan ?? []
       currentStep.value = 1
@@ -202,7 +202,7 @@ export function useStoryboardPlanner(opts: {
 
       const resp = await $fetch<{ shot_details: ShotDetailsItem[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step2',
-        { method: 'POST', body, timeout: 180_000, retry: 0 },
+        { method: 'POST', body, timeout: 420_000, retry: 0 },
       )
       step2Details.value = resp.data?.shot_details ?? []
       currentStep.value = 2
@@ -233,7 +233,7 @@ export function useStoryboardPlanner(opts: {
       }
       const resp = await $fetch<{ createdStoryboardIds: number[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step3',
-        { method: 'POST', body, timeout: 180_000, retry: 0 },
+        { method: 'POST', body, timeout: 420_000, retry: 0 },
       )
       currentStep.value = 3
       stepStatus.value[3] = 'done'

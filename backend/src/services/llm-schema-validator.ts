@@ -48,7 +48,8 @@ export const V3ImagePromptPermanentSchema = z.object({
     value: z.string().max(50),
   })).min(2).max(10),
   scene_aesthetic: z.array(z.string()).min(0).max(5),
-  shot_type_ref: z.enum(SHOT_TYPE_REFS),
+  // QA msg-20261012-039 Fix 2: 放宽 shot_type_ref 从 z.enum(SHOT_TYPE_REFS) → z.string().optional(), 让 salvageImagePromptPermanent (L170-184) 兜底 fallback, 比硬 reject + retry 整个 LLM (118s) 更省 token
+  shot_type_ref: z.string().optional(),  // LLM 可能输出 '中近景'/'中全景' 等复合值, salvage 兜底统一 fallback 到 '中景', 治本不再烧 retry
   angle: z.string(),
   movement: z.string(),
 })

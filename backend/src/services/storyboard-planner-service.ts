@@ -231,7 +231,7 @@ async function callLLMJson<T>(
           'Authorization': `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(180_000),
+        signal: AbortSignal.timeout(420_000),  // QA msg-20261012-039 Fix 1: 前后端 timeout 对齐 420s (后端 retry 累加 maxRetries=2 次, 最坏 540s; 前端单次 timeout 必须覆盖)
       })
     } catch (err: any) {
       throw new Error(`LLM HTTP failed: ${err?.message || String(err)}`)
@@ -460,6 +460,7 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
     ],
     "scene_aesthetic": ["氛围1", "氛围2"],
     "shot_type_ref": "全景" | "中景" | "近景" | "特写",
+      -- ⚠️ shot_type_ref 必须是这 4 个值之一, 严禁 "中近景"/"中全景" 等复合值 (非法值会触发 salvage fallback 到 "中景", 但会增加 retry 风险)
     "angle": "机位",
     "movement": "运镜"
   }
@@ -481,6 +482,19 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
   }, null, 2)
 
   const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step2Schema)
+
+  // QA msg-20261012-039 Fix 2.2: 治本不让 shot_type_ref (或 5 维) 非法值污染 planning_data.
+  //   Step2Schema 已放宽 shot_type_ref 为 z.string().optional(), 这里用 salvageImagePromptPermanent 兜底:
+  //   - character_traits category 不在 5 维 enum → 移到 description + log warn
+  //   - shot_type_ref 不在 SHOT_TYPE_REFS → fallback '中景' + log warn
+  //   - 其他非法 value (超 50 字) → 截断
+  //   避免 zod reject + retry 整个 LLM 118s 浪费 (sprint 39 dispatch 案例)
+  for (const det of result.shot_details) {
+    if (!det.image_prompt_permanent) continue
+    const salvaged = salvageImagePromptPermanent(det.image_prompt_permanent, { episodeId, shotNumber: det.shot_number })
+    // salvage 返回 { imagePromptPermanent: T | null, plotState: string }, null 表示 LLM 输出完全无效; 这里我们保留 null 让下游知道
+    det.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
+  }
 
   await savePlanningData(episodeId, {
     step2_done_at: now(),
