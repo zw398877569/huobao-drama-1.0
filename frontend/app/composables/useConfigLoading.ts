@@ -80,7 +80,15 @@ export function useConfigLoading(deps: Deps) {
   const lockedAudioConfigId = computed(() => ctx.episode.value?.audio_config_id || ctx.episode.value?.audioConfigId || null)
   const lockedAudioProvider = computed(() => audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)?.provider || '')
   const lockedImageConfigLabel = computed(() => configLabel(imageConfigs.value.find(c => c.id === lockedImageConfigId.value)))
-  const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)))
+  // 2026-10-12 sprint 43 FIX-7: 优先用后端 GET episode 时算的 activeVideoConfigLabel (跟 getActiveConfig('video') 行为一致),
+  //   跟 videoConfigs 列表 lookup 解耦 — 避免用户没在 episode 锁定 video config 时前端误显示 "未配置",
+  //   而后端实际用 aiServiceConfigs serviceType='video' 默认行跑视频, 前后端状态不一致
+  const lockedVideoConfigLabel = computed(() => {
+    const fromServer = ctx.episode.value?.activeVideoConfigLabel
+      || ctx.episode.value?.active_video_config_label
+    if (fromServer) return fromServer
+    return configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value))
+  })
   const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
   // image config 选择器选项：按 provider 分组，展开 model 字段为独立选项

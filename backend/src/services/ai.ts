@@ -89,6 +89,40 @@ function monitorTextConfigDrift(activeRow: any): void {
   }
 }
 
+/**
+ * 2026-10-12 sprint 43 FIX-7 (QA msg-20261012-043): 后端 GET episode 时返回当前生效的 video config label
+ * 优先级: episode.videoConfigId (用户显式锁) > aiServiceConfigs serviceType='video' 优先级最高 active 行 (后端 fallback)
+ * 返 label 字符串 (跟 useConfigLoading.ts:71-76 configLabel 格式一致), 没找到返 null
+ */
+export function getActiveVideoConfigLabel(videoConfigId: number | null | undefined): string | null {
+  // 1. episode.videoConfigId 设了 → 查该 id 的 config
+  let row: any = null
+  if (videoConfigId) {
+    const [r] = db.select().from(schema.aiServiceConfigs)
+      .where(eq(schema.aiServiceConfigs.id, videoConfigId))
+      .all()
+    row = r
+  }
+  // 2. 没设 / 查不到 → 查 serviceType='video' 优先级最高 active 行 (跟 getActiveConfig 行为一致)
+  if (!row) {
+    const rows = db.select().from(schema.aiServiceConfigs)
+      .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
+      .all()
+      .filter(r => r.isActive)
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    row = rows[0]
+  }
+  if (!row) return null
+  // 跟 useConfigLoading.ts configLabel 同格式
+  let modelName = ''
+  try {
+    const m = row.model ? JSON.parse(row.model) : []
+    modelName = Array.isArray(m) ? (m[0] || '') : (m || '')
+  } catch { modelName = row.model || '' }
+  const suffix = row.isActive === false ? ' · 已停用' : ''
+  return modelName ? `${row.name} · ${modelName} (${row.provider})${suffix}` : `${row.name} (${row.provider})${suffix}`
+}
+
 export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, serviceType))

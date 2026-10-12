@@ -3,6 +3,7 @@ import { eq, isNull, like, desc } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
+import { getActiveVideoConfigLabel } from '../services/ai.js'
 
 const app = new Hono()
 
@@ -36,7 +37,11 @@ app.get('/', async (c) => {
       ...toSnakeCase(drama),
       tags: drama.tags ? JSON.parse(drama.tags) : [],
       total_episodes: eps.length,
-      episodes: toSnakeCaseArray(eps),
+      episodes: toSnakeCaseArray(eps).map((ep: any) => ({
+      ...ep,
+      // 2026-10-12 sprint 43 FIX-7: 跟后端 getActiveConfig('video') 行为对齐, 不再误显示"未配置"
+      activeVideoConfigLabel: getActiveVideoConfigLabel(ep.videoConfigId),
+    })),
       characters: toSnakeCaseArray(chars),
       scenes: toSnakeCaseArray(scns),
     }
@@ -116,7 +121,11 @@ app.get('/:id', async (c) => {
   return success(c, {
     ...toSnakeCase(drama),
     tags: drama.tags ? JSON.parse(drama.tags) : [],
-    episodes: toSnakeCaseArray(eps),
+    episodes: toSnakeCaseArray(eps).map((ep: any) => ({
+      ...ep,
+      // 2026-10-12 sprint 43 FIX-7: 跟后端 getActiveConfig('video') 行为对齐, 不再误显示"未配置"
+      activeVideoConfigLabel: getActiveVideoConfigLabel(ep.videoConfigId),
+    })),
     characters: toSnakeCaseArray(chars),
     scenes: toSnakeCaseArray(scns),
     props: toSnakeCaseArray(prps),
