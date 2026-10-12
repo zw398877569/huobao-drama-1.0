@@ -38,7 +38,7 @@ const HUOBAO_AGENT_MODEL = 'gemini-3-pro-preview'
 // 兜底值给未来新加 Agent 用
 const HUOBAO_AGENT_PARAMS: Record<string, { temperature: number; maxTokens: number }> = {
   script_rewriter:       { temperature: 0.5, maxTokens: 8192 },
-  extractor:             { temperature: 0.3, maxTokens: 4096 },
+  extractor:             { temperature: 0.3, maxTokens: 8192 }, // 2026-10-12 sprint 43 FIX-4: 4096 容易 LLM 截断分批 save, 提到 8192
   storyboard_breaker:    { temperature: 0.6, maxTokens: 8192 },
   voice_assigner:        { temperature: 0.4, maxTokens: 2048 },
   grid_prompt_generator: { temperature: 0.6, maxTokens: 4096 },

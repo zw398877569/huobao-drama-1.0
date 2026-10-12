@@ -323,10 +323,13 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
      - 提炼本集实际发生剧情的场景,核对是否在已有列表
      - 提炼本集关键道具(跨镜头反复出现+推动剧情+角色标志),核对是否在已有列表
   6) 按各类型对应维度填字段 (角色 6 维 / 场景 5 维 / 关键道具 8 维),appearance/personality/prompt/description 要尽量丰富
-  7) save_dedup_characters: 传所有本集角色(包括已存在 — 工具自动去重)
-  8) save_dedup_scenes: 传所有本集场景(包括已存在 — 工具自动复用)
-  9) save_dedup_props: 传所有本集关键道具(包括已存在 — 按 name+owner_character_id 去重)
-  10) 不需要重复调 save_dedup_* — 一次性传完整列表
+  7) save_dedup_characters: **一次性传所有本集角色 (含旁白 + 含已存在角色 — 工具内置去重 by name)**
+     - 严禁分批调用!即使 LLM 自以为漏了某角色, 也不要再次调 save_dedup_characters 补救
+     - 工具会自动去重 (by name 精确匹配), 第 2 次调仅是 update 已有角色, 浪费 token + 多写一条 trace
+     - 如果本集角色 ≥ 8 个或剧本特别长导致 LLM 输出截断分批 → 调一次失败后整体重提取, 而不是分批补救
+  8) save_dedup_scenes: **一次性传所有本集场景 (含已存在 — 工具自动复用 by location+time)**
+  9) save_dedup_props: **一次性传所有本集关键道具 (含已存在 — 工具自动去重 by name+owner)**
+  10) **严禁重复调 save_dedup_*!一次性传完整列表. trace 出现第 2 次 begin 视为 bug**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 六、提取质量自检(提交前必须跑一遍)
@@ -459,12 +462,19 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   ✗ 禁止把已有角色的关键信息"覆盖为空"(传 "" 会让 tool 保留旧值, 但传 undefined 会被忽略)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-七、增量模式(局部修改触发)
+七、增量模式(局部修改触发) — 仅在 user 明确说"增量"时才用
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  触发:user message 含"只补充第 N 集的角色" 或 "S3 的场景补一个灯" 类局部指令
+  触发 (严格判定, 三选一):
+  - user message 含 "只补充第 N 集的角色" / "S3 的场景补一个灯" / "追加一个旁白"
+  - user 明确说 "增量更新" / "不要重跑" / "保留已有"
+  - 上一次 save_dedup_characters 失败返回 error (而不是 success)
+  → 否则 (user 没明确说增量 + save_dedup 成功) → 走"一次性全量"路径 (段六)
+
+  增量模式要求:
   - 先 read 已有数据,理解当前状态
-  - 只 save_dedup_characters / save_dedup_scenes / save_dedup_props 增量部分(不要全量覆盖)
+  - 只 save_dedup_characters / save_dedup_scenes / save_dedup_props **真正新增**的项 (不要全量覆盖, 不要重传已有的)
+  - 严禁"我自己再补一个旁白"类自我增量 — 段六一次性传齐已包含旁白
   - 如果是修改某个具体场景的 prompt → 先找到该 scene_id,直接在 save_dedup_scenes 里传同 location+time 的更新版本,工具会自动复用并更新 prompt
   - 不要因为增量修改破坏全局自检
 `,

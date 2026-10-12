@@ -19,7 +19,36 @@ import { generateTTS } from './tts-generation.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
-const NARRATOR_VOICE_FALLBACK = process.env.NARRATOR_VOICE || 'alloy'
+const NARRATOR_VOICE_FALLBACK = process.env.NARRATOR_VOICE  // 2026-10-12 sprint 43 FIX-5: env 可空, fallback 走 aiVoices 查表
+
+// 2026-10-12 sprint 43 FIX-5 (QA msg-20261012-043): getVoiceForSpeaker 旁白/角色 fallback
+// 之前 NARRATOR_VOICE_FALLBACK 默认 'alloy' (OpenAI 英文 voice), minimax API 收到不认识 → 0 字节 (audioMs=0)
+// 修法: 旁白优先查 character '旁白'.voiceStyle; 都没配查 aiVoices provider=minimax 第一行; 再不行 throw
+const NARRATOR_SPEAKER_NAME = '旁白'
+
+/** 查 aiVoices 表 provider='minimax' 的第一行 voiceId, 给旁白/无 voiceStyle 角色兜底 */
+function getFirstMinimaxVoiceId(): string | null {
+  try {
+    const [row] = db.select({ voiceId: schema.aiVoices.voiceId })
+      .from(schema.aiVoices)
+      .where(eq(schema.aiVoices.provider, 'minimax'))
+      .all()
+    return row?.voiceId || null
+  } catch { return null }
+}
+
+/** 校验 voice id 是否在 aiVoices 白名单内 (provider='minimax' 或 'openai'). 不在则 throw */
+function validateVoiceOrThrow(voiceId: string, where: string): void {
+  const exists = db.select({ id: schema.aiVoices.id })
+    .from(schema.aiVoices)
+    .where(eq(schema.aiVoices.voiceId, voiceId))
+    .all()
+  if (exists.length > 0) return
+  // 不在白名单, 但如果 NARRATOR_VOICE_FALLBACK env 显式配了就放过 (escape hatch)
+  if (where === 'narrator-env' && process.env.NARRATOR_VOICE) return
+  logTaskError('TTSConcat', 'voice-not-in-whitelist', { voiceId, where })
+  throw new Error(`[tts-concat] voice id '${voiceId}' (${where}) 不在 aiVoices 白名单内, 拒绝合成避免 0 字节音频. 请在音色分配里重新选 voice, 或 seed minimax voice 到 aiVoices 表`)
+}
 
 
 // ============ 2026-09-23 问题 3 — TTS 自然度优化 ============
@@ -241,13 +270,41 @@ function coalesceAdjacent(segments: DialogueSegment[]): Array<{ speaker: string;
 }
 
 function getVoiceForSpeaker(episodeId: number, speaker: string, isNarrator: boolean): string {
-  if (isNarrator) return NARRATOR_VOICE_FALLBACK
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-  if (!ep) return 'alloy'
-  const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
+  const chars = ep
+    ? db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
+    : []
+  if (isNarrator) {
+    // 2026-10-12 sprint 43 FIX-5: 旁白路径优先查 character '旁白' 的 voiceStyle (voice-assigner 配的)
+    const narratorChar = chars.find((c) => c.name === NARRATOR_SPEAKER_NAME)
+    if (narratorChar?.voiceStyle) {
+      validateVoiceOrThrow(narratorChar.voiceStyle, 'narrator-character')
+      return narratorChar.voiceStyle
+    }
+    if (NARRATOR_VOICE_FALLBACK) {
+      validateVoiceOrThrow(NARRATOR_VOICE_FALLBACK, 'narrator-env')
+      return NARRATOR_VOICE_FALLBACK
+    }
+    // 兜底: aiVoices provider=minimax 第一行
+    const firstMinimax = getFirstMinimaxVoiceId()
+    if (firstMinimax) {
+      logTaskWarn('TTSConcat', 'narrator-fallback-first-minimax', { voiceId: firstMinimax })
+      return firstMinimax
+    }
+    throw new Error(`[tts-concat] 旁白没配 voice: drama 内没有 name='${NARRATOR_SPEAKER_NAME}' 的 character (且 NARRATOR_VOICE env 未设, aiVoices 表也没 minimax 行). 请在音色分配里给旁白配 voice, 或 seed minimax voice 到 aiVoices 表`)
+  }
   const found = chars.find((c) => c.name === speaker)
-  if (found?.voiceStyle) return found.voiceStyle
-  return 'alloy'
+  if (found?.voiceStyle) {
+    validateVoiceOrThrow(found.voiceStyle, 'character-voiceStyle')
+    return found.voiceStyle
+  }
+  // 角色没配 voiceStyle: 兜底用 aiVoices provider=minimax 第一行, 不再硬写 'alloy'
+  const firstMinimax = getFirstMinimaxVoiceId()
+  if (firstMinimax) {
+    logTaskWarn('TTSConcat', 'character-voice-fallback-first-minimax', { speaker, voiceId: firstMinimax })
+    return firstMinimax
+  }
+  throw new Error(`[tts-concat] 角色 '${speaker}' 没配 voiceStyle 且 aiVoices 表没 minimax 行, 拒绝合成避免 0 字节音频. 请在音色分配里给该角色配 voice, 或 seed minimax voice 到 aiVoices 表`)
 }
 
 function getEpisodeConfigId(episodeId: number): number | null | undefined {

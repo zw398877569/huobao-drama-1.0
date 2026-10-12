@@ -190,9 +190,23 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     execute: async ({ characters }) => {
       const ts = now()
       const results = { created: 0, merged: 0 }
+      // 2026-10-12 sprint 43 FIX-4: 加 batchIndex / batchReason 帮排查 LLM 误判分批
+      // batchIndex 0 表示首次 save, 1+ 表示 LLM 自我补救 (视为 bug 写 trace warn)
+      const callIndex = (globalThis as any).__extractSaveCallIndex ?? 0
+      ;(globalThis as any).__extractSaveCallIndex = callIndex + 1
+      const batchReason = callIndex === 0 ? 'initial' : 'llm_self_rescue'
+      if (callIndex > 0) {
+        logTaskWarn('ExtractTool', 'save-characters-repeated', {
+          episodeId, dramaId, batchIndex: callIndex, batchReason,
+          names: characters.map(char => char.name).join(','),
+          hint: 'LLM 把一次提取拆成多次 save_dedup_characters, prompt 已强化"严禁分批". 检查是否 LLM 输出截断 (extractor maxTokens 已 4096→8192)',
+        })
+      }
       logTaskProgress('ExtractTool', 'save-characters-begin', {
         episodeId,
         dramaId,
+        batchIndex: callIndex,
+        batchReason,
         names: characters.map(char => char.name).join(','),
       })
 
