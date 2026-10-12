@@ -3222,7 +3222,7 @@ onMounted(() => { refresh() })
   backdrop-filter: blur(10px);
 }
 .shot-list-title { font-size: 13px; font-weight: 700; color: var(--text-0); }
-.shot-list-sub { margin-top: 3px; font-size: 11px; color: var(--text-3); line-height: 1.45; }
+.shot-list-sub { display: none; }  /* PM msg-20261012-042 P0: 296px 窄列 7 行断行, 藏副标题, 节点保留方便恢复 */
 .shot-list-body { padding: 6px; }
 .shot-item {
   position: relative; padding: 10px 11px; cursor: pointer;
