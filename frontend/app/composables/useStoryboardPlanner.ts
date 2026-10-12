@@ -114,14 +114,15 @@ export function useStoryboardPlanner(opts: {
   //   - backend planning_data 损坏/缺失: fallback currentStep=0 (safe default)
   async function fetchState(): Promise<void> {
     try {
-      const state = await agentAPI.planningState({ drama_id: getDramaId(), episode_id: getEpisodeId() })
-      // apply backend state to frontend
-      step1Plan.value = (state as any).data?.step1_plan ?? []
-      step2Details.value = (state as any).data?.step2_details ?? []
-      currentStep.value = (state as any).data?.current_step ?? 0
-      const s1Done = !!(state as any).data?.step1_plan
-      const s2Done = !!(state as any).data?.step2_details
-      const s3Done = !!(state as any).data?.step3_storyboard_ids
+      // useApi req() 已解包 json.data, s 直接就是 { step1_plan, step2_details, step3_storyboard_ids, current_step }
+      // 不要加 .data 一层 (sprint 24 写了 (state as any).data?.X 实际 state.data undefined → 全走 ?? [] 兜底 → state 恢复永远 step 0)
+      const s: any = await agentAPI.planningState({ drama_id: getDramaId(), episode_id: getEpisodeId() })
+      step1Plan.value = s?.step1_plan ?? []
+      step2Details.value = s?.step2_details ?? []
+      currentStep.value = s?.current_step ?? 0
+      const s1Done = !!s?.step1_plan
+      const s2Done = !!s?.step2_details
+      const s3Done = !!s?.step3_storyboard_ids
       stepStatus.value = {
         1: s1Done ? 'done' : 'pending',
         2: s2Done ? 'done' : 'pending',
@@ -129,7 +130,8 @@ export function useStoryboardPlanner(opts: {
       } as any
     } catch (e: any) {
       // fetch 失败不影响打开 modal, fallback currentStep=0
-      toast.warning(`拉取 wizard 进度失败: ${e?.data?.message || e?.message || 'unknown'}, 按全新跑处理`)
+      // req() throw 的是 Error(json.message), 没有 .data 层, 直接 e?.message 兜底
+      toast.warning(`拉取 wizard 进度失败: ${e?.message || 'unknown'}, 按全新跑处理`)
     }
   }
 
