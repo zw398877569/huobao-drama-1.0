@@ -316,6 +316,7 @@ function containsResidualPolicyRisk(text) {
 //   - task_A: max_tokens 400 → 1500 (MiniMax-M3 thinking 占用, 400 不够)
 //   - task_B: 优先用 'sanitizer' 专用配置 (deepseek-chat 不输出 thinking block), 没配才回退 'text'
 //   - task_C: retry 1 次 + 失败 ≥2 次记 'sanitizer-llm-failed-twice' warn
+//   - 2026-10-12 sprint 43 FIX-1: retry 之间加 5-10s 随机 sleep, 避免 M3 同步限速 (之前是立刻 retry 必失败)
 //
 // 重构成 attemptSanitizerLLM helper + 外层 retry loop — 避免原 try-catch 内部 return null 中断 retry
 async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, configSource: string, attempt: number) {
@@ -329,7 +330,7 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
       body: JSON.stringify({
         model: config.model,
         temperature: 0.4,
-        max_tokens: 1500, // 2026-09-25 PM msg-20260924-006 (Q5 task_A): M3 thinking block 占 token, 400 不够 → 1500
+        max_tokens: 3000, // 2026-09-25 PM msg-20260924-006 (Q5 task_A): M3 thinking block 占 token, 400 不够 → 1500. 2026-10-12 sprint 43 FIX-1 (QA msg-20261012-043): M3 thinking block 偶发 1500 不够 → 3000
         messages: [
           { role: 'system', content: SYSTEM_INSTRUCTION },
           { role: 'user', content: `原文 prompt:\n<<<${rawPrompt}>>>` },
@@ -440,7 +441,10 @@ async function sanitizeImagePromptLLM(rawPrompt) {
     if (result.outcome === 'success') return result.polished
     if (result.outcome === 'hard-fail') return null
     if (attempt < MAX_ATTEMPTS) {
-      logTaskProgress('PromptSanitizer', 'llm-rewrite-retry', { attempt, configSource })
+      // 2026-10-12 sprint 43 FIX-1 (QA msg-20261012-043): M3 同步限速, retry 之间加 5-10s 随机延迟
+      const retryDelayMs = 5000 + Math.floor(Math.random() * 5000)
+      logTaskProgress('PromptSanitizer', 'llm-rewrite-retry', { attempt, configSource, retryDelayMs })
+      await new Promise(r => setTimeout(r, retryDelayMs))
       continue
     }
     logTaskWarn('PromptSanitizer', 'sanitizer-llm-failed-twice', {

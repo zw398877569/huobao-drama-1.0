@@ -232,8 +232,11 @@ Ref2V 多图+多音频 v2 15s 版
       // 与 minimax-video 行为对齐 (single → reference_image, 不是 first_frame)
       workflowId = this.pickRef2VWorkflowId(record.duration)
       refs = [record.imageUrl]
-    } else if (mode === 'first_last' || hasFirstLast) {
+    } else if (mode === 'first_last' || hasFirstLast || record.firstFrameUrl || record.lastFrameUrl) {
       // 首尾帧: 走 FL2V 工作流
+      // 2026-10-12 sprint 43 FIX-8 (QA msg-20261012-043): 用户生成了 first_frame_image 后,
+      //   应该自动用首帧图模式 (FL2V), 不该再走 T2V (no_pic)。前端只传 firstFrameUrl
+      //   不传 lastFrameUrl 时也走这里, last_frame 字段在下面 if (lastFrame) 防御性跳过
       workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V
       firstFrame = record.firstFrameUrl || undefined
       lastFrame = record.lastFrameUrl || undefined

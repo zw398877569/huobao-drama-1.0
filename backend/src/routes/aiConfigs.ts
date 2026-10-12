@@ -13,6 +13,10 @@ const HUOBAO_PRESET_SERVICES = [
   { serviceType: 'image', label: '图片', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
   { serviceType: 'video', label: '视频', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
   { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
+  // 2026-10-12 sprint 43 FIX-2 (QA msg-20261012-043): 加 sanitizer serviceType seed
+  //   prompt-sanitizer L411 优先查 'sanitizer' config, 缺失 fallback 'text'. 加 seed 让 fallback 多一层保险
+  //   model 暂复用 text (gemini-3-pro-preview), PM 想换 deepseek-chat 单独配改 DB 这一行即可
+  { serviceType: 'sanitizer', label: '提示词无害化', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 96 },
 ] as const
 
 const HUOBAO_AGENT_DEFAULTS = [
