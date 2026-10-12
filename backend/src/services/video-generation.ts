@@ -14,6 +14,39 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 
+/**
+ * 2026-10-12 sprint 43 FIX-8-AUTOLOAD (QA msg-20261012-047):
+ *   自动从 image_generations 表读 sb 的最新 first_frame 记录 (status=completed, frame_type=first_frame),
+ *   写回 params.firstFrameUrl. 跳过条件: 用户已经传了 firstFrameUrl/imageUrl/referenceImageUrls 任一.
+ *   跟 sprint 43 FIX-8 改的 autodl-comfyui-workflow.ts:235 路由判断兼容 (有 firstFrameUrl → 自动走 FL2V, 非 no_pic).
+ *   source of truth 是 image_generations (disk 上有图就有记录), 不依赖 storyboards.first_frame_image 字段 update.
+ */
+function autoLoadFirstFrame(params: GenerateVideoParams): void {
+  if (params.firstFrameUrl || params.imageUrl || (params.referenceImageUrls && params.referenceImageUrls.length)) {
+    return  // 用户已传, 不覆盖
+  }
+  if (!params.storyboardId) return  // 自由创作模式没 storyboardId, 跳过
+  const rows = db.select({
+    id: schema.imageGenerations.id,
+    localPath: schema.imageGenerations.localPath,
+  }).from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.storyboardId, params.storyboardId))
+    .all()
+    .filter((r: any) => r.localPath && r.frameType === 'first_frame' && r.status === 'completed')
+  if (rows.length === 0) {
+    logTaskProgress('VideoAPI', 'no-first-frame-using-text-only', { storyboardId: params.storyboardId })
+    return
+  }
+  const best = rows.sort((a, b) => b.id - a.id)[0]
+  params.firstFrameUrl = best.localPath
+  logTaskProgress('VideoAPI', 'auto-loaded-first-frame', {
+    storyboardId: params.storyboardId,
+    imageGenId: best.id,
+    localPath: best.localPath,
+    source: 'image_generations (sprint 43 FIX-8-AUTOLOAD)',
+  })
+}
+
 interface GenerateVideoParams {
   storyboardId?: number
   dramaId?: number
@@ -41,6 +74,11 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     ? getConfigById(params.configId)
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
+
+  // 2026-10-12 sprint 43 FIX-8-AUTOLOAD (QA msg-20261012-047): 后端防御性从 image_generations 表读首帧图
+  //   解决 storyboards.first_frame_image 字段不可靠 (image-generation.ts:471 sync update 有时没生效) 的问题
+  //   即使前端没传 first_frame_url / image_url / referenceImageUrls, 也能从 image_generations (disk source of truth) 自动填
+  autoLoadFirstFrame(params)
 
   // traceId 全链路日志入口 — 串通前端 x-trace-id header 到 logs/flow-{traceId}.jsonl
   // pollVideoTask / webhook 链不动 (PM 拍板), 只打这一行作为这次 generate 调用的入口标记
