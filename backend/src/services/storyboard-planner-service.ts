@@ -458,6 +458,9 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
     "character_traits": [
       {"category": "age" | "face" | "hair" | "body" | "outfit", "value": "具体描述 ≤ 50 字"}
     ],
+    -- ⚠️ character_traits[].category 必须是 age/face/hair/body/outfit 这 5 个值之一,
+    --   严禁 clothing/accessory/eyebrows/skin_tone 等扩展维度
+    --   (非法值会被挪到 plot_state, 该描述不会出现在 permanent 段),
     "scene_aesthetic": ["氛围1", "氛围2"],
     "shot_type_ref": "全景" | "中景" | "近景" | "特写",
       -- ⚠️ shot_type_ref 必须是这 4 个值之一, 严禁 "中近景"/"中全景" 等复合值 (非法值会触发 salvage fallback 到 "中景", 但会增加 retry 风险)
@@ -494,6 +497,12 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
     const salvaged = salvageImagePromptPermanent(det.image_prompt_permanent, { episodeId, shotNumber: det.shot_number })
     // salvage 返回 { imagePromptPermanent: T | null, plotState: string }, null 表示 LLM 输出完全无效; 这里我们保留 null 让下游知道
     det.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
+    // QA msg-20261012-040 Fix 1: 回填 plotState — salvage 从 character_traits 移出来的非法 category
+    //   (如 category='clothing' value='红色连衣裙') 和超 10 条溢出项都在这里, 不回填就永久丢失。
+    //   step3 再次 salvage 时 image_prompt_permanent 已干净, cleaned.plotState 必然为空, 救不回来。
+    if (salvaged.plotState) {
+      det.image_prompt_plot_state = [det.image_prompt_plot_state, salvaged.plotState].filter(Boolean).join(' | ')
+    }
   }
 
   await savePlanningData(episodeId, {

@@ -43,10 +43,18 @@ export type ShotTypeRef = typeof SHOT_TYPE_REFS[number]
  * angle / movement 自由 string (机位/运镜)。
  */
 export const V3ImagePromptPermanentSchema = z.object({
+  // QA msg-20261012-040 Fix 2: category 放宽为 z.string(), 非法值由 salvageImagePromptPermanent
+  //   移到 plotState (和 shot_type_ref 同理 sprint 39 Fix 2 已改)。用 schema 硬 reject 一个可以被 salvage 的字段,
+  //   会导致整个 response 报废 + 重跑 LLM 118s — 分层不对。
+  // value 同步放宽到 500 + min/max 放宽到 2..20 的原因: 非法 category 的条目本来就要被移到 plotState
+  //   (内容完整保留在 plotState 里), 如果 value 卡死 50 字 + zod reject 整个 response, 那些内容就彻底丢了。
+  // 放宽后交给 salvage 分流 — 合法的截到 50, 非法的完整进 plotState。
+  // 放宽后 V3 5 维 enum 强约束的'物理保证'被削弱 — 变成 salvage 软约束
+  // (LLM 输 clothing 也能过, 只是会被挪到 plotState)。严格性由 salvage + flow log warn 保证可观测, 而不是 zod reject
   character_traits: z.array(z.object({
-    category: z.enum(PERMANENT_TRAITS_CATEGORIES),
-    value: z.string().max(50),
-  })).min(2).max(10),
+    category: z.string(),          // salvage 会校验并 fallback, 不在 5 维 enum 的移到 plotState
+    value: z.string().max(500),    // 同时放宽: 非法 category 的描述可能较长, 截断到 500 再由 salvage 截到 50
+  })).min(2).max(20),             // 上限放到 20: salvage 会裁到 10, 多出的移到 plotState 不丢失
   scene_aesthetic: z.array(z.string()).min(0).max(5),
   // QA msg-20261012-039 Fix 2: 放宽 shot_type_ref 从 z.enum(SHOT_TYPE_REFS) → z.string().optional(), 让 salvageImagePromptPermanent (L170-184) 兜底 fallback, 比硬 reject + retry 整个 LLM (118s) 更省 token
   shot_type_ref: z.string().optional(),  // LLM 可能输出 '中近景'/'中全景' 等复合值, salvage 兜底统一 fallback 到 '中景', 治本不再烧 retry
