@@ -2012,36 +2012,42 @@
               <div class="wizard-table-wrap">
                 <table class="wizard-table">
                   <thead>
-                    <tr><th>#</th><th>image_prompt_permanent (5 维)</th><th>plot_state</th></tr>
+                    <tr><th>#</th><th>剧情 (5 维 + plot_state)</th><th>摄影参数</th></tr>
                   </thead>
                   <tbody>
                     <tr v-for="det in step2Details" :key="det.shot_number">
                       <td>{{ det.shot_number }}</td>
                       <td>
                         <div v-if="det.image_prompt_permanent" class="wizard-perm">
+                          <div class="wizard-section-heading">人物外貌</div>
                           <div v-for="(t, i) in det.image_prompt_permanent.character_traits" :key="i" class="wizard-trait">
                             <span class="wizard-cat">[{{ t.category }}]</span> {{ t.value }}
                           </div>
-                          <div class="wizard-meta">
-                            shot: {{ det.image_prompt_permanent.shot_type_ref }} /
-                            angle: {{ det.image_prompt_permanent.angle }} /
-                            movement: {{ det.image_prompt_permanent.movement }}
-                          </div>
+                          <div class="wizard-section-heading">场景氛围</div>
+                          <div class="wizard-trait">{{ (det.image_prompt_permanent.scene_aesthetic || []).join(' / ') }}</div>
+                          <div class="wizard-section-heading">瞬时动作</div>
+                          <textarea
+                            class="wizard-prompt-edit"
+                            :value="det.image_prompt_plot_state || ''"
+                            @input="updateDetailPrompt(det.shot_number, 'image_prompt_plot_state', ($event.target as HTMLTextAreaElement).value)"
+                            rows="3"
+                          />
+                          <div class="wizard-section-heading">描述</div>
+                          <textarea
+                            class="wizard-prompt-edit"
+                            :value="det.description || ''"
+                            @input="updateDetailPrompt(det.shot_number, 'description', ($event.target as HTMLTextAreaElement).value)"
+                            rows="2"
+                          />
                         </div>
-                        <textarea
-                          class="wizard-prompt-edit"
-                          :value="det.description || ''"
-                          @input="updateDetailPrompt(det.shot_number, 'description', ($event.target as HTMLTextAreaElement).value)"
-                          rows="2"
-                        />
                       </td>
                       <td>
-                        <textarea
-                          class="wizard-prompt-edit"
-                          :value="det.image_prompt_plot_state || ''"
-                          @input="updateDetailPrompt(det.shot_number, 'image_prompt_plot_state', ($event.target as HTMLTextAreaElement).value)"
-                          rows="3"
-                        />
+                        <div v-if="det.image_prompt_permanent" class="wizard-perm">
+                          <div class="wizard-section-heading">摄影</div>
+                          <div class="wizard-trait">景别: {{ det.image_prompt_permanent.shot_type_ref || '—' }}</div>
+                          <div class="wizard-trait">角度: {{ det.image_prompt_permanent.angle || '—' }}</div>
+                          <div class="wizard-trait">运镜: {{ det.image_prompt_permanent.movement || '—' }}</div>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
@@ -4790,6 +4796,7 @@ onMounted(() => { refresh() })
 .wizard-trait { padding: 2px 0; }
 .wizard-cat { display: inline-block; min-width: 50px; padding: 1px 6px; background: #e0e7ff; color: #3730a3; border-radius: 3px; font-size: 11px; margin-right: 4px; }
 .wizard-meta { color: #6b7280; font-size: 11px; margin-top: 4px; }
+.wizard-section-heading { font-size: 11px; color: #6b7280; margin-top: 6px; margin-bottom: 2px; font-weight: 500; }
 .wizard-prompt-edit { width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 12px; font-family: inherit; resize: vertical; box-sizing: border-box; }
 .wizard-stat { margin: 12px 0; color: #4b5563; font-size: 13px; }
 .wizard-actions { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }

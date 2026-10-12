@@ -228,15 +228,17 @@ export function permanentToText(
   perm: z.infer<typeof V3ImagePromptPermanentSchema>,
 ): string {
   const parts: string[] = []
-  // shot_type_ref + angle + movement (例如 "中景平视推镜")
-  if (perm.shot_type_ref) parts.push(perm.shot_type_ref)
-  if (perm.angle) parts.push(perm.angle)
-  if (perm.movement) parts.push(perm.movement)
+  // 拼接顺序 (sprint 41 QA msg-20261012-041): 物理外貌 → 场景氛围 → 摄影参数
+  // 用户读起来先看剧情内容, 后看摄影配置, 避免把 prompt 误判为'跟剧情无关'
   // character_traits (例如 "年龄35岁, 长方脸, 短发")
   const traitParts = perm.character_traits.map(t => t.value).filter(Boolean)
   if (traitParts.length) parts.push(traitParts.join(' | '))
   // scene_aesthetic (例如 "现代都市室内风格")
   if (perm.scene_aesthetic.length) parts.push(perm.scene_aesthetic.join(' '))
+  // 摄影参数 (放最后, 视觉上像技术配置附录, 不抢剧情内容注意力)
+  if (perm.shot_type_ref) parts.push(perm.shot_type_ref)
+  if (perm.angle) parts.push(perm.angle)
+  if (perm.movement) parts.push(perm.movement)
   return parts.join('。')
 }
 
