@@ -162,6 +162,29 @@ export async function readStoryboardContextForPlanner(
   }
 }
 
+// ─── Model capability check (PM msg-20261012-038) ──────────────────────
+
+/**
+ * 该模型是否支持思考深度控制 (reasoning_effort).
+ *
+ * MiniMax 官方文档: 仅 MiniMax-M3.1-Flash-Preview 支持 output_config.effort /
+ * reasoning_effort 档位 (low/medium/high/xhigh/max), 老模型 (含 MiniMax-M3) 完全不支持,
+ * 且 effort=none 会返回 400.
+ *
+ * 不同 provider 的字段名不同: MiniMax OpenAI 兼容端点用 reasoning_effort,
+ * Anthropic 端点用 output_config.effort. 本项目 callLLMJson 走 OpenAI 兼容 (/v1/chat/completions),
+ * 所以只在 OpenAI 兼容协议下用 reasoning_effort.
+ *
+ * 2026-10-12 用户官网确认后加的条件发送, 避免给不支持的模型发参数.
+ * 后续新模型支持时在这里加白名单.
+ */
+function supportsReasoningEffort(model: string | undefined | null): boolean {
+  if (!model) return false
+  const m = String(model).trim().toLowerCase()
+  // 目前官方仅确认 M3.1-Flash-Preview 支持. 用 includes 容忍官方后续改版本后缀 (如 -flash-preview-20260101)
+  return m.includes('m3.1-flash')
+}
+
 // ─── LLM Call Helper (response_format=json_object) ────────────────────
 
 async function callLLMJson<T>(
@@ -181,28 +204,33 @@ async function callLLMJson<T>(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let resp: Response
     try {
+      // ─── 先在 fetch 外面构造 payload (statements 不能写在 object literal 里), 再传 JSON 字符串 ───
+      // QA msg-20261012-038: 仅支持深度思考控制的模型才发 reasoning_effort, MiniMax-M3 (老模型) 不支持
+      const payload: Record<string, unknown> = {
+        model: config.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        // QA msg-20261010-033 sprint 27: max_tokens 16384 → 32768 (V3 step 2 输出 ~30KB)
+        max_tokens: opts.maxTokens ?? 32768,
+        extra_body: { reasoning: { enabled: false } },
+      }
+      if (supportsReasoningEffort(config.model)) {
+        payload.reasoning_effort = opts.reasoningEffort ?? 'medium'
+        logTaskProgress('LLMCall', 'reasoning-effort-applied', {
+          ...opts.ctx, model: config.model, effort: opts.reasoningEffort ?? 'medium',
+        })
+      }
       resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${config.apiKey}`,
         },
-        body: JSON.stringify({
-          model: config.model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0,
-          // QA msg-20261010-033 sprint 27: max_tokens 16384 → 32768. sprint 14 ISSUE-014 16K 是基于 V2 free-text 估算, V3 5 维 enum step 2 输出 ~30KB (20 shot × 1.5KB), 16K 严重不足.
-          //   提到 32K: thinking 8K + content 24K 仍可控, 覆盖 V3 step 2 治本完整场景. cost 涨 2x 但治本优先
-          max_tokens: opts.maxTokens ?? 32768,
-          // QA msg-20261010-035 sprint 28: MiniMax-M3 OpenAI 兼容协议省略 reasoning_effort 默认 'max', thinking 8K+ 致 180s timeout.
-          //   改 medium (thinking 1-3K + content 24-28K), step 2 30-60s 内返回, 不再 180s timeout. step 1/2/3 调用方可按需覆盖
-          reasoning_effort: opts.reasoningEffort ?? 'medium',
-          extra_body: { reasoning: { enabled: false } },
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(180_000),
       })
     } catch (err: any) {
