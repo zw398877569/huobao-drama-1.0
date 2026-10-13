@@ -2310,7 +2310,7 @@ const {
   wizardOpen, currentStep, step1Plan, step2Details, wizardLoading, stepStatus,
   error,
   totalDuration: wizardTotalDuration,
-  openWizard, closeWizard, runStep1, runStep2, runStep3,
+  openWizard, closeWizard, reopenWizard, runStep1, runStep2, runStep3,
   updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
   updateDetailPrompt,
 } = useStoryboardPlanner({
