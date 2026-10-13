@@ -472,6 +472,11 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
   - 严禁 character_traits[i].value 含情感/剧情描述 (例如 '深爱豆豆胜过自己' → 错误, 应该是 age/face/hair/body/outfit 永久外貌)
   - 严禁 character_traits[i].value 含摄影指令 (如 '中景平视'/'固定机位' → 错误, 这些在 shot_type_ref/angle/movement 字段)
   - 字段分工: 瞬时动作/表情/对话 写 action + image_prompt_plot_state; 物理外貌(年龄/脸/发型/身材/服装) 写 character_traits; 场景氛围 写 scene_aesthetic; 摄影指令 写 shot_type_ref/angle/movement — 三块内容 vs 一块摄影, 不要混
+- 2026-10-13 sprint 44 FIX-056-VIDEO-PROMPT-FUSION: video_prompt 字段分工 (跟 image_prompt 完全对称)
+  - video_prompt_permanent 写运镜+机位+环境(运镜词汇/景别/光线, 不要塞剧情动作/对话/表情) — 这部分是摄影指令
+  - video_prompt_plot_state 写本镜剧情瞬时动作/表情/对话/物件状态 (跟 image_prompt_plot_state 字段分工一致)
+  - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 跟 imagePrompt 拼接方式一致
+  - 严禁把剧情动作塞到 video_prompt_permanent (后端拼不出剧情, 视频提示词没剧情); 严禁把摄影指令塞到 video_prompt_plot_state (冗余, 跟 permanent 重复)
 plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
 输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state}] }`
 
@@ -574,7 +579,15 @@ export async function runStep3(opts: {
           det.description || '',
           plotStateText,
         ].filter(Boolean).join('。'),
-        videoPrompt: det.video_prompt_permanent || '',
+        // 2026-10-13 sprint 44 FIX-056-VIDEO-PROMPT-FUSION (QA msg-20261013-056 P0):
+        //   跟 imagePrompt 拼接方式一致 (permanent + description + plot_state 三段拼接),
+        //   041 派单只改了 image_prompt_permanent 内部字段排序 (permanentToText), 没覆盖 video_prompt 拼接.
+        //   之前 videoPrompt 只取 video_prompt_permanent, plot_state 字段存 db 但没拼, 视频提示词没剧情.
+        videoPrompt: [
+          det.video_prompt_permanent || '',
+          det.description || '',
+          det.video_prompt_plot_state || '',
+        ].filter(Boolean).join('。'),
         imagePromptPlotState: plotStateText || null,
         videoPromptPlotState: det.video_prompt_plot_state || null,
         imagePromptPermanent: cleaned.imagePromptPermanent
