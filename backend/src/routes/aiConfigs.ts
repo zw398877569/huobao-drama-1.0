@@ -489,8 +489,15 @@ app.put('/:id', async (c) => {
 // DELETE /ai-configs/:id
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).run()
-  return success(c)
+  // 2026-10-13 sprint 43 FIX-053-DELETE-FEEDBACK (QA msg-20261013-053 P1): 加 try/catch + 标准错误响应
+  //   db.delete 可能因外键约束 / SQLite lock 抛错, 返 500 + 友好 message 给前端 toast 显示
+  try {
+    db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).run()
+    return success(c)
+  } catch (e: any) {
+    logTaskError('AIConfig', 'delete-failed', { id, error: e?.message || String(e) })
+    return c.json({ code: 500, message: '删除失败: ' + (e?.message || String(e)), data: null }, 500)
+  }
 })
 
 // GET /ai-providers

@@ -17,9 +17,9 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
 
     return json.data ?? json
   } catch (err: any) {
-    if (!err.message?.match(/^\d{3}$/)) {
-      const ms = Math.round(performance.now() - start)
-    }
+    // 2026-10-13 sprint 43 FIX-053-DELETE-FEEDBACK (QA msg-20261013-053 P1): 全局 console.error
+    //   caller 仍 throw 让 try/catch 处理 (toast.error 兜底), 但 console 调试可见
+    console.error('[API]', c.req_param || path || '', err)
     throw err
   }
 }

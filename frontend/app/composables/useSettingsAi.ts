@@ -178,14 +178,30 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
   }
 
   async function toggleCfg(c: any) {
-    await aiConfigAPI.update(c.id, { is_active: !c.is_active })
-    loadCfgs()
+    // 2026-10-13 sprint 43 FIX-053-DELETE-FEEDBACK (QA msg-20261013-053 P1): 跟 delCfg 同步加 try/catch + toast.error
+    // 跟 useAgent.ts / useShotTTS.ts / useSettingsSkills.ts 风格一致
+    try {
+      await aiConfigAPI.update(c.id, { is_active: !c.is_active })
+      toast.success(c.is_active ? '已禁用' : '已启用')
+      await loadCfgs()
+    } catch (e: any) {
+      toast.error('切换失败: ' + (e?.message || String(e)))
+    }
   }
 
-  async function delCfg(id: number) {
-    await aiConfigAPI.del(id)
-    toast.success('已删除')
-    loadCfgs()
+  async function delCfg(c: any) {
+    // 2026-10-13 sprint 43 FIX-053-DELETE-FEEDBACK (QA msg-20261013-053 P1):
+    //   接收整个 config 对象 (settings.vue 删前 confirm dialog 需要 c.name / c.provider)
+    //   加 try/catch + toast.error, 错误冒泡到全局 handler user 看不到提示 + cfgs 不刷新
+    const confirmed = confirm(`确认删除配置「${c.name || c.provider}」?\n删除后无法恢复`)
+    if (!confirmed) return
+    try {
+      await aiConfigAPI.del(c.id)
+      toast.success('已删除')
+      await loadCfgs()
+    } catch (e: any) {
+      toast.error('删除失败: ' + (e?.message || String(e)))
+    }
   }
 
   function startAddCfg(t: string) {

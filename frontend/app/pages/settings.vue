@@ -109,7 +109,7 @@
                 <button class="btn btn-ghost btn-sm" @click="testExistingCfg(c)">测试</button>
                 <label class="toggle"><input type="checkbox" :checked="c.is_active" @change="toggleCfg(c)"><span /></label>
                 <button class="btn btn-ghost btn-icon" @click="startEditCfg(c)"><Pencil :size="13" /></button>
-                <button class="btn btn-ghost btn-icon" @click="delCfg(c.id)"><Trash2 :size="13" /></button>
+                <button class="btn btn-ghost btn-icon" @click="delCfg(c)" :title="`删除配置「${c.name || c.provider}」`"><Trash2 :size="13" /></button>
               </div>
               <p v-if="!byType(st.type).length" class="config-empty">暂无配置</p>
             </div>
