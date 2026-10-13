@@ -308,11 +308,31 @@ export function applyHuobaoPreset(apiKey?: string, opts: { overwriteExisting?: b
           .run()
       }
     } else {
-      db.insert(schema.aiServiceConfigs).values({
-        ...values,
-        createdAt: ts,
-      }).run()
-      applied++
+      // 2026-10-13 sprint 43 FIX-052-INSERT-PATH (QA msg-20261013-052 P0):
+      //   existing 找不到 (filter provider 没匹配), 但同 serviceType 可能还有 user 手动配的不同 provider 行
+      //   (例: user 配 nano-banana image, 删 chatfire image 后 startup 跑 → existing=undefined 走这里会插回 chatfire)
+      //   同 serviceType 已有任何 active 行 → skip insert, 避免 dev seed 默认值跟 user 手动配的共存 (priority 高被选 → 401)
+      const anyActive = db.select({
+        id: schema.aiServiceConfigs.id,
+        provider: schema.aiServiceConfigs.provider,
+        isActive: schema.aiServiceConfigs.isActive,
+      }).from(schema.aiServiceConfigs)
+        .where(eq(schema.aiServiceConfigs.serviceType, preset.serviceType))
+        .all()
+        .filter(row => row.isActive)
+      if (anyActive.length > 0) {
+        logTaskProgress('AIConfig', 'huobao-preset-skip-insert-active-exists', {
+          serviceType: preset.serviceType,
+          existing_provider: anyActive[0].provider,
+          skipped_preset_provider: preset.provider,
+        })
+      } else {
+        db.insert(schema.aiServiceConfigs).values({
+          ...values,
+          createdAt: ts,
+        }).run()
+        applied++
+      }
     }
   }
 
