@@ -1,4 +1,5 @@
 import { aiConfigAPI } from '~/composables/useApi'
+import { toast } from 'vue-sonner'
 
 /**
  * autodl-comfyui 工作流 id → 中文展示标签
@@ -196,14 +197,10 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     const confirmed = confirm(`确认删除配置「${c.name || c.provider}」?\n删除后无法恢复`)
     if (!confirmed) return
     try {
-      console.log('[delCfg DEBUG] before del, cfgs.length=', cfgs.value.length, 'deleting id=', c.id)
       await aiConfigAPI.del(c.id)
-      console.log('[delCfg DEBUG] after del, calling loadCfgs')
       toast.success('已删除')
       await loadCfgs()
-      console.log('[delCfg DEBUG] after loadCfgs, cfgs.length=', cfgs.value.length, 'cfgs.ids=', cfgs.value.map(x => x.id))
     } catch (e: any) {
-      console.error('[delCfg DEBUG] error:', e)
       toast.error('删除失败: ' + (e?.message || String(e)))
     }
   }
