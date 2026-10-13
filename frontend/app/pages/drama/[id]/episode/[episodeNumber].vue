@@ -470,10 +470,7 @@
             <!-- Shot List -->
             <div class="shot-list">
               <div class="shot-list-head">
-                <div>
-                  <div class="shot-list-title">镜头序列</div>
-                  <div class="shot-list-sub">按镜头顺序检查内容与素材状态</div>
-                </div>
+                <!-- 删除 .shot-list-title 节点 (用户不要 '镜头序列' 标题, 三个按钮均分主区头部宽度) -->
                 <div class="shot-list-actions">
                   <span class="tag mono">{{ totalDuration }}s</span>
                   <!-- V4 wizard (PM msg-20261010-005): 主区可发现, 老 + 新 button 同 row -->
@@ -4761,7 +4758,9 @@ onMounted(() => { refresh() })
 
 /* V4 wizard button position adjust (PM msg-20261010-005) — 主区老按钮 + 新按钮并排 */
 .empty-actions { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
-.shot-list-actions { display: flex; align-items: center; gap: 8px; }
+.shot-list-actions { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.shot-list-actions > .btn { flex: 1; justify-content: center; min-width: 0; padding: 0 8px; }
+.shot-list-actions > .tag { margin-right: 4px; flex-shrink: 0; }
 .btn-wizard { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important; color: #fff !important; border-color: transparent !important; }
 .btn-wizard:hover { opacity: 0.92; }
 
