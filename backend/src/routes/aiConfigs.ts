@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, notFound, created, badRequest, now } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
-import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
+import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
 
@@ -257,7 +257,7 @@ export function applyHuobaoPreset(apiKey?: string): { applied: number; serviceCo
   let effectiveKey = (apiKey || process.env.HUOBAO_API_KEY || '').trim()
   if (!effectiveKey) {
     // Startup fallback: 复用 DB 已有 active 行的 apiKey (即使其他 serviceType, 同一 chatfire 站 key 通用)
-    const [any] = db.select({ apiKey: schema.aiServiceConfigs.apiKey })
+    const [any] = db.select({ apiKey: schema.aiServiceConfigs.apiKey, isActive: schema.aiServiceConfigs.isActive })
       .from(schema.aiServiceConfigs)
       .all()
       .filter(r => r.isActive)
