@@ -248,13 +248,28 @@ app.post('/', async (c) => {
   })
 })
 
-// POST /ai-configs/huobao-preset
-app.post('/huobao-preset', async (c) => {
-  const body = await c.req.json()
-  const apiKey = String(body.api_key || '').trim()
-  if (!apiKey) return badRequest(c, 'api_key is required')
+/**
+ * 2026-10-13 sprint 43 FIX-2-RUNTIME (QA msg-20261012-046 P1): extract from huobao-preset endpoint
+ *   让 startup 钩子能直接调 (不通过 HTTP 自我调用), apiKey 可选: 显式传 > HUOBAO_API_KEY env > DB 已有 active 行复用
+ *   (这覆盖了 startup 时用户还没手动调 /ai-configs/huobao-preset 但 DB 已有部分 serviceType 的场景)
+ */
+export function applyHuobaoPreset(apiKey?: string): { applied: number; serviceCount: number; agentCount: number; reason?: string } {
+  let effectiveKey = (apiKey || process.env.HUOBAO_API_KEY || '').trim()
+  if (!effectiveKey) {
+    // Startup fallback: 复用 DB 已有 active 行的 apiKey (即使其他 serviceType, 同一 chatfire 站 key 通用)
+    const [any] = db.select({ apiKey: schema.aiServiceConfigs.apiKey })
+      .from(schema.aiServiceConfigs)
+      .all()
+      .filter(r => r.isActive)
+    effectiveKey = any?.apiKey || ''
+  }
+  if (!effectiveKey) {
+    logTaskWarn('AIConfig', 'huobao-preset-skipped', { reason: 'no apiKey (env HUOBAO_API_KEY + DB row missing, user must POST /ai-configs/huobao-preset 手动 seed)' })
+    return { applied: 0, serviceCount: HUOBAO_PRESET_SERVICES.length, agentCount: HUOBAO_AGENT_DEFAULTS.length, reason: 'no apiKey' }
+  }
 
   const ts = now()
+  let applied = 0
 
   for (const preset of HUOBAO_PRESET_SERVICES) {
     const [existing] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.serviceType, preset.serviceType)).all()
@@ -265,7 +280,7 @@ app.post('/huobao-preset', async (c) => {
       provider: preset.provider,
       name: `火宝默认${preset.label}服务`,
       baseUrl: preset.baseUrl,
-      apiKey,
+      apiKey: effectiveKey,
       model: JSON.stringify([preset.model]),
       priority: preset.priority,
       isActive: true,
@@ -279,6 +294,7 @@ app.post('/huobao-preset', async (c) => {
         ...values,
         createdAt: ts,
       }).run()
+      applied++
     }
   }
 
@@ -304,16 +320,28 @@ app.post('/huobao-preset', async (c) => {
     }
   }
 
+  logTaskSuccess('AIConfig', 'huobao-preset-applied', {
+    serviceCount: HUOBAO_PRESET_SERVICES.length,
+    agentCount: HUOBAO_AGENT_DEFAULTS.length,
+    applied,
+  })
+  return { applied, serviceCount: HUOBAO_PRESET_SERVICES.length, agentCount: HUOBAO_AGENT_DEFAULTS.length }
+}
+
+// POST /ai-configs/huobao-preset
+app.post('/huobao-preset', async (c) => {
+  const body = await c.req.json()
+  const apiKey = String(body.api_key || '').trim()
+  if (!apiKey) return badRequest(c, 'api_key is required')
+
+  const result = applyHuobaoPreset(apiKey)
+  if (result.reason === 'no apiKey') return badRequest(c, 'api_key is required')
+
   const configs = db.select().from(schema.aiServiceConfigs).all().map(row => ({
     ...toSnakeCase(row),
     model: row.model ? JSON.parse(row.model) : [],
   }))
   const agents = db.select().from(schema.agentConfigs).all().map(row => toSnakeCase(row))
-
-  logTaskSuccess('AIConfig', 'huobao-preset-applied', {
-    serviceCount: HUOBAO_PRESET_SERVICES.length,
-    agentCount: HUOBAO_AGENT_DEFAULTS.length,
-  })
 
   return success(c, {
     configs,

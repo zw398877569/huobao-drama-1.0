@@ -107,7 +107,7 @@ import images from './routes/images.js'
 import videos from './routes/videos.js'
 import agnesDebug from './routes/agnesDebug.js'
 import upload from './routes/upload.js'
-import aiConfigs, { aiProviders, ensureAgentDefaults } from './routes/aiConfigs.js'
+import aiConfigs, { aiProviders, ensureAgentDefaults, applyHuobaoPreset } from './routes/aiConfigs.js'
 import agentConfigs from './routes/agentConfigs.js'
 import agent from './routes/agent.js'
 import compose from './routes/compose.js'
@@ -182,6 +182,9 @@ const port = Number(process.env.PORT || 5679)
 // 启动时 sync 每个 agent 的 T/MaxT 到 HUOBAO_AGENT_PARAMS 推荐值
 // (幂等,只动 T/MaxT,不动 systemPrompt 等用户字段;2026-08-23 引入)
 ensureAgentDefaults()
+// 2026-10-13 sprint 43 FIX-2-RUNTIME (QA msg-20261012-046 P1): 启动时自动 seed HUOBAO_PRESET_SERVICES 5 种 serviceType
+// (含 sprint 43 FIX-2 加的 sanitizer). apiKey fallback 顺序: 参数 > HUOBAO_API_KEY env > DB 已有 active 行复用
+applyHuobaoPreset()
 ensureLogDir()
 
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
