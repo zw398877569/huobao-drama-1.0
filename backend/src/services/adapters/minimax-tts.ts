@@ -74,11 +74,14 @@ export class MiniMaxTTSAdapter implements TTSProviderAdapter {
 
     return {
       audioHex: data.audio,
-      audioLength: data.extra_info?.audio_length || 0,
-      sampleRate: data.extra_info?.audio_sample_rate || 32000,
-      bitrate: data.extra_info?.bitrate || 128000,
-      format: data.extra_info?.audio_format || 'mp3',
-      channel: data.extra_info?.audio_channel || 1,
+      // 2026-10-13 sprint 43 FIX-6 (QA msg-20261013-050 P0): extra_info 在 result 顶层, 不在 data 下面
+      // dev minimax-tts.ts L77 写错 data.extra_info → result.extra_info. 实际路径 result.extra_info.audio_length
+      // (bfd9715 临时 log 跑出真实值 3240 验证)
+      audioLength: result.extra_info?.audio_length || 0,
+      sampleRate: result.extra_info?.audio_sample_rate || 32000,
+      bitrate: result.extra_info?.bitrate || 128000,
+      format: result.extra_info?.audio_format || 'mp3',
+      channel: result.extra_info?.audio_channel || 1,
     }
   }
 }

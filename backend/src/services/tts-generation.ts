@@ -73,9 +73,8 @@ export async function generateTTS(params: TTSParams): Promise<string> {
   }
 
   const result = await resp.json()
-  // 2026-10-13 sprint 43 FIX-6 (QA msg-20261012-045 P2 治标) TEMP: 临时 log minimax 真实 response,
-  // 跑 1 段配音看 extra_info 字段, 拿到真实字段名后改 adapters/minimax-tts.ts parseResponse + 移除本段
-  logTaskPayload('AudioTask', 'minimax response raw TEMP-FIX6', { result, parsed_audioLength: result?.data?.extra_info?.audio_length })
+  // 2026-10-13 sprint 43 FIX-6 (QA msg-20261013-050 P0): 临时 log (bfd9715) 调研完, 移除. 真修复在 adapters/minimax-tts.ts
+  //   parseResponse: result.extra_info.audio_length 路径 (extra_info 在 result 顶层, 不在 data 下面)
   const parsed = adapter.parseResponse(result)
 
   // 将 hex 解码为二进制
