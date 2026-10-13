@@ -1,5 +1,6 @@
 import { storyboardAPI } from '~/composables/useApi'
 import { ref } from 'vue'
+import { toast } from 'vue-sonner'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {

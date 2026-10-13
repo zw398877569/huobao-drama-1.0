@@ -1,4 +1,5 @@
 import { skillsAPI } from '~/composables/useApi'
+import { toast } from 'vue-sonner'
 
 type AgentDef = { type: string, label: string, icon: string }
 
