@@ -467,7 +467,8 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
     "angle": "机位",
     "movement": "运镜"
   }
-  - character_traits 2-10 项, category 必须严格在 5 维 enum 内 (age/face/hair/body/outfit)
+  - 2026-10-13 sprint 44 FIX-057 C 方案 (c) prompt 强化: character_traits 至少 1 项 (推荐 2-5 项, 至少 2 个不同维度: age/face/hair/body/outfit 选 ≥ 2 个), 严禁输出空数组, 严禁 0 项
+  - character_traits 2-10 项 (推荐 2-5), category 必须严格在 5 维 enum 内 (age/face/hair/body/outfit)
   - 严禁 category 写 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 (会被 zod reject, 自动 salvage 到 plot_state)
   - 严禁 character_traits[i].value 含情感/剧情描述 (例如 '深爱豆豆胜过自己' → 错误, 应该是 age/face/hair/body/outfit 永久外貌)
   - 严禁 character_traits[i].value 含摄影指令 (如 '中景平视'/'固定机位' → 错误, 这些在 shot_type_ref/angle/movement 字段)

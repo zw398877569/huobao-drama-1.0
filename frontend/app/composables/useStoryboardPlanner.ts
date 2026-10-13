@@ -151,6 +151,19 @@ export function useStoryboardPlanner(opts: {
     wizardOpen.value = false
   }
 
+  // 2026-10-13 sprint 44 FIX-057 (QA msg-20261013-057 P1): 重新分步拆解 — 强制清空前端 state, 从 step 1 重跑
+  //   openWizard 拉 backend state 后, stepStatus 全 done, 没法从 step 1 重跑
+  //   reopenWizard 强制 reset (跟 resetWizard 内部一致, 但不关 modal, 立即开 step 1 view)
+  async function reopenWizard() {
+    currentStep.value = 0
+    step1Plan.value = []
+    step2Details.value = []
+    wizardLoading.value = false
+    error.value = null
+    stepStatus.value = { 1: 'pending', 2: 'pending', 3: 'pending' }
+    wizardOpen.value = true
+  }
+
   // ─── Step 1: 跑 LLM plan, 存 step1Plan ──────────────────────────
   async function runStep1(): Promise<void> {
     wizardLoading.value = true
@@ -296,6 +309,7 @@ export function useStoryboardPlanner(opts: {
     // actions
     openWizard,
     closeWizard,
+    reopenWizard,
     resetWizard,
     runStep1,
     runStep2,

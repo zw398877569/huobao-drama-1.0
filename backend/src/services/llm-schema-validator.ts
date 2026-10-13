@@ -54,7 +54,7 @@ export const V3ImagePromptPermanentSchema = z.object({
   character_traits: z.array(z.object({
     category: z.string(),          // salvage 会校验并 fallback, 不在 5 维 enum 的移到 plotState
     value: z.string().max(500),    // 同时放宽: 非法 category 的描述可能较长, 截断到 500 再由 salvage 截到 50
-  })).min(2).max(20),             // 上限放到 20: salvage 会裁到 10, 多出的移到 plotState 不丢失
+  })).min(1).max(20),             // 2026-10-13 sprint 44 FIX-057 (QA msg-20261013-057 P1): min(2)→min(1), 跟 C 方案 salvage 补 placeholder + prompt 强化三层保险; salvage 函数 L160 仍会从 scene_aesthetic 借条补到 ≥ 2 (LLM 偶尔输出 1 项能过 zod, 视觉效果更完整)
   scene_aesthetic: z.array(z.string()).min(0).max(5),
   // QA msg-20261012-039 Fix 2: 放宽 shot_type_ref 从 z.enum(SHOT_TYPE_REFS) → z.string().optional(), 让 salvageImagePromptPermanent (L170-184) 兜底 fallback, 比硬 reject + retry 整个 LLM (118s) 更省 token
   shot_type_ref: z.string().optional(),  // LLM 可能输出 '中近景'/'中全景' 等复合值, salvage 兜底统一 fallback 到 '中景', 治本不再烧 retry
@@ -161,15 +161,16 @@ export function salvageImagePromptPermanent(
     const overflow = validTraits.splice(10)
     for (const t of overflow) fallbackParts.push(`[${t.category}]:${t.value}`.slice(0, 200))
   }
-  // 数量下限 2 (zod min(.min()) 已经校验, 这里兜底)
-  while (validTraits.length < 2 && (obj.scene_aesthetic as string[] | undefined)?.length) {
+  // 数量下限 2 (zod min(1) 已放宽, 这里 salvage 仍尽量补到 2 视觉效果完整; LLM 输出 0 项时 fallback 1 项 placeholder)
+  const sa = obj.scene_aesthetic as string[] | undefined
+  while (validTraits.length < 2 && sa?.length) {
     // 不够 2 条 → 从 scene_aesthetic 借一条 (LLM 把 scene 信息塞 trait 是常见错误)
-    const sa = obj.scene_aesthetic as string[]
-    if (sa.length) {
-      validTraits.push({ category: 'body', value: sa.shift()! })
-    } else {
-      break
-    }
+    validTraits.push({ category: 'body', value: sa.shift()! })
+  }
+  // 2026-10-13 sprint 44 FIX-057 C 方案 (d): LLM 输出 0 项且 scene_aesthetic 也空, 补 1 项 generic placeholder, 避免 image_prompt_permanent 全空
+  if (validTraits.length === 0) {
+    validTraits.push({ category: 'body', value: '形象细节待定' })
+    fallbackParts.push('[FIX-057 placeholder]: 0 项 character_traits 自动补 1 项 body placeholder')
   }
 
   // 4. scene_aesthetic 清洗 (截断到 5)

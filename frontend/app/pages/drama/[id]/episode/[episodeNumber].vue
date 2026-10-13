@@ -487,6 +487,10 @@
                     <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
                     分步拆解
                   </button>
+                  <button class="btn btn-sm btn-wizard" :disabled="rn || wizardLoading" @click="reopenWizard" title="清空进度, 强制从 step 1 重新跑 wizard (跟 重新拆解 不同, 这是 wizard 3 步模式重跑)">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+                    重新分步拆解
+                  </button>
                 </div>
               </div>
               <div class="shot-list-body">
