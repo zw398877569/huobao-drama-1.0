@@ -253,7 +253,7 @@ app.post('/', async (c) => {
  *   让 startup 钩子能直接调 (不通过 HTTP 自我调用), apiKey 可选: 显式传 > HUOBAO_API_KEY env > DB 已有 active 行复用
  *   (这覆盖了 startup 时用户还没手动调 /ai-configs/huobao-preset 但 DB 已有部分 serviceType 的场景)
  */
-export function applyHuobaoPreset(apiKey?: string): { applied: number; serviceCount: number; agentCount: number; reason?: string } {
+export function applyHuobaoPreset(apiKey?: string, opts: { overwriteExisting?: boolean } = {}): { applied: number; serviceCount: number; agentCount: number; reason?: string } {
   let effectiveKey = (apiKey || process.env.HUOBAO_API_KEY || '').trim()
   if (!effectiveKey) {
     // Startup fallback: 复用 DB 已有 active 行的 apiKey (即使其他 serviceType, 同一 chatfire 站 key 通用)
@@ -288,7 +288,25 @@ export function applyHuobaoPreset(apiKey?: string): { applied: number; serviceCo
     }
 
     if (existing) {
-      db.update(schema.aiServiceConfigs).set(values).where(eq(schema.aiServiceConfigs.id, existing.id)).run()
+      // 2026-10-13 sprint 43 FIX-PRESET-OVERWRITE (QA msg-20261013-049 P0):
+      //   修 TTS 404 regression — applyHuobaoPreset update 路径默认只 update apiKey + isActive + updatedAt,
+      //   保留 user 手动配的 baseUrl/model/provider/name/priority/settings (防覆盖 user 主动配的非默认值)
+      //   overwriteExisting=true 时才全 set (user 显式 reset, POST /ai-configs/huobao-preset 走这条)
+      if (opts.overwriteExisting) {
+        db.update(schema.aiServiceConfigs).set(values).where(eq(schema.aiServiceConfigs.id, existing.id)).run()
+      } else {
+        logTaskProgress('AIConfig', 'huobao-preset-preserve-user-config', {
+          serviceType: preset.serviceType,
+          provider: existing.provider,
+          preserved_baseUrl: existing.baseUrl,
+          preserved_model: existing.model,
+          updated_apiKey: effectiveKey !== existing.apiKey,
+        })
+        db.update(schema.aiServiceConfigs)
+          .set({ apiKey: effectiveKey, isActive: true, updatedAt: ts })
+          .where(eq(schema.aiServiceConfigs.id, existing.id))
+          .run()
+      }
     } else {
       db.insert(schema.aiServiceConfigs).values({
         ...values,
@@ -334,7 +352,7 @@ app.post('/huobao-preset', async (c) => {
   const apiKey = String(body.api_key || '').trim()
   if (!apiKey) return badRequest(c, 'api_key is required')
 
-  const result = applyHuobaoPreset(apiKey)
+  const result = applyHuobaoPreset(apiKey, { overwriteExisting: true })
   if (result.reason === 'no apiKey') return badRequest(c, 'api_key is required')
 
   const configs = db.select().from(schema.aiServiceConfigs).all().map(row => ({
