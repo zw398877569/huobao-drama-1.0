@@ -543,7 +543,36 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
     },
   }, null, 2)
 
-  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step2Schema)
+  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step2Schema, {
+    ctx: { dramaId, episodeId, step: 'step2' },
+    // Sprint 44 FIX-061 follow-up: step 2 同样接 salvage hook, 跟 step 1 套路复用
+    //   zod fail 多是 character_traits 空数组 → 复用 salvageImagePromptPermanent 补 placeholder
+    //   character_ids 过滤非 int 元素 (salvageImagePromptPermanent 不处理 character_ids, 单独 inline)
+    salvage: (parsed) => {
+      if (!parsed || typeof parsed !== 'object') return parsed
+      const obj = parsed as Record<string, unknown>
+      if (!Array.isArray(obj.shot_details)) return parsed
+      const salvagedDetails = obj.shot_details.map((det: any, i: number) => {
+        if (!det || typeof det !== 'object') return det
+        const detCopy: Record<string, unknown> = { ...det }
+        if (Array.isArray(detCopy.character_ids)) {
+          detCopy.character_ids = (detCopy.character_ids as unknown[]).filter(
+            (n) => typeof n === 'number' && Number.isInteger(n),
+          )
+        }
+        if (detCopy.image_prompt_permanent) {
+          const salvaged = salvageImagePromptPermanent(detCopy.image_prompt_permanent, { episodeId, shotNumber: i + 1 })
+          detCopy.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
+          if (salvaged.plotState) {
+            const prev = typeof detCopy.image_prompt_plot_state === 'string' ? detCopy.image_prompt_plot_state : ''
+            detCopy.image_prompt_plot_state = [prev, salvaged.plotState].filter(Boolean).join(' | ')
+          }
+        }
+        return detCopy
+      })
+      return { ...obj, shot_details: salvagedDetails }
+    },
+  })
 
   // QA msg-20261012-039 Fix 2.2: 治本不让 shot_type_ref (或 5 维) 非法值污染 planning_data.
   //   Step2Schema 已放宽 shot_type_ref 为 z.string().optional(), 这里用 salvageImagePromptPermanent 兜底:
