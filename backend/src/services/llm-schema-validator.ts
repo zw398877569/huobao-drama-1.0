@@ -350,3 +350,120 @@ export function salvagePermanentOutfit(
   }
   return valid
 }
+
+// ─── Step 1 shot_plan salvage ──────────────────────────────────────────
+
+/**
+ * shot_plan intent_function 枚举 — 跨文件共享, step1 schema + salvageShotPlanItem 共用
+ * (PM msg-20261010-007 拍板 7 维, 后续扩维度需 fallback 跟 salvageImagePromptPermanent 同套路)
+ */
+export const INTENT_FUNCTIONS = ['铺垫', '揭露', '反转', '高潮', '余韵', '悬念', '情感爆发'] as const
+export type IntentFunction = typeof INTENT_FUNCTIONS[number]
+
+/**
+ * shot_plan 单条 salvage — 跟 salvageImagePromptPermanent / salvagePermanentOutfit 同源
+ *
+ * 修 zod fail 字段:
+ *   - action > 500 字符 → 截断 500 (跟 schema F 放宽一致)
+ *   - character_ids 过滤非 int (LLM 偶发 null/string)
+ *   - duration 越界 [2,15] → 兜底 10 (跟 salvagePermanentOutfit overflow 同套路)
+ *   - intent_function 不在 7 维 enum → 兜底 '铺垫'
+ *   - shot_number / scene_id 非 positive int → 兜底 1
+ *
+ * LLM 输出完全无效 (非 object) → return null, 让上层 catch 走原本 retry 路径.
+ * 跨条连续性 (shot_number 不连续 / 重复) 不在本函数范围内 (由 step1 收尾时检查).
+ */
+export function salvageShotPlanItem(
+  raw: unknown,
+  ctx: { episodeId: number; shotNumber: number },
+): {
+  shot_number: number
+  scene_id: number
+  duration: number
+  intent_function: string
+  action: string
+  character_ids?: number[]
+} | null {
+  if (!raw || typeof raw !== 'object') return null
+
+  const obj = raw as Record<string, unknown>
+
+  // shot_number: positive int, 否则 fallback 1
+  const shotNumberRaw = obj.shot_number
+  let shot_number = 1
+  if (typeof shotNumberRaw === 'number' && Number.isInteger(shotNumberRaw) && shotNumberRaw > 0) {
+    shot_number = shotNumberRaw
+  }
+
+  // scene_id: positive int, 否则 fallback 1
+  const sceneIdRaw = obj.scene_id
+  let scene_id = 1
+  if (typeof sceneIdRaw === 'number' && Number.isInteger(sceneIdRaw) && sceneIdRaw > 0) {
+    scene_id = sceneIdRaw
+  }
+
+  // duration: [2,15], 越界兜底 10
+  const durationRaw = obj.duration
+  let duration = 10
+  if (typeof durationRaw === 'number' && durationRaw >= 2 && durationRaw <= 15) {
+    duration = durationRaw
+  }
+
+  // intent_function: 必须在 7 维 enum 内, 否则兜底 '铺垫'
+  const intentRaw = typeof obj.intent_function === 'string' ? obj.intent_function : ''
+  const intent_function = (INTENT_FUNCTIONS as readonly string[]).includes(intentRaw)
+    ? intentRaw
+    : '铺垫'
+
+  // action: string, 截断到 500 (跟 schema F 放宽一致)
+  const actionRaw = typeof obj.action === 'string' ? obj.action : ''
+  const action = actionRaw.slice(0, 500)
+
+  // character_ids: 可选, 过滤非 int 元素
+  const charIdsRaw = Array.isArray(obj.character_ids) ? obj.character_ids : []
+  const character_ids = charIdsRaw.filter(
+    (n): n is number => typeof n === 'number' && Number.isInteger(n),
+  )
+
+  const result: {
+    shot_number: number
+    scene_id: number
+    duration: number
+    intent_function: string
+    action: string
+    character_ids?: number[]
+  } = {
+    shot_number,
+    scene_id,
+    duration,
+    intent_function,
+    action,
+  }
+  if (character_ids.length) result.character_ids = character_ids
+
+  return result
+}
+
+/**
+ * shot_plan 数组 salvage — 逐条调 salvageShotPlanItem, 失败的条目丢弃 + log 计数
+ * 给 callLLMJson zod fail catch 用, 省一次 retry
+ */
+export function salvageShotPlanArray(
+  raw: unknown,
+  ctx: { episodeId: number },
+): { shot_plan: ReturnType<typeof salvageShotPlanItem>[]; salvagedCount: number; droppedCount: number } {
+  if (!Array.isArray(raw)) {
+    return { shot_plan: [], salvagedCount: 0, droppedCount: 0 }
+  }
+  const salvaged: NonNullable<ReturnType<typeof salvageShotPlanItem>>[] = []
+  let droppedCount = 0
+  for (const shot of raw) {
+    const result = salvageShotPlanItem(shot, { episodeId: ctx.episodeId, shotNumber: salvaged.length + 1 })
+    if (result) {
+      salvaged.push(result)
+    } else {
+      droppedCount++
+    }
+  }
+  return { shot_plan: salvaged, salvagedCount: salvaged.length, droppedCount }
+}

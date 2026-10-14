@@ -27,8 +27,10 @@ import { logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logg
 import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 import {
   salvageImagePromptPermanent,
+  salvageShotPlanArray,
   permanentToText,
   V3ImagePromptPermanentSchema,
+  INTENT_FUNCTIONS,
 } from './llm-schema-validator.js'
 import { stripReasoningBlocks } from './ai.js'
 
@@ -192,7 +194,14 @@ async function callLLMJson<T>(
   systemPrompt: string,
   userPrompt: string,
   validator: z.ZodType<T>,
-  opts: { retry?: number; maxTokens?: number; reasoningEffort?: 'low' | 'medium' | 'high' | 'max'; ctx?: Record<string, unknown> } = {},
+  opts: {
+    retry?: number
+    maxTokens?: number
+    reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
+    ctx?: Record<string, unknown>
+    /** Sprint 44 FIX-061: zod fail 后尝试 salvage 修复字段 (省 retry). 例: shot_plan action>500 → truncate */
+    salvage?: (parsed: unknown) => unknown
+  } = {},
 ): Promise<T> {
   // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
   // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
@@ -314,18 +323,51 @@ async function callLLMJson<T>(
       }
     }
 
+    let parseResult: T
     try {
-      return validator.parse(parsed)
+      parseResult = validator.parse(parsed)
     } catch (err: any) {
       lastError = err
+      const issueCount = err?.issues?.length ?? 0
+      const firstIssue = err?.issues?.[0]
       logTaskWarn('LLMCall', 'zod-validation-failed', {
         ...opts.ctx, attempt, model: config.model,
-        issueCount: err?.issues?.length ?? 0,
-        firstIssue: err?.issues?.[0],
+        issueCount, firstIssue,
       })
+      // Sprint 44 FIX-061: zod fail 后尝试 salvage 修复字段, 避免 retry 整个 response 浪费 token
+      if (opts.salvage) {
+        try {
+          const salvaged = opts.salvage(parsed)
+          const reparsed = validator.safeParse(salvaged)
+          if (reparsed.success) {
+            logTaskWarn('LLMCall', 'zod-salvaged-retry-succeeded', {
+              ...opts.ctx, attempt, model: config.model,
+              originalIssueCount: issueCount,
+              hint: 'salvage 修字段后 zod 二次 pass, 节省 retry token',
+            })
+            return reparsed.data
+          } else {
+            const salvagedIssues = reparsed.error?.issues?.length ?? 0
+            logTaskWarn('LLMCall', 'zod-salvage-still-failed', {
+              ...opts.ctx, attempt, model: config.model,
+              originalIssueCount: issueCount,
+              salvagedIssueCount: salvagedIssues,
+              firstSalvagedIssue: reparsed.error?.issues?.[0],
+              hint: 'salvage 后 zod 仍 fail, 走原本 retry 路径',
+            })
+          }
+        } catch (salvageErr: any) {
+          logTaskWarn('LLMCall', 'zod-salvage-threw', {
+            ...opts.ctx, attempt, model: config.model,
+            salvageErrMsg: salvageErr?.message || String(salvageErr),
+            hint: 'salvage 函数自身抛错, 走原本 retry 路径',
+          })
+        }
+      }
       if (attempt < maxRetries) continue
       throw err
     }
+    return parseResult
   }
 
   throw lastError ?? new Error('LLM call failed (unknown)')
@@ -333,14 +375,12 @@ async function callLLMJson<T>(
 
 // ─── Step 1: shot_plan ────────────────────────────────────────────────
 
-const INTENT_FUNCTIONS = ['铺垫', '揭露', '反转', '高潮', '余韵', '悬念', '情感爆发'] as const
-
 const ShotPlanItemSchema = z.object({
   shot_number: z.number().int().positive(),
   scene_id: z.number().int().positive(),
   duration: z.number().min(2).max(15),
   intent_function: z.enum(INTENT_FUNCTIONS),
-  action: z.string().min(5).max(200),
+  action: z.string().min(5).max(500),
   character_ids: z.array(z.number().int()).optional(),
 })
 
@@ -390,7 +430,18 @@ export async function runStep1(opts: {
     },
   }, null, 2)
 
-  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step1Schema)
+  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step1Schema, {
+    ctx: { dramaId, episodeId, step: 'step1' },
+    salvage: (parsed) => {
+      if (!parsed || typeof parsed !== 'object') return parsed
+      const obj = parsed as Record<string, unknown>
+      if (Array.isArray(obj.shot_plan)) {
+        const { shot_plan: salvagedPlan } = salvageShotPlanArray(obj.shot_plan, { episodeId })
+        return { ...obj, shot_plan: salvagedPlan }
+      }
+      return parsed
+    },
+  })
 
   await savePlanningData(episodeId, {
     step1_done_at: now(),
