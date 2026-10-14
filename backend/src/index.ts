@@ -122,6 +122,8 @@ import aiVoicesAsync from './routes/aiVoicesAsync.js'
 import faceArchive from './routes/faceArchive.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { ensureLogDir } from './utils/file-log.js'
+import { initBatchVideoScheduler } from './services/batch-video-scheduler.js'
+import { logTaskError } from './utils/task-logger.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
 
@@ -186,6 +188,12 @@ ensureAgentDefaults()
 // (含 sprint 43 FIX-2 加的 sanitizer). apiKey fallback 顺序: 参数 > HUOBAO_API_KEY env > DB 已有 active 行复用
 applyHuobaoPreset()
 ensureLogDir()
+
+// Sprint 10 PM msg-20261014-001 task D: 启动时 initBatchVideoScheduler 重建 pending plan cron jobs (backend 重启复活)
+//   fire-and-forget, 不阻塞 server.listen()
+initBatchVideoScheduler().catch((err) => {
+  logTaskError('Server', 'init-batch-video-scheduler-fail', { error: err?.message || String(err) })
+})
 
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
 serve({ fetch: app.fetch, port })
