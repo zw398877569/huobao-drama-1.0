@@ -8,7 +8,7 @@ import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
 import { runStep1, runStep2, runStep3, runAllStepsLegacy, getPlanningState } from '../services/storyboard-planner-service.js'
 import { success, badRequest } from '../utils/response.js'
-import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 

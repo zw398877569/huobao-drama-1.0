@@ -17,7 +17,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
-import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const NARRATOR_VOICE_FALLBACK = process.env.NARRATOR_VOICE  // 2026-10-12 sprint 43 FIX-5: env 可空, fallback 走 aiVoices 查表
 
