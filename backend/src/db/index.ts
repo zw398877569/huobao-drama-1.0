@@ -371,6 +371,27 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at DESC);
   CREATE INDEX IF NOT EXISTS idx_cron_runs_name ON cron_runs(name);
+
+  // Sprint 10 PM msg-20261014-001: batch_video_schedules 表 (项目内 node-cron 调度视频生成)
+  CREATE TABLE IF NOT EXISTS batch_video_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL,
+    scheduled_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    video_config_id INTEGER,
+    shot_ids TEXT NOT NULL,
+    shot_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    last_run_at TEXT,
+    cron_job_id TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_batch_video_schedules_episode_id ON batch_video_schedules(episode_id);
+  CREATE INDEX IF NOT EXISTS idx_batch_video_schedules_status ON batch_video_schedules(status);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {
