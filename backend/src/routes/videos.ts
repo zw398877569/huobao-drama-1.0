@@ -5,6 +5,8 @@ import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { now } from '../utils/response.js'
+import { registerPlan, unregisterPlan } from '../services/batch-video-scheduler.js'
 
 const app = new Hono()
 
@@ -99,6 +101,88 @@ app.get('/', async (c) => {
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   db.delete(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).run()
+  return success(c)
+})
+
+// ─── Batch Video Schedules (Sprint 10 PM msg-20261014-001) ────────────
+// 一次性定时批量生成视频计划, 项目内 node-cron 调度 (D 任务启动集成)
+// 工单 user_4_decisions_locked: D1 触发时间 UI 选 / D2 一次性 / D3 status enum + 失败手动重跑 / D4 单 episode
+
+// POST /videos/batch-schedules — 创建计划 (注册 cron job)
+app.post('/batch-schedules', async (c) => {
+  const body = await c.req.json()
+  if (!body.episode_id) return badRequest(c, 'episode_id is required')
+  if (!body.scheduled_at) return badRequest(c, 'scheduled_at is required')
+  if (!Array.isArray(body.shot_ids) || body.shot_ids.length === 0) return badRequest(c, 'shot_ids must be non-empty array')
+
+  const episodeId = Number(body.episode_id)
+  const videoConfigId = body.video_config_id ? Number(body.video_config_id) : null
+  const shotIds = body.shot_ids.map((n: unknown) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0)
+  if (shotIds.length === 0) return badRequest(c, 'shot_ids contain no valid integer IDs')
+
+  try {
+    const createdAt = now()
+    const insertResult = db.insert(schema.batchVideoSchedules).values({
+      episodeId,
+      scheduledAt: String(body.scheduled_at),
+      status: 'pending',
+      videoConfigId,
+      shotIds: JSON.stringify(shotIds),
+      shotCount: shotIds.length,
+      successCount: 0,
+      failedCount: 0,
+      createdAt,
+    }).returning().all()
+
+    const plan = insertResult[0]
+    if (!plan) return badRequest(c, 'insert failed')
+
+    // 注册 cron job (stub 现在返回 cronJobId, C 任务填充实际调度逻辑)
+    const cronJobId = await registerPlan({
+      id: plan.id,
+      episodeId: plan.episodeId,
+      scheduledAt: plan.scheduledAt,
+      shotIds: plan.shotIds,
+      videoConfigId: plan.videoConfigId,
+    })
+    db.update(schema.batchVideoSchedules)
+      .set({ cronJobId })
+      .where(eq(schema.batchVideoSchedules.id, plan.id))
+      .run()
+    plan.cronJobId = cronJobId
+
+    logTaskSuccess('BatchVideoSchedule', 'create', { planId: plan.id, episodeId, shotCount: shotIds.length })
+    return created(c, plan)
+  } catch (err: any) {
+    logTaskError('BatchVideoSchedule', 'create', { error: err.message, episodeId })
+    return badRequest(c, err.message)
+  }
+})
+
+// GET /videos/batch-schedules?episode_id=N — 列出某 episode 的所有计划
+app.get('/batch-schedules', async (c) => {
+  const episodeId = c.req.query('episode_id')
+  let rows = db.select().from(schema.batchVideoSchedules).all()
+  if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
+  rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
+  return success(c, rows)
+})
+
+// DELETE /videos/batch-schedules/:id — 取消 pending 计划 (unregister cron job, status -> cancelled)
+app.delete('/batch-schedules/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [plan] = db.select().from(schema.batchVideoSchedules)
+    .where(eq(schema.batchVideoSchedules.id, id)).all()
+  if (!plan) return badRequest(c, `batch-schedule ${id} not found`)
+  if (plan.status !== 'pending') return badRequest(c, `cannot cancel plan in status '${plan.status}' (only pending can cancel)`)
+
+  if (plan.cronJobId) await unregisterPlan(plan.cronJobId)
+  db.update(schema.batchVideoSchedules)
+    .set({ status: 'cancelled', finishedAt: now() })
+    .where(eq(schema.batchVideoSchedules.id, id))
+    .run()
+
+  logTaskSuccess('BatchVideoSchedule', 'cancel', { planId: id })
   return success(c)
 })
 

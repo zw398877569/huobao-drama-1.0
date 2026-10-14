@@ -440,6 +440,31 @@ export const cronRuns = sqliteTable('cron_runs', {
 // 关联表/字段: 不存 character_id, 无外键 — face-archive 是风格参考库, 不绑定具体 character.
 // 多剧共用同一张表 (跨剧多样性 soft constraint 由 ORDER BY RANDOM() + few-shot 软约束保证).
 // 索引在 manual-2026-09-29-face-type-entries.sql 里建 (4 个: factor_external unique + 3 查询索引).
+export const batchVideoSchedules = sqliteTable('batch_video_schedules', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  episodeId: integer('episode_id').notNull(),
+  // ISO datetime string, 浏览器本地时间 (scheduler 用 timezone 'Asia/Shanghai' 解析)
+  scheduledAt: text('scheduled_at').notNull(),
+  // pending / running / done / failed / cancelled
+  status: text('status').notNull().default('pending'),
+  // NULL 时 triggerPlan 用 episode.videoConfigId 锁定 fallback (用户拍板 D5/A)
+  videoConfigId: integer('video_config_id'),
+  // JSON array of storyboard IDs, 一次批量生成的镜头
+  shotIds: text('shot_ids').notNull(),
+  shotCount: integer('shot_count').notNull().default(0),
+  successCount: integer('success_count').notNull().default(0),
+  failedCount: integer('failed_count').notNull().default(0),
+  // 失败时记最后一次错误 (重跑覆盖)
+  lastError: text('last_error'),
+  createdAt: text('created_at').notNull(),
+  startedAt: text('started_at'),
+  finishedAt: text('finished_at'),
+  // 多次手动重跑时记最近一次触发
+  lastRunAt: text('last_run_at'),
+  // node-cron 内存级 job ID, backend 重启后失效 (D 任务 initBatchVideoScheduler 重读 pending 重建)
+  cronJobId: text('cron_job_id'),
+})
+
 export const faceTypeEntries = sqliteTable('face_type_entries', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   factor: text('factor').notNull(),
