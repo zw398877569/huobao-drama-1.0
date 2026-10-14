@@ -372,7 +372,7 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at DESC);
   CREATE INDEX IF NOT EXISTS idx_cron_runs_name ON cron_runs(name);
 
-  // Sprint 10 PM msg-20261014-001: batch_video_schedules 表 (项目内 node-cron 调度视频生成)
+  -- Sprint 10 PM msg-20261014-001: batch_video_schedules 表 (项目内 node-cron 调度视频生成)
   CREATE TABLE IF NOT EXISTS batch_video_schedules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     episode_id INTEGER NOT NULL,
