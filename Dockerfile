@@ -87,6 +87,8 @@ RUN mkdir -p data/static
 
 ENV NODE_ENV=production
 ENV PORT=5679
+# Sprint 10 fix: 容器 timezone 设 Asia/Shanghai, 让 new Date() / logTask* 输出本地时间
+ENV TZ=Asia/Shanghai
 
 EXPOSE 5679
 VOLUME ["/app/data"]

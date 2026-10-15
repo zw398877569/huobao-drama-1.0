@@ -10,5 +10,6 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=5679
+      - TZ=Asia/Shanghai
     restart: unless-stopped
 # deploy-trigger: 2026-10-15T02:05:39Z
