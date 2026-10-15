@@ -45,29 +45,36 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 //   3. new Database → SQLite 看不到 -wal → 进入默认 DELETE mode
 //   4. DB Browser reconnect 自动重新走 WAL (它会重建 -shm/-wal), 跟 backend DELETE mode 不冲突
 //      (因为 backend 后续操作也走 DELETE, 不读写 -shm; DB Browser 的 WAL 只影响它自己的 connection)
+// 2026-10-15 user 实测 d3b1fe7 (WAL/SHM 文件 truncate + unlink) 失败: docker 在 SMB 共享上没权限
+// unlink DB Browser 持有的 -wal/-shm 文件 (EACCES: permission denied). SMB server-side lock + 跨进程
+// 文件权限问题, fs.unlinkSync 无法绕过.
+//
+// 改用 read-only fallback: 检测 -wal/-shm 残留 → backend 用 readonly mode 连接 (不创建 -wal/-shm,
+// 不跟 DB Browser 抢 mmap -shm 锁). 全部用 DELETE mode 时 backend R/W 能力, DB Browser 关掉后
+// restart backend 自动用 R/W.
+//
+// 权衡: backend readonly 模式下写操作 (triggerPlan / createPlan 等) 会 throw SqliteError "attempt
+// to write a readonly database". DB Browser 关掉 → restart backend → R/W mode 正常.
+//   多数场景 DB Browser browse-data 默认不写, 只读 backend 完全够用. 真正写后端的操作 (cron
+//   trigger plan 等) 不需要 user 操作 DB Browser, 后端内部跑就行.
 const walPath = DB_PATH + '-wal'
 const shmPath = DB_PATH + '-shm'
-if (fs.existsSync(walPath)) {
-  try {
-    fs.truncateSync(walPath, 0)
-    fs.unlinkSync(walPath)
-    console.log(`[DB] Removed stale WAL file: ${walPath}`)
-  } catch (err: any) {
-    console.warn(`[DB] Could not remove WAL file ${walPath}: ${err?.message || err}. DB Browser may be holding it.`)
-  }
-}
-if (fs.existsSync(shmPath)) {
-  try {
-    fs.unlinkSync(shmPath)
-    console.log(`[DB] Removed stale SHM file: ${shmPath}`)
-  } catch (err: any) {
-    console.warn(`[DB] Could not remove SHM file ${shmPath}: ${err?.message || err}. DB Browser may need to reconnect.`)
-  }
-}
+const walExists = fs.existsSync(walPath) || fs.existsSync(shmPath)
 
-const sqlite = new Database(DB_PATH, { timeout: 30000 })
-sqlite.pragma('busy_timeout = 30000')
-console.log('[DB] journal_mode: DELETE (stale WAL/SHM files removed on startup; DB Browser can stay open during backend startup)')
+let sqlite: import('better-sqlite3').Database
+if (walExists) {
+  console.warn(
+    `[DB] -wal/-shm file exists (DB Browser GUI tool likely open). ` +
+    `Backend falling back to READ-ONLY mode (no -wal/-shm created). ` +
+    `Close DB Browser for SQLite and restart backend to restore read+write access.`
+  )
+  sqlite = new Database(DB_PATH, { readonly: true, fileMustExist: true })
+  console.log('[DB] journal_mode: READ-ONLY (DB Browser open; backend can read but write will fail)')
+} else {
+  sqlite = new Database(DB_PATH, { timeout: 30000 })
+  sqlite.pragma('busy_timeout = 30000')
+  console.log('[DB] journal_mode: DELETE (DB Browser closed; full R/W mode enabled)')
+}
 
 sqlite.exec(`  CREATE TABLE IF NOT EXISTS dramas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
