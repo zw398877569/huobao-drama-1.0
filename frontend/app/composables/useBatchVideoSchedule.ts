@@ -53,14 +53,27 @@ export function useBatchVideoSchedule(episodeId: Ref<number> | (() => number) | 
     }
     loading.value = true
     try {
-      const data = await api.get<{ success: boolean; data: BatchVideoPlan[] } | BatchVideoPlan[]>(
+      const data = await api.get<unknown>(
         '/videos/batch-schedules',
         { episode_id: epId },
       )
-      // 后端返回 { success, data } 包裹; 兼容裸数组 (防御性)
-      const list = Array.isArray(data) ? data : (data as any)?.data ?? []
+      // 兼容多种后端响应 shape:
+      //   1. 裸 array (useApi.ts req 已自动解构 json.data → 直接 array)
+      //   2. { data: [...] } (如果 useApi.ts 行为变化)
+      //   3. { items: [...] } (罕见, 防御性)
+      let list: BatchVideoPlan[] = []
+      if (Array.isArray(data)) {
+        list = data as BatchVideoPlan[]
+      } else if (data && typeof data === 'object') {
+        const obj = data as Record<string, unknown>
+        list = (Array.isArray(obj.data) ? obj.data :
+                Array.isArray(obj.items) ? obj.items : []) as BatchVideoPlan[]
+      }
+      // 2026-10-15 sprint 10 bug C 排查: 加 console.log 看到 loadPlans 实际拿到的数据
+      console.log('[useBatchVideoSchedule] loadPlans epId=', epId, 'list.length=', list.length, 'data=', data)
       plans.value = list
     } catch (err: any) {
+      console.error('[useBatchVideoSchedule] loadPlans 失败:', err)
       toast.error('加载定时计划失败: ' + (err?.message || String(err)))
       plans.value = []
     } finally {
