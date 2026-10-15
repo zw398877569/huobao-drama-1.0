@@ -10,29 +10,31 @@ const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../../../data/hu
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
-const sqlite = new Database(DB_PATH, { timeout: 30000 })
-
-// WAL 模式设置包 try/catch (2026-10-15 user 提问题):
-//   DB Browser for SQLite 等 GUI 工具忘记关闭时持有 -shm 锁,
-//   new Database + journal_mode = WAL 会触发 SQLITE_IOERR_SHMOPEN 整个 backend crash.
-//   fallback 到 DELETE 模式 (默认, 性能稍差但兼容 GUI 工具持锁场景, 服务能起来).
-//   修后行为: 启动不 crash, 用 DELETE 模式继续; user 关掉 GUI 工具后下次重启 backend 自动恢复 WAL.
-//   性能差异: DELETE 模式每次 commit full fsync (~10x 慢于 WAL), 单进程 backend 写频率低, 影响可忽略.
-let useWalMode = true
+// 启动 SQLite connection + 跑 schema init + ensureColumn. 整个块包 try/catch —
+// DB Browser for SQLite / SQLite Studio / DBeaver 等 GUI 工具忘记关闭时持有 DB 文件锁,
+// new Database + journal_mode=WAL + CREATE TABLE 都会 throw SQLITE_IOERR_SHMOPEN 或 disk I/O error.
+// 失败 fallback 链: WAL→DELETE (try/catch pragma) → 整体失败 → log 友好错误 + process.exit(1) 让 docker restart 自动恢复
+// (docker restart: unless-stopped 会在 user 关 GUI 工具后自动重启成功)
+let sqlite: import('better-sqlite3').Database
 try {
-  sqlite.pragma('journal_mode = WAL')
-} catch (err: any) {
-  useWalMode = false
-  console.warn(
-    `[DB] WAL mode unavailable (${err?.message || err}). ` +
-    `Falling back to DELETE journal mode (slower but compatible with locked DB). ` +
-    `To restore WAL: close DB Browser for SQLite / any other GUI tool holding the DB file, then restart backend.`
-  )
-}
-console.log(`[DB] journal_mode: ${useWalMode ? 'WAL' : 'DELETE'}`)
-sqlite.pragma('busy_timeout = 30000')
+  sqlite = new Database(DB_PATH, { timeout: 30000 })
 
-sqlite.exec(`
+  // WAL pragma try/catch fallback: GUI 持 shm 锁时设 WAL 失败, fallback DELETE (slower but works)
+  let useWalMode = true
+  try {
+    sqlite.pragma('journal_mode = WAL')
+  } catch (err: any) {
+    useWalMode = false
+    console.warn(
+      `[DB] WAL mode unavailable (${err?.message || err}). ` +
+      `Falling back to DELETE journal mode (slower but compatible with locked DB). ` +
+      `To restore WAL: close DB Browser for SQLite / any other GUI tool holding the DB file, then restart backend.`
+    )
+  }
+  console.log(`[DB] journal_mode: ${useWalMode ? 'WAL' : 'DELETE'}`)
+  sqlite.pragma('busy_timeout = 30000')
+
+  sqlite.exec(`
   CREATE TABLE IF NOT EXISTS dramas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -513,6 +515,18 @@ ensureColumn('batch_video_schedules', 'per_shot_status', 'TEXT')
 //   存 3 步 endpoint 中间态 JSON (step1 plan + step2 details),
 //   失败可从中间态恢复, 不需要重跑 LLM. 老 episode NULL 兼容 (老 endpoint 走 V3 拼接逻辑, 0 兼容成本).
 ensureColumn('episodes', 'planning_data', 'TEXT')
+  // 整体 init 失败 (e.g. GUI 工具持整个 DB 文件锁, 不止 shm 锁 — WAL fallback 后 CREATE TABLE / ensureColumn 还是 throw)
+  // → log 友好错误 + exit 1, docker restart: unless-stopped 会自动 retry, user 关 DB Browser 后下次启动成功
+} catch (err: any) {
+  console.error(
+    `[DB] Failed to initialize SQLite database: ${err?.message || err}\n` +
+    `This usually means another tool (DB Browser for SQLite / SQLite Studio / DBeaver) is holding the DB file.\n` +
+    `Please close the GUI tool, then restart backend. Docker will auto-retry.`
+  )
+  process.exit(1)
+}
+
+
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db
