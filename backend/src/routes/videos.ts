@@ -5,6 +5,20 @@ import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+
+/**
+ * 规范化 scheduled_at 输入: 无 Z/时区后缀的 ISO 字符串当 Asia/Shanghai 本地时间, 转 UTC ISO 存 DB
+ * 修 Bug D: 历史 plan 1 (2026-10-14T15:30:00 无 Z) 在前端 new Date() 解析为本地时区, 渲染跟实际 UTC 时间差 8 小时
+ */
+function normalizeScheduledAt(input: string): string {
+  if (!input) return input
+  // 已有 Z 或 +HH:MM 时区后缀, 已是 ISO 8601, 直接返回
+  if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(input)) return input
+  // 无后缀: 强制 +08:00 当 Asia/Shanghai 本地时间
+  const d = new Date(input + '+08:00')
+  if (isNaN(d.getTime())) return input  // 解析失败, 保留原值
+  return d.toISOString()  // 转 UTC ISO 存 DB
+}
 import { now } from '../utils/response.js'
 import { registerPlan, unregisterPlan } from '../services/batch-video-scheduler.js'
 
@@ -124,7 +138,7 @@ app.post('/batch-schedules', async (c) => {
     const createdAt = now()
     const insertResult = db.insert(schema.batchVideoSchedules).values({
       episodeId,
-      scheduledAt: String(body.scheduled_at),
+      scheduledAt: normalizeScheduledAt(String(body.scheduled_at)),
       status: 'pending',
       videoConfigId,
       shotIds: JSON.stringify(shotIds),
