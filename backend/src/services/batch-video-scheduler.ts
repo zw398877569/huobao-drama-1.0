@@ -303,20 +303,38 @@ export async function triggerPlan(planId: number): Promise<void> {
       continue
     }
 
-    // Bug F fix: shot 缺 first_frame_image 或 last_frame_image 时, AutoDL ComfyUI 走 FL2V 路径必报 '缺少必填参数: last_frame'
-    // 缺图直接 skip + log warn, 不浪费 API call + failedCount++ + clear lastError 提示 user 去补图
-    if (!sb.firstFrameImage || !sb.lastFrameImage) {
-      failedCount++
-      const missingFields = !sb.firstFrameImage && !sb.lastFrameImage ? 'firstFrameImage + lastFrameImage' :
-                              !sb.firstFrameImage ? 'firstFrameImage' : 'lastFrameImage'
-      lastError = `shot ${shotId}: 缺 ${missingFields} (AutoDL ComfyUI FL2V 路径必填 first+last frame, user 需补图)`
-      logTaskWarn('BatchVideoScheduler', 'trigger-skip-shot-missing-frames', {
-        planId, shotId, missingFields,
-        firstFrameImage: !!sb.firstFrameImage, lastFrameImage: !!sb.lastFrameImage,
-        hint: '跳过 shot 不调 generateVideo, user 需在 storyboard 补 first_frame / last_frame 图后手动重跑',
-      })
-      continue
+    // Bug G fix (user 拍板 2026-10-15): triggerPlan 智能选 autodl-comfyui workflow mode
+    //   - 有 first+last frame → first_last (FL2V, 'minimax_h3_lightx2v')
+    //   - 只有 first frame + duration >= 8s → single + model=Ref2V-15s (显式 'minimax_h3_lightx2v_v5_15s')
+    //   - 只有 first frame + duration < 8s → single + model=undefined (autodl 默认 v5, 1-10s)
+    //   - 都没 frame → none (T2V, 'minimax_h3_lightx2v_no_pic')
+    //   duration 阈值 8s 是 user 拍板 (autodl 默认是 10s)
+    let referenceMode: 'first_last' | 'single' | 'none'
+    let modelOverride: string | undefined
+    let imageUrlArg: string | undefined
+    let firstFrameUrlArg: string | undefined
+    let lastFrameUrlArg: string | undefined
+
+    if (sb.firstFrameImage && sb.lastFrameImage) {
+      referenceMode = 'first_last'
+      firstFrameUrlArg = sb.firstFrameImage
+      lastFrameUrlArg = sb.lastFrameImage
+    } else if (sb.firstFrameImage) {
+      // 只有 first frame: 走 single mode (autodl 单图参考), 8s 分界
+      referenceMode = 'single'
+      imageUrlArg = sb.firstFrameImage
+      if ((sb.duration ?? 10) >= 8) {
+        modelOverride = 'minimax_h3_lightx2v_v5_15s'  // Ref2V-15s, 1-15s
+      }
+      // < 8s: model=undefined → autodl 内部 pickRef2VWorkflowId → v5 (1-10s)
+    } else {
+      // 都没 frame: T2V 文生视频
+      referenceMode = 'none'
     }
+    logTaskProgress('BatchVideoScheduler', 'shot-mode-decided', {
+      planId, shotId, referenceMode, modelOverride,
+      hasFirst: !!sb.firstFrameImage, hasLast: !!sb.lastFrameImage, duration: sb.duration,
+    })
 
     try {
       await generateVideo({
@@ -324,11 +342,11 @@ export async function triggerPlan(planId: number): Promise<void> {
         dramaId: undefined, // storyboard 已带 episodeId
         source: 'storyboard',
         prompt,
-        model: undefined,
-        referenceMode: 'first_last', // FL2V 路径, 要求 firstFrameUrl + lastFrameUrl 都齐 (上面已校验)
-        imageUrl: undefined,
-        firstFrameUrl: sb.firstFrameImage,
-        lastFrameUrl: sb.lastFrameImage,
+        model: modelOverride,
+        referenceMode,
+        imageUrl: imageUrlArg,
+        firstFrameUrl: firstFrameUrlArg,
+        lastFrameUrl: lastFrameUrlArg,
         referenceImageUrls: undefined,
         duration: sb.duration || 10,
         aspectRatio: undefined,
