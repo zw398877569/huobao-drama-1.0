@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
-import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 /**
  * 规范化 scheduled_at 输入: 无 Z/时区后缀的 ISO 字符串当 Asia/Shanghai 本地时间, 转 UTC ISO 存 DB
@@ -174,9 +174,11 @@ app.post('/batch-schedules', async (c) => {
 // GET /videos/batch-schedules?episode_id=N — 列出某 episode 的所有计划
 app.get('/batch-schedules', async (c) => {
   const episodeId = c.req.query('episode_id')
-  let rows = db.select().from(schema.batchVideoSchedules).all()
+  let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
   if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
   rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
+  // Sprint 10 bug C 排查: 加 logTaskProgress 看 rows 实际状态
+  logTaskProgress('BatchVideoSchedule', 'list', { episodeId: episodeId ?? 'all', rowCount: rows.length, rowsType: typeof rows, isArray: Array.isArray(rows) })
   return success(c, rows)
 })
 
