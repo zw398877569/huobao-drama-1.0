@@ -22,6 +22,7 @@ import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskSuccess, logTaskWarn, logTaskError } from '../utils/task-logger.js'
 import { generateVideo } from './video-generation.js'
+import { getConfigById } from './ai.js'
 
 // 内存级 cron job registry: cronJobId (string) -> node-cron task
 // backend 重启后失效, D 任务 initBatchVideoScheduler 重读 pending 重建
@@ -243,12 +244,36 @@ export async function triggerPlan(planId: number): Promise<void> {
     return
   }
 
-  // 3. 决定 configId fallback 链: plan.videoConfigId → episode.videoConfigId
+  // 3. 决定 configId fallback 链: plan.videoConfigId (active 校验) → episode.videoConfigId → getActiveConfig (在 generateVideo 内部)
+  // Bug E fix: plan.videoConfigId 可能 inactive (用户在设置页关掉), 校验后 fallback 避免 generateVideo throw
   let resolvedConfigId: number | undefined = plan.videoConfigId ?? undefined
+  if (resolvedConfigId !== undefined) {
+    const cfg = getConfigById(resolvedConfigId)
+    if (!cfg) {
+      // getConfigById 已经 log config-not-found 或 config-inactive
+      logTaskWarn('BatchVideoScheduler', 'trigger-config-fallback', {
+        planId, shotId: 'pre-loop',
+        configuredConfigId: resolvedConfigId,
+        hint: '用户配的 configId 无效或 inactive, fallback 到 episode 锁定',
+      })
+      resolvedConfigId = undefined
+    }
+  }
   if (resolvedConfigId === undefined) {
     const [ep] = db.select().from(schema.episodes)
       .where(eq(schema.episodes.id, plan.episodeId)).all()
-    if (ep?.videoConfigId != null) resolvedConfigId = ep.videoConfigId
+    if (ep?.videoConfigId != null) {
+      // 同样校验 episode 锁定的 configId
+      const epCfg = getConfigById(ep.videoConfigId)
+      if (epCfg) {
+        resolvedConfigId = ep.videoConfigId
+      } else {
+        logTaskWarn('BatchVideoScheduler', 'trigger-config-fallback-episode', {
+          planId, episodeId: plan.episodeId, episodeConfigId: ep.videoConfigId,
+          hint: 'episode 锁定的 configId 也无效, 让 generateVideo 内部用 getActiveConfig fallback',
+        })
+      }
+    }
   }
 
   // 4. 串行跑每个 shot
