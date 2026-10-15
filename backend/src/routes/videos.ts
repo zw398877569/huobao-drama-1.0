@@ -14,10 +14,8 @@ function normalizeScheduledAt(input: string): string {
   if (!input) return input
   // 已有 Z 或 +HH:MM 时区后缀, 已是 ISO 8601, 直接返回
   if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(input)) return input
-  // 无后缀: 强制 +08:00 当 Asia/Shanghai 本地时间
-  const d = new Date(input + '+08:00')
-  if (isNaN(d.getTime())) return input  // 解析失败, 保留原值
-  return d.toISOString()  // 转 UTC ISO 存 DB
+  // 无后缀: 加 +08:00 当 Asia/Shanghai 本地时间 (保持本地时间语义, 不转 UTC, 让 cron 字段跟 timezone 字段匹配)
+  return input + '+08:00'  // 后续 isoToCron6 regex 接受 +HH:MM 后缀
 }
 import { now } from '../utils/response.js'
 import { registerPlan, unregisterPlan } from '../services/batch-video-scheduler.js'
