@@ -11,7 +11,25 @@ const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../../../data/hu
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
 const sqlite = new Database(DB_PATH, { timeout: 30000 })
-sqlite.pragma('journal_mode = WAL')
+
+// WAL 模式设置包 try/catch (2026-10-15 user 提问题):
+//   DB Browser for SQLite 等 GUI 工具忘记关闭时持有 -shm 锁,
+//   new Database + journal_mode = WAL 会触发 SQLITE_IOERR_SHMOPEN 整个 backend crash.
+//   fallback 到 DELETE 模式 (默认, 性能稍差但兼容 GUI 工具持锁场景, 服务能起来).
+//   修后行为: 启动不 crash, 用 DELETE 模式继续; user 关掉 GUI 工具后下次重启 backend 自动恢复 WAL.
+//   性能差异: DELETE 模式每次 commit full fsync (~10x 慢于 WAL), 单进程 backend 写频率低, 影响可忽略.
+let useWalMode = true
+try {
+  sqlite.pragma('journal_mode = WAL')
+} catch (err: any) {
+  useWalMode = false
+  console.warn(
+    `[DB] WAL mode unavailable (${err?.message || err}). ` +
+    `Falling back to DELETE journal mode (slower but compatible with locked DB). ` +
+    `To restore WAL: close DB Browser for SQLite / any other GUI tool holding the DB file, then restart backend.`
+  )
+}
+console.log(`[DB] journal_mode: ${useWalMode ? 'WAL' : 'DELETE'}`)
 sqlite.pragma('busy_timeout = 30000')
 
 sqlite.exec(`
