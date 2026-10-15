@@ -96,6 +96,9 @@
                 <input type="checkbox" :value="sb.id" v-model="createForm.shotIds" />
                 <span class="shot-num">#{{ sb.storyboardNumber ?? sb.id }}</span>
                 <span class="shot-title">{{ sb.title || sb.description || '无标题' }}</span>
+                <!-- 已生成/未生成标识 (sprint-10-v2 user 提需求, dev 直接做, 不走 PM 派单) -->
+                <span v-if="sb.video_url || sb.videoUrl" class="tag tag-done" title="该 storyboard 已生成视频, 重新生成会覆盖">✓ 已生成</span>
+                <span v-else class="tag tag-pending dim" title="未生成视频">○ 未生成</span>
                 <span v-if="sb.duration" class="dim mono">{{ sb.duration }}s</span>
               </label>
               <div v-if="shots.length === 0" class="dim" style="padding: 12px">没有镜头可选</div>
@@ -170,7 +173,7 @@ async function loadVideoConfigs() {
 //   不用 hardcode id=9 (不同 DB 配置 id 不同), fallback 到 null (用 episode 锁定)
 const defaultVideoConfig = computed<{ id: number; name: string } | null>(() => {
   const matched = videoConfigs.value.find((c: any) =>
-    (c.name || '').includes('MiniMax 官方推荐'),
+    (c.name || '').includes('MiniMax官方推荐'),  // DB 实际命名无空格 (sprint-10-v2 verify user 实测 id=9 'MiniMax官方推荐-视频')
   )
   if (!matched) return null
   return { id: matched.id, name: matched.name }
