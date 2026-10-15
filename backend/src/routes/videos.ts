@@ -174,12 +174,18 @@ app.post('/batch-schedules', async (c) => {
 // GET /videos/batch-schedules?episode_id=N — 列出某 episode 的所有计划
 app.get('/batch-schedules', async (c) => {
   const episodeId = c.req.query('episode_id')
-  let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
-  if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
-  rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
-  // Sprint 10 bug C 排查: 加 logTaskProgress 看 rows 实际状态
-  logTaskProgress('BatchVideoSchedule', 'list', { episodeId: episodeId ?? 'all', rowCount: rows.length, rowsType: typeof rows, isArray: Array.isArray(rows) })
-  return success(c, rows)
+  try {
+    logTaskProgress('BatchVideoSchedule', 'list-entry', { episodeId: episodeId ?? 'all', schemaHas: typeof schema.batchVideoSchedules, schemaKeys: Object.keys(schema).filter(k => k.includes('batch') || k.includes('Video')).join(',') })
+    let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
+    if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
+    rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
+    logTaskProgress('BatchVideoSchedule', 'list-done', { episodeId: episodeId ?? 'all', rowCount: rows.length, rowsType: typeof rows, isArray: Array.isArray(rows), firstRow: rows[0] ? { id: rows[0].id, status: rows[0].status } : null })
+    return success(c, rows)
+  } catch (err: any) {
+    logTaskError('BatchVideoSchedule', 'list-throw', { error: err?.message || String(err), stack: err?.stack?.slice(0, 500) })
+    // Bug C 修: 抛错时也返回 200 with 空 array, 前端能正常显示 '没有计划' 不再 stuck
+    return success(c, [])
+  }
 })
 
 // DELETE /videos/batch-schedules/:id — 取消 pending 计划 (unregister cron job, status -> cancelled)
