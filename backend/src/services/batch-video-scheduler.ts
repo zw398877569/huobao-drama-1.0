@@ -158,6 +158,27 @@ export async function registerPlan(
     scheduledAt: plan.scheduledAt,
     timezone: SCHEDULER_TZ,
   })
+
+  // Bug B fix: 如果 scheduledAt 已过, node-cron scheduled:true 不会立即 fire (等不到下个匹配时间, one-shot 默认不重复).
+  // 立即调 triggerPlan 一次, 让用户即便错过 cron 触发时间, 也能跑 plan.
+  // 注意: registerPlan 是 async, 但 routes/videos.ts 调它时 await, 所以 triggerPlan 跟 create API 同步,
+  //       plan 在返回 201 时已经 status=pending; 立即 trigger 改 status=running/done/failed
+  const nowMs = Date.now()
+  const targetMs = new Date(plan.scheduledAt).getTime()
+  if (targetMs <= nowMs) {
+    logTaskWarn('BatchVideoScheduler', 'register-already-due', {
+      planId: plan.id,
+      scheduledAt: plan.scheduledAt,
+      hint: 'scheduledAt 已过, 立即 fire triggerPlan (node-cron one-shot 不 catch-up)',
+    })
+    // fire-and-forget, 不阻塞 create API response
+    triggerPlan(plan.id).catch((err) => {
+      logTaskError('BatchVideoScheduler', 'immediate-trigger-fail', {
+        planId: plan.id, error: err?.message || String(err),
+      })
+    })
+  }
+
   return cronJobId
 }
 

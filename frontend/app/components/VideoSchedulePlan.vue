@@ -184,8 +184,12 @@ async function onCreate() {
   createError.value = ''
   creating.value = true
   try {
-    // datetime-local 字符串 (本地时间, 无时区) → new Date() → toISOString() (UTC) 后端按 timezone Asia/Shanghai 解析
-    const scheduled_at = new Date(createForm.value.scheduledAtLocal).toISOString()
+    // datetime-local 是 'YYYY-MM-DDTHH:MM' 格式 (浏览器本地时间, Asia/Shanghai), 拼秒让它成 ISO datetime 字符串
+    // 不调 toISOString 避免转 UTC, 后端 isoToCron6 提取的字段直接是 Asia/Shanghai 本地时间
+    // (修时区错配: 之前 new Date()+toISOString 转 UTC, cron timezone=Asia/Shanghai 解释错位 8 小时)
+    const scheduled_at = createForm.value.scheduledAtLocal.length === 16
+      ? createForm.value.scheduledAtLocal + ':00'
+      : createForm.value.scheduledAtLocal
     const plan = await createPlan({
       episode_id: props.episodeId,
       scheduled_at,
