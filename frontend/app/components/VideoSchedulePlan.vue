@@ -163,9 +163,19 @@ const canCreate = computed(
 )
 
 function openCreateModal() {
+  // Bug D2 修: 默认时间用 Asia/Shanghai 本地时间 (datetime-local input 显示用户期望时间)
+  //   修前: new Date().toISOString().slice(0,16) = UTC 字符串 (例 '2026-10-15T01:40' = 北京 9:40, 但 input 显示的是字面 01:40)
+  //   修后: 直接拿本地 Date 字段, 拼成 datetime-local 接受的 'YYYY-MM-DDTHH:MM' 格式
   const now = new Date()
   now.setMinutes(now.getMinutes() + 30)
-  createForm.value.scheduledAtLocal = now.toISOString().slice(0, 16)
+  // toISOString 转 UTC 然后取前 16 字符是 UTC 时间, 不是本地
+  // 应该用本地时区格式化: getFullYear/getMonth/getDate/getHours/getMinutes 都返回本地时区
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const dd = String(now.getDate()).padStart(2, '0')
+  const HH = String(now.getHours()).padStart(2, '0')
+  const MM = String(now.getMinutes()).padStart(2, '0')
+  createForm.value.scheduledAtLocal = `${yyyy}-${mm}-${dd}T${HH}:${MM}`
   createForm.value.shotIds = []
   createForm.value.videoConfigId = null
   createError.value = ''
