@@ -28,14 +28,48 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 //   * 但 huobao-drama backend 单进程写频率低 (AI 生成触发批量写, 平时只读), 实际影响 < 5%
 //   * sprint 1-9 一直用 WAL 是 historical default, 实际并发优化后 DELETE mode 也够用
 //
-// 实施: 删 WAL pragma + 删所有 try/catch (DELETE mode 不会 throw SHMOPEN, GUI 工具持锁也不冲突).
+// 实施: 删 WAL pragma + 删所有 try/catch.
+//
+// 但 2026-10-15 user 实测 v3 commit (1edf5d9) 后仍 throw SQLITE_IOERR_SHMOPEN. 根因更深:
+// SQLite 即使 connection 显式用 DELETE mode, 检测到 DB 文件旁边有 -wal 文件存在, 会 auto-switch
+// 到 WAL mode 保护 -wal 里未 checkpoint 的数据 (避免数据丢失), 然后尝试 mmap -shm, 但 DB Browser 等
+// GUI 工具持 -shm 锁 → throw SHMOPEN.
+//
+// 完整修法: backend startup 前**显式截断 -wal 内容 + 删除 -shm / -wal**, 强制 SQLite 进入 DELETE mode.
+//     风险: DB Browser 刚 write query 后未 checkpoint 的数据会丢. 但 huobao-drama DB Browser 默认
+//     browse-data mode (read-only), 不写 -wal. 偶尔 write query 场景, user 可以关闭 DB Browser 后再 restart backend.
+//
+// 实施步骤:
+//   1. fs 检测 -wal / -shm 是否存在 (DB Browser WAL session 残留)
+//   2. truncate + unlink -wal, unlink -shm
+//   3. new Database → SQLite 看不到 -wal → 进入默认 DELETE mode
+//   4. DB Browser reconnect 自动重新走 WAL (它会重建 -shm/-wal), 跟 backend DELETE mode 不冲突
+//      (因为 backend 后续操作也走 DELETE, 不读写 -shm; DB Browser 的 WAL 只影响它自己的 connection)
+const walPath = DB_PATH + '-wal'
+const shmPath = DB_PATH + '-shm'
+if (fs.existsSync(walPath)) {
+  try {
+    fs.truncateSync(walPath, 0)
+    fs.unlinkSync(walPath)
+    console.log(`[DB] Removed stale WAL file: ${walPath}`)
+  } catch (err: any) {
+    console.warn(`[DB] Could not remove WAL file ${walPath}: ${err?.message || err}. DB Browser may be holding it.`)
+  }
+}
+if (fs.existsSync(shmPath)) {
+  try {
+    fs.unlinkSync(shmPath)
+    console.log(`[DB] Removed stale SHM file: ${shmPath}`)
+  } catch (err: any) {
+    console.warn(`[DB] Could not remove SHM file ${shmPath}: ${err?.message || err}. DB Browser may need to reconnect.`)
+  }
+}
+
 const sqlite = new Database(DB_PATH, { timeout: 30000 })
 sqlite.pragma('busy_timeout = 30000')
-console.log('[DB] journal_mode: DELETE (WAL disabled for SMB-shared DB; DB Browser GUI tools can stay open during backend startup)')
+console.log('[DB] journal_mode: DELETE (stale WAL/SHM files removed on startup; DB Browser can stay open during backend startup)')
 
-
-  sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS dramas (
+sqlite.exec(`  CREATE TABLE IF NOT EXISTS dramas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     description TEXT,
