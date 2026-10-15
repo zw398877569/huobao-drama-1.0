@@ -233,7 +233,15 @@ function statusLabel(s: BatchVideoPlan['status']) {
 
 function formatDateTime(iso: string) {
   if (!iso) return '—'
-  const d = new Date(iso)
+  // 智能判断: 跟后端 normalizeScheduledAt 一致
+  //   - 有 Z 或 +HH:MM 时区后缀: UTC ISO, new Date 按 UTC 解析
+  //   - 无后缀: 历史数据 (Bug D 修复前的 plan), 强制 +08:00 当 Asia/Shanghai 本地时间
+  let d: Date
+  if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso)) {
+    d = new Date(iso)
+  } else {
+    d = new Date(iso + '+08:00')
+  }
   if (isNaN(d.getTime())) return '—'
   // 用 zh-CN locale + Asia/Shanghai 时区 (跟 scheduler 一致)
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
