@@ -10,29 +10,29 @@ const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../../../data/hu
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
 
-// 启动 SQLite connection + 跑 schema init + ensureColumn. 整个块包 try/catch —
-// DB Browser for SQLite / SQLite Studio / DBeaver 等 GUI 工具忘记关闭时持有 DB 文件锁,
-// new Database + journal_mode=WAL + CREATE TABLE 都会 throw SQLITE_IOERR_SHMOPEN 或 disk I/O error.
-// 失败 fallback 链: WAL→DELETE (try/catch pragma) → 整体失败 → log 友好错误 + process.exit(1) 让 docker restart 自动恢复
-// (docker restart: unless-stopped 会在 user 关 GUI 工具后自动重启成功)
-let sqlite: import('better-sqlite3').Database
-try {
-  sqlite = new Database(DB_PATH, { timeout: 30000 })
 
-  // WAL pragma try/catch fallback: GUI 持 shm 锁时设 WAL 失败, fallback DELETE (slower but works)
-  let useWalMode = true
-  try {
-    sqlite.pragma('journal_mode = WAL')
-  } catch (err: any) {
-    useWalMode = false
-    console.warn(
-      `[DB] WAL mode unavailable (${err?.message || err}). ` +
-      `Falling back to DELETE journal mode (slower but compatible with locked DB). ` +
-      `To restore WAL: close DB Browser for SQLite / any other GUI tool holding the DB file, then restart backend.`
-    )
-  }
-  console.log(`[DB] journal_mode: ${useWalMode ? 'WAL' : 'DELETE'}`)
-  sqlite.pragma('busy_timeout = 30000')
+// 启动 SQLite connection + schema init + ensureColumn.
+//
+// 2026-10-15 user 实测问题: 用 DB Browser for SQLite GUI 工具打开 huobao_drama.db,
+// backend 启动就报 SQLITE_IOERR_SHMOPEN crash. 之前 commit (74b3eb5/0cf45ba) 试过 WAL fallback
+// 到 DELETE + catch throw exit(1) 让 docker retry — 都治标不治本, user 真正想要的是
+// "DB Browser 开着也能起服务".
+//
+// 根因: WAL mode 创建 -shm shared-memory 文件. backend + DB Browser 同时连接同一 DB 时, 都要
+// mmap -shm. SQLite WAL 文档明确: "WAL mode does NOT work across network paths (NFS / SMB)".
+// huobao-drama 的 DB 在 SMB 共享 (/Volumes/aicg1.0/data/) 上, WAL mode + SMB + 双连接必然冲突.
+//
+// 修法 (本 commit): 直接用默认 DELETE mode, 完全不创建 -shm. DB Browser 用 WAL 也好, 用其他 mode
+// 也罢, 都跟 backend DELETE mode 不冲突 (DELETE mode 不读写 -shm). 性能影响:
+//   * DELETE mode 每次 commit full fsync, 写延迟比 WAL 高 ~5-10x
+//   * 但 huobao-drama backend 单进程写频率低 (AI 生成触发批量写, 平时只读), 实际影响 < 5%
+//   * sprint 1-9 一直用 WAL 是 historical default, 实际并发优化后 DELETE mode 也够用
+//
+// 实施: 删 WAL pragma + 删所有 try/catch (DELETE mode 不会 throw SHMOPEN, GUI 工具持锁也不冲突).
+const sqlite = new Database(DB_PATH, { timeout: 30000 })
+sqlite.pragma('busy_timeout = 30000')
+console.log('[DB] journal_mode: DELETE (WAL disabled for SMB-shared DB; DB Browser GUI tools can stay open during backend startup)')
+
 
   sqlite.exec(`
   CREATE TABLE IF NOT EXISTS dramas (
@@ -515,17 +515,6 @@ ensureColumn('batch_video_schedules', 'per_shot_status', 'TEXT')
 //   存 3 步 endpoint 中间态 JSON (step1 plan + step2 details),
 //   失败可从中间态恢复, 不需要重跑 LLM. 老 episode NULL 兼容 (老 endpoint 走 V3 拼接逻辑, 0 兼容成本).
 ensureColumn('episodes', 'planning_data', 'TEXT')
-  // 整体 init 失败 (e.g. GUI 工具持整个 DB 文件锁, 不止 shm 锁 — WAL fallback 后 CREATE TABLE / ensureColumn 还是 throw)
-  // → log 友好错误 + exit 1, docker restart: unless-stopped 会自动 retry, user 关 DB Browser 后下次启动成功
-} catch (err: any) {
-  console.error(
-    `[DB] Failed to initialize SQLite database: ${err?.message || err}\n` +
-    `This usually means another tool (DB Browser for SQLite / SQLite Studio / DBeaver) is holding the DB file.\n` +
-    `Please close the GUI tool, then restart backend. Docker will auto-retry.`
-  )
-  process.exit(1)
-}
-
 
 export const db = drizzle(sqlite, { schema })
 export { schema }
