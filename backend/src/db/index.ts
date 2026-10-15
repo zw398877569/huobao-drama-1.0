@@ -485,6 +485,12 @@ ensureColumn('cron_runs', 'outputs', 'TEXT')
 // 不影响原 output 截断字段 (后端启动 ALTER TABLE, 已有数据 output_full=NULL)
 ensureColumn('cron_runs', 'output_full', 'TEXT')
 
+// 2026-10-15 Sprint 10 v2 Task B (PM msg-20261014-002): batch_video_schedules 加 per_shot_status 列
+//   存 triggerPlan 逐 shot 执行结果 JSON 数组: [{shot_id, status (completed/failed), video_generation_id?, error?}]
+//   老 plan NULL 兼容 (NULL 时前端 planView 不展开 per-shot 行, 跟没有数据兼容).
+//   启动 ensureColumn 自动加列, 无需手动 docker exec.
+ensureColumn('batch_video_schedules', 'per_shot_status', 'TEXT')
+
 // 2026-10-10 V4 架构 (PM msg-20261010-003) — episodes 加 planning_data 列
 //   存 3 步 endpoint 中间态 JSON (step1 plan + step2 details),
 //   失败可从中间态恢复, 不需要重跑 LLM. 老 episode NULL 兼容 (老 endpoint 走 V3 拼接逻辑, 0 兼容成本).

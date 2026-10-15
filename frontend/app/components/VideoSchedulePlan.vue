@@ -27,27 +27,49 @@
           <th>镜头</th>
           <th>成功 / 失败</th>
           <th>配置</th>
+          <th>详情</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="p in plans" :key="p.id" :class="`row-${p.status}`">
-          <td>{{ formatDateTime(p.scheduledAt) }}</td>
-          <td>{{ formatCountdown(p.scheduledAt) }}</td>
-          <td><span class="tag" :class="`tag-${p.status}`">{{ statusLabel(p.status) }}</span></td>
-          <td>{{ p.shotCount }} 镜</td>
-          <td>{{ p.successCount }} / {{ p.failedCount }}</td>
-          <td>{{ p.videoConfigId ?? 'episode 锁定' }}</td>
-          <td>
-            <button
-              v-if="p.status === 'pending'"
-              class="btn btn-sm btn-ghost"
-              style="color: var(--error)"
-              @click="onCancel(p.id)"
-            >取消</button>
-            <span v-else class="dim">—</span>
-          </td>
-        </tr>
+        <!-- Sprint 10 v2 Task B: 主行 + 详情行 (expandable) 一起 for, click toggle expand -->
+        <template v-for="p in plans" :key="p.id">
+          <tr :class="`row-${p.status}`" style="cursor: pointer" @click="toggleExpand(p.id)">
+            <td>{{ formatDateTime(p.scheduledAt) }}</td>
+            <td>{{ formatCountdown(p.scheduledAt) }}</td>
+            <td><span class="tag" :class="`tag-${p.status}`">{{ statusLabel(p.status) }}</span></td>
+            <td>{{ p.shotCount }} 镜</td>
+            <td>{{ p.successCount }} / {{ p.failedCount }}</td>
+            <td>{{ p.videoConfigId ?? 'episode 锁定' }}</td>
+            <td>
+              <span class="expand-toggle">{{ expandedPlans.has(p.id) ? '▼' : '▶' }}</span>
+            </td>
+            <td @click.stop>
+              <button
+                v-if="p.status === 'pending'"
+                class="btn btn-sm btn-ghost"
+                style="color: var(--error)"
+                @click="onCancel(p.id)"
+              >取消</button>
+              <span v-else class="dim">—</span>
+            </td>
+          </tr>
+          <!-- 详情行: 只在展开时渲染 -->
+          <tr v-if="expandedPlans.has(p.id) && parsePerShotStatus(p.perShotStatus).length > 0" class="row-detail">
+            <td colspan="8">
+              <div class="per-shot-detail">
+                <div class="dim" style="margin-bottom: 6px;">per-shot 执行结果 ({{ p.successCount }} 成功 / {{ p.failedCount }} 失败):</div>
+                <div v-for="shot in parsePerShotStatus(p.perShotStatus)" :key="shot.shot_id" class="per-shot-row">
+                  <span class="mono">#{{ shot.shot_id }}</span>
+                  <span v-if="shot.status === 'completed'" class="tag tag-done">✓ 成功</span>
+                  <span v-else class="tag tag-failed">✗ 失败</span>
+                  <span v-if="shot.video_generation_id" class="dim mono">vid={{ shot.video_generation_id }}</span>
+                  <span v-if="shot.error" class="dim per-shot-error">{{ shot.error }}</span>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </template>
       </tbody>
     </table>
 
@@ -80,10 +102,14 @@
             </div>
           </div>
           <div class="form-row">
-            <label>视频配置 (可选, NULL 用 episode 锁定)</label>
+            <label>视频配置 (可选, 默认走 MiniMax 官方推荐, fallback 用 episode 锁定)</label>
             <select v-model="createForm.videoConfigId">
-              <option :value="null">用 episode 锁定 (默认)</option>
-              <option v-for="cfg in videoConfigs" :key="cfg.id" :value="cfg.id">
+              <!-- Sprint 10 v2 Task A (PM msg-20261014-002): 按 name 匹配『MiniMax 官方推荐』, 找不到才 fallback null (用 episode 锁定) -->
+              <option v-if="defaultVideoConfig" :value="defaultVideoConfig.id">
+                {{ defaultVideoConfig.name }} (id={{ defaultVideoConfig.id }}) (默认)
+              </option>
+              <option :value="null">用 episode 锁定</option>
+              <option v-for="cfg in nonDefaultVideoConfigs" :key="cfg.id" :value="cfg.id">
                 {{ cfg.name }} (id={{ cfg.id }})
               </option>
             </select>
@@ -102,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import {
   useBatchVideoSchedule,
   formatCountdown,
@@ -140,10 +166,80 @@ async function loadVideoConfigs() {
   }
 }
 
+// Sprint 10 v2 Task A (PM msg-20261014-002): 默认配置按『MiniMax 官方推荐』name 匹配
+//   不用 hardcode id=9 (不同 DB 配置 id 不同), fallback 到 null (用 episode 锁定)
+const defaultVideoConfig = computed<{ id: number; name: string } | null>(() => {
+  const matched = videoConfigs.value.find((c: any) =>
+    (c.name || '').includes('MiniMax 官方推荐'),
+  )
+  if (!matched) return null
+  return { id: matched.id, name: matched.name }
+})
+// 非默认配置列表 (排除掉 defaultVideoConfig, 避免重复展示)
+const nonDefaultVideoConfigs = computed(() => {
+  const defId = defaultVideoConfig.value?.id
+  return defId == null
+    ? videoConfigs.value
+    : videoConfigs.value.filter((c: any) => c.id !== defId)
+})
+
+// Sprint 10 v2 Task B: per-shot 详情展开
+const expandedPlans = ref<Set<number>>(new Set())
+function toggleExpand(planId: number) {
+  if (expandedPlans.value.has(planId)) expandedPlans.value.delete(planId)
+  else expandedPlans.value.add(planId)
+  // 触发响应式 (Set 没自动 deep reactive, 重新赋值触发)
+  expandedPlans.value = new Set(expandedPlans.value)
+}
+interface PerShotEntry {
+  shot_id: number
+  status: 'completed' | 'failed'
+  video_generation_id?: number
+  error?: string
+}
+function parsePerShotStatus(raw: string | null): PerShotEntry[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+// Sprint 10 v2 Task D (PM msg-20261014-002): 进度轮询 5s, 只在有 running/pending plan 时启, 全 done/failed/cancelled 后停
+//   节省请求; 普通 poll (不长轮询), 简单 setInterval
+let pollTimer: ReturnType<typeof setInterval> | null = null
+function startPolling() {
+  if (pollTimer) return  // 已经在跑
+  pollTimer = setInterval(() => {
+    const hasActive = plans.value.some((p) => p.status === 'running' || p.status === 'pending')
+    if (!hasActive) {
+      // 全 done/failed/cancelled, 停轮询
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+      return
+    }
+    loadPlans()
+  }, 5000)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
+
 onMounted(() => {
   loadPlans()
   loadShots()
   loadVideoConfigs()
+})
+
+// 启动轮询: 初次加载完成后启 (后续 triggerPlan 也会 push 到 polling 表)
+onMounted(() => {
+  // 等 loadPlans 完成后再启轮询, 避免首次就跑了空列表
+  setTimeout(startPolling, 100)
+})
+
+onBeforeUnmount(() => {
+  stopPolling()
 })
 
 const createModalOpen = ref(false)
@@ -177,7 +273,8 @@ function openCreateModal() {
   const MM = String(now.getMinutes()).padStart(2, '0')
   createForm.value.scheduledAtLocal = `${yyyy}-${mm}-${dd}T${HH}:${MM}`
   createForm.value.shotIds = []
-  createForm.value.videoConfigId = null
+  // Sprint 10 v2 Task A: 默认用 MiniMax 官方推荐, 找不到才 null (用 episode 锁定)
+  createForm.value.videoConfigId = defaultVideoConfig.value?.id ?? null
   createError.value = ''
   createModalOpen.value = true
 }

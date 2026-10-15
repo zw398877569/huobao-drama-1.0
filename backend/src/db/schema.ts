@@ -463,6 +463,9 @@ export const batchVideoSchedules = sqliteTable('batch_video_schedules', {
   lastRunAt: text('last_run_at'),
   // node-cron 内存级 job ID, backend 重启后失效 (D 任务 initBatchVideoScheduler 重读 pending 重建)
   cronJobId: text('cron_job_id'),
+  // Sprint 10 v2 Task B (PM msg-20261014-002): per-shot 执行状态 JSON
+  // 格式: [{shot_id: number, status: 'completed' | 'failed', video_generation_id?: number, error?: string}]
+  perShotStatus: text('per_shot_status'),
 })
 
 export const faceTypeEntries = sqliteTable('face_type_entries', {

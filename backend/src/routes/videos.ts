@@ -18,7 +18,7 @@ function normalizeScheduledAt(input: string): string {
   return input + '+08:00'  // 后续 isoToCron6 regex 接受 +HH:MM 后缀
 }
 import { now } from '../utils/response.js'
-import { registerPlan, unregisterPlan } from '../services/batch-video-scheduler.js'
+import { registerPlan, unregisterPlan, sweepExpiredPlans } from '../services/batch-video-scheduler.js'
 
 const app = new Hono()
 
@@ -150,6 +150,9 @@ app.post('/batch-schedules', async (c) => {
 // GET /videos/batch-schedules?episode_id=N — 列出某 episode 的所有计划
 app.get('/batch-schedules', async (c) => {
   const episodeId = c.req.query('episode_id')
+  // Sprint 10 v2 Task C (PM msg-20261014-002): lazy sweep 过期 pending plan
+  //   scheduledAt < now 的 pending plan mark cancelled (避免永远 pending)
+  sweepExpiredPlans()
   try {
     let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
     if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))

@@ -18,15 +18,69 @@
  */
 import cron, { type ScheduledTask } from 'node-cron'
 import { eq, and } from 'drizzle-orm'
+import { Mutex } from 'async-mutex'
 import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskSuccess, logTaskWarn, logTaskError } from '../utils/task-logger.js'
 import { generateVideo } from './video-generation.js'
 import { getConfigById } from './ai.js'
 
+// Sprint 10 v2 Task E (PM msg-20261014-002): 多 plan 防并发 — singleton Semaphore(1)
+//   防止多个 plan 同时 triggerPlan 时视频生成 API 撞 rate limit.
+//   当前单进程 node-cron 串行触发, 实际不并发; 但 scale 后多进程 / 手动重排都需要.
+//   Semaphore(1) = 1 个跑, 其他排队等. 跨进程需要 Redis lock (sprint 10 v2 暂不做).
+const videoGenLock = new Mutex()
+
 // 内存级 cron job registry: cronJobId (string) -> node-cron task
 // backend 重启后失效, D 任务 initBatchVideoScheduler 重读 pending 重建
 const cronJobs = new Map<string, ScheduledTask>()
+
+// Sprint 10 v2 Task B (PM msg-20261014-002): per-shot 执行状态, 存 batch_video_schedules.per_shot_status JSON
+//   格式: [{ shot_id, status: 'completed' | 'failed', video_generation_id?, error? }]
+export interface ShotStatus {
+  shot_id: number
+  status: 'completed' | 'failed'
+  video_generation_id?: number
+  error?: string
+}
+
+/**
+ * Sprint 10 v2 Task C (PM msg-20261014-002): 过期 pending plan lazy sweep
+ *   把 scheduled_at 已过 (> now) 但还没触发的 pending plan mark cancelled,
+ *   避免永远 pending (backend 重启 + cron miss 后 plan 注册卡住的场景).
+ *
+ * 模式跟 cron_runs 一样: 在 GET /plans handler 头部调, lazy sweep, 不开独立 cron.
+ * 选 JS 端 compare (不依赖 SQL datetime() 函数) 是因为 scheduledAt 字段可能是
+ * 'YYYY-MM-DDTHH:MM:SS+08:00' 或 'YYYY-MM-DDTHH:MM:SSZ' 两种格式, 字符串比较
+ * 可能出错; 走 new Date().getTime() parse 后再比, 不管哪种格式都正确.
+ *
+ * @returns swept 数量
+ */
+export function sweepExpiredPlans(): number {
+  const nowMs = Date.now()
+  const pendingPlans = db.select().from(schema.batchVideoSchedules)
+    .where(eq(schema.batchVideoSchedules.status, 'pending'))
+    .all()
+  let swept = 0
+  for (const p of pendingPlans) {
+    // sprint 10 D5 fix: scheduledAt 可能是 +08:00 或 Z 后缀, new Date() 都能正确 parse
+    const ts = new Date(p.scheduledAt).getTime()
+    if (Number.isFinite(ts) && ts < nowMs) {
+      db.update(schema.batchVideoSchedules)
+        .set({ status: 'cancelled', finishedAt: now() })
+        .where(eq(schema.batchVideoSchedules.id, p.id))
+        .run()
+      swept++
+    }
+  }
+  if (swept > 0) {
+    logTaskWarn('BatchVideoScheduler', 'sweep-expired-plans', {
+      sweptCount: swept,
+      hint: 'pending plan scheduledAt 已过期, lazy sweep mark cancelled',
+    })
+  }
+  return swept
+}
 
 const SCHEDULER_TZ = 'Asia/Shanghai' as const
 
@@ -206,6 +260,17 @@ export async function unregisterPlan(cronJobId: string): Promise<void> {
  * 串行跑每个 shot_id, 失败不重试 (用户走原『生成视频』按钮重跑)
  */
 export async function triggerPlan(planId: number): Promise<void> {
+  // Sprint 10 v2 Task E: 多 plan 防并发. acquire 时排队等, release 时下一个起跑.
+  const release = await videoGenLock.acquire()
+  try {
+    await triggerPlanImpl(planId)
+  } finally {
+    release()
+  }
+}
+
+// triggerPlan 实际实现 (Task E 拆分: 外面套 Semaphore, 内部纯业务逻辑)
+async function triggerPlanImpl(planId: number): Promise<void> {
   const [plan] = db.select().from(schema.batchVideoSchedules)
     .where(eq(schema.batchVideoSchedules.id, planId))
     .all()
@@ -280,6 +345,8 @@ export async function triggerPlan(planId: number): Promise<void> {
   let successCount = 0
   let failedCount = 0
   let lastError: string | null = null
+  // Sprint 10 v2 Task B: 每 shot 完成 / 失败 push 一项, 最后跟 plan 一起 UPDATE 到 per_shot_status JSON
+  const perShotStatus: ShotStatus[] = []
 
   for (const shotId of shotIds) {
     const [sb] = db.select().from(schema.storyboards)
@@ -287,6 +354,7 @@ export async function triggerPlan(planId: number): Promise<void> {
     if (!sb) {
       failedCount++
       lastError = `shotboard ${shotId} 不存在 (可能被删除)`
+      perShotStatus.push({ shot_id: shotId, status: 'failed', error: 'shotboard not found' })
       logTaskWarn('BatchVideoScheduler', 'trigger-skip-shot-not-found', {
         planId, shotId,
       })
@@ -297,6 +365,7 @@ export async function triggerPlan(planId: number): Promise<void> {
     if (!prompt) {
       failedCount++
       lastError = `shot ${shotId} 无 prompt 字段`
+      perShotStatus.push({ shot_id: shotId, status: 'failed', error: 'no prompt field' })
       logTaskWarn('BatchVideoScheduler', 'trigger-skip-shot-no-prompt', {
         planId, shotId,
       })
@@ -337,7 +406,7 @@ export async function triggerPlan(planId: number): Promise<void> {
     })
 
     try {
-      await generateVideo({
+      const videoGenerationId = await generateVideo({
         storyboardId: sb.id,
         dramaId: undefined, // storyboard 已带 episodeId
         source: 'storyboard',
@@ -356,12 +425,14 @@ export async function triggerPlan(planId: number): Promise<void> {
         traceId: undefined,
       })
       successCount++
+      perShotStatus.push({ shot_id: shotId, status: 'completed', video_generation_id: videoGenerationId })
       logTaskProgress('BatchVideoScheduler', 'shot-generated', {
         planId, shotId, successCount, failedCount,
       })
     } catch (err: any) {
       failedCount++
       lastError = `shot ${shotId}: ${err?.message || String(err)}`
+      perShotStatus.push({ shot_id: shotId, status: 'failed', error: err?.message || String(err) })
       logTaskError('BatchVideoScheduler', 'shot-generate-fail', {
         planId, shotId, error: err?.message || String(err),
       })
@@ -369,7 +440,7 @@ export async function triggerPlan(planId: number): Promise<void> {
     }
   }
 
-  // 5. UPDATE plan final status
+  // 5. UPDATE plan final status (含 per_shot_status JSON, Sprint 10 v2 Task B)
   const finalStatus = failedCount === 0 ? 'done' : (successCount === 0 ? 'failed' : 'failed')  // 任何失败都标 failed (重跑走按钮)
   db.update(schema.batchVideoSchedules)
     .set({
@@ -378,6 +449,7 @@ export async function triggerPlan(planId: number): Promise<void> {
       successCount,
       failedCount,
       lastError,
+      perShotStatus: JSON.stringify(perShotStatus),
     })
     .where(eq(schema.batchVideoSchedules.id, planId))
     .run()
@@ -390,3 +462,5 @@ export async function triggerPlan(planId: number): Promise<void> {
     shotCount: shotIds.length,
   })
 }
+
+// (triggerPlan wrapper 在文件顶部加了 acquire/release, 实际逻辑都在 triggerPlanImpl 里)

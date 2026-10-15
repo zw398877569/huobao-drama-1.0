@@ -22,6 +22,10 @@ export interface BatchVideoPlan {
   finishedAt: string | null
   lastRunAt: string | null
   cronJobId: string | null
+  // Sprint 10 v2 Task B (PM msg-20261014-002): per-shot 执行结果 JSON 字符串
+  //   格式: [{ shot_id, status: 'completed' | 'failed', video_generation_id?, error? }]
+  //   null = 老 plan (v1 实施期没存此字段) 或 plan 没跑完 (status=running)
+  perShotStatus: string | null
 }
 
 export interface CreateBatchVideoPlanInput {
