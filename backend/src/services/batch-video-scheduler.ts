@@ -303,6 +303,21 @@ export async function triggerPlan(planId: number): Promise<void> {
       continue
     }
 
+    // Bug F fix: shot 缺 first_frame_image 或 last_frame_image 时, AutoDL ComfyUI 走 FL2V 路径必报 '缺少必填参数: last_frame'
+    // 缺图直接 skip + log warn, 不浪费 API call + failedCount++ + clear lastError 提示 user 去补图
+    if (!sb.firstFrameImage || !sb.lastFrameImage) {
+      failedCount++
+      const missingFields = !sb.firstFrameImage && !sb.lastFrameImage ? 'firstFrameImage + lastFrameImage' :
+                              !sb.firstFrameImage ? 'firstFrameImage' : 'lastFrameImage'
+      lastError = `shot ${shotId}: 缺 ${missingFields} (AutoDL ComfyUI FL2V 路径必填 first+last frame, user 需补图)`
+      logTaskWarn('BatchVideoScheduler', 'trigger-skip-shot-missing-frames', {
+        planId, shotId, missingFields,
+        firstFrameImage: !!sb.firstFrameImage, lastFrameImage: !!sb.lastFrameImage,
+        hint: '跳过 shot 不调 generateVideo, user 需在 storyboard 补 first_frame / last_frame 图后手动重跑',
+      })
+      continue
+    }
+
     try {
       await generateVideo({
         storyboardId: sb.id,
@@ -310,10 +325,10 @@ export async function triggerPlan(planId: number): Promise<void> {
         source: 'storyboard',
         prompt,
         model: undefined,
-        referenceMode: 'first_frame', // 默认模式
+        referenceMode: 'first_last', // FL2V 路径, 要求 firstFrameUrl + lastFrameUrl 都齐 (上面已校验)
         imageUrl: undefined,
-        firstFrameUrl: sb.firstFrameImage || undefined,
-        lastFrameUrl: sb.lastFrameImage || undefined,
+        firstFrameUrl: sb.firstFrameImage,
+        lastFrameUrl: sb.lastFrameImage,
         referenceImageUrls: undefined,
         duration: sb.duration || 10,
         aspectRatio: undefined,
