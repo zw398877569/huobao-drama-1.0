@@ -35,7 +35,7 @@ export function useEpisodePipeline(deps: Deps) {
     set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
   })
   // 导出区子 tab: 'merge' = 拼接导出 (默认), 'free' = 自由创作
-  const exportTab = ref<'merge' | 'free'>('merge')
+  const exportTab = ref<'merge' | 'free' | 'video-schedule'>('merge')
   const frameMode = ref('first')
   const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 
@@ -142,6 +142,8 @@ export function useEpisodePipeline(deps: Deps) {
         { key: 'export:merge', label: '拼接导出', desc: '', icon: 'Download', done: !!ctx.mergeUrl.value },
         // 自由创作: 不依赖分镜进度, done 始终 false — 不参与 pipeline 总进度
         { key: 'export:free', label: '自由创作', desc: '', icon: 'Sparkles', done: false },
+        // Sprint 10 PM msg-20261014-001 task G: 视频生成定时计划 (项目内 node-cron 调度)
+        { key: 'export:video-schedule', label: '视频生成定时计划', desc: '', icon: 'Clock', done: false },
       ],
     },
   ]))
@@ -240,8 +242,8 @@ export function useEpisodePipeline(deps: Deps) {
     }
     if (section === 'export') {
       ctx.panel.value = 'export'
-      // export:merge / export:free — 设置对应的子 tab
-      if (step === 'free' || step === 'merge') {
+      // export:merge / export:free / export:video-schedule — 设置对应的子 tab
+      if (step === 'free' || step === 'merge' || step === 'video-schedule') {
         exportTab.value = step
       }
     }

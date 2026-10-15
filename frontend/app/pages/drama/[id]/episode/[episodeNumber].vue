@@ -1737,6 +1737,10 @@
         <div v-else-if="exportTab === 'free'" class="export-host">
           <FreeCreationPanel :configs="videoConfigs" />
         </div>
+        <!-- Sprint 10 PM msg-20261014-001 task G: 视频生成定时计划 (Nuxt auto-import ~/components/VideoSchedulePlan.vue) -->
+        <div v-else-if="exportTab === 'video-schedule'" class="export-host">
+          <VideoSchedulePlan :episode-id="epId" />
+        </div>
       </div>
 
       <!-- 图片模型选择弹窗 (chars/scenes/props 子 tab 共享) -->
