@@ -69,8 +69,6 @@ export function useBatchVideoSchedule(episodeId: Ref<number> | (() => number) | 
         list = (Array.isArray(obj.data) ? obj.data :
                 Array.isArray(obj.items) ? obj.items : []) as BatchVideoPlan[]
       }
-      // 2026-10-15 sprint 10 bug C 排查: 加 console.log 看到 loadPlans 实际拿到的数据
-      console.log('[useBatchVideoSchedule] loadPlans epId=', epId, 'list.length=', list.length, 'data=', data)
       plans.value = list
     } catch (err: any) {
       console.error('[useBatchVideoSchedule] loadPlans 失败:', err)

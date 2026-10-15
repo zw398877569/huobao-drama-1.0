@@ -4,7 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
-import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 
 /**
  * 规范化 scheduled_at 输入: 无 Z/时区后缀的 ISO 字符串当 Asia/Shanghai 本地时间, 转 UTC ISO 存 DB
@@ -83,42 +83,18 @@ app.post('/', async (c) => {
   }
 })
 
-// GET /videos/:id
-app.get('/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.videoGenerations)
-    .where(eq(schema.videoGenerations.id, id)).all()
-  return success(c, row || null)
-})
-
-// GET /videos — List by storyboard_id / drama_id / source
-app.get('/', async (c) => {
-  const storyboardId = c.req.query('storyboard_id')
-  const dramaId = c.req.query('drama_id')
-  // source 过滤: ?source=free 取自由创作记录; ?source=storyboard 取正式分镜; 不传返回所有
-  const source = c.req.query('source')
-
-  let rows = db.select().from(schema.videoGenerations).all()
-
-  if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
-  if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
-  if (source === 'free' || source === 'storyboard') {
-    rows = rows.filter(r => (r.source || 'storyboard') === source)
-  }
-
-  return success(c, rows)
-})
-
-// DELETE /videos/:id
-app.delete('/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  db.delete(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).run()
-  return success(c)
-})
-
 // ─── Batch Video Schedules (Sprint 10 PM msg-20261014-001) ────────────
 // 一次性定时批量生成视频计划, 项目内 node-cron 调度 (D 任务启动集成)
 // 工单 user_4_decisions_locked: D1 触发时间 UI 选 / D2 一次性 / D3 status enum + 失败手动重跑 / D4 单 episode
+//
+// ⚠️ 路由声明顺序必须在 app.get('/:id') 和 app.delete('/:id') 之前 (Bug C 治本)
+// 修前 (Sprint 10 B commit 4ab8107): POST/GET/DELETE /batch-schedules 声明在 L124/L175/L192,
+//   晚于 app.get('/:id') (L87). 当 GET /videos/batch-schedules 请求进来,
+//   :id 通配段抢先把 'batch-schedules' 当 id 参数 → Number('batch-schedules') = NaN
+//   → db.select().where(id === NaN).all() 永远查不到 → success(c, null)
+//   → 前端 useApi req() 拿到的 data 是 {code:200, data:null, ...} → useBatchVideoSchedule 兜底 list=[]
+//   → console 看到 data:null, 页面空 (4 条 plan 在 DB 但永远渲染不出来)
+// 修后: batch-schedules 三个路由上移到 :id 之前, 字面段优先匹配, handler 真正跑
 
 // POST /videos/batch-schedules — 创建计划 (注册 cron job)
 app.post('/batch-schedules', async (c) => {
@@ -175,15 +151,13 @@ app.post('/batch-schedules', async (c) => {
 app.get('/batch-schedules', async (c) => {
   const episodeId = c.req.query('episode_id')
   try {
-    logTaskProgress('BatchVideoSchedule', 'list-entry', { episodeId: episodeId ?? 'all', schemaHas: typeof schema.batchVideoSchedules, schemaKeys: Object.keys(schema).filter(k => k.includes('batch') || k.includes('Video')).join(',') })
     let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
     if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
     rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
-    logTaskProgress('BatchVideoSchedule', 'list-done', { episodeId: episodeId ?? 'all', rowCount: rows.length, rowsType: typeof rows, isArray: Array.isArray(rows), firstRow: rows[0] ? { id: rows[0].id, status: rows[0].status } : null })
     return success(c, rows)
   } catch (err: any) {
+    // Bug C 防御: 抛错时也返回 200 with 空 array, 前端能正常显示 '没有计划' 不再 stuck
     logTaskError('BatchVideoSchedule', 'list-throw', { error: err?.message || String(err), stack: err?.stack?.slice(0, 500) })
-    // Bug C 修: 抛错时也返回 200 with 空 array, 前端能正常显示 '没有计划' 不再 stuck
     return success(c, [])
   }
 })
@@ -203,6 +177,39 @@ app.delete('/batch-schedules/:id', async (c) => {
     .run()
 
   logTaskSuccess('BatchVideoSchedule', 'cancel', { planId: id })
+  return success(c)
+})
+
+// GET /videos/:id
+app.get('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [row] = db.select().from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.id, id)).all()
+  return success(c, row || null)
+})
+
+// GET /videos — List by storyboard_id / drama_id / source
+app.get('/', async (c) => {
+  const storyboardId = c.req.query('storyboard_id')
+  const dramaId = c.req.query('drama_id')
+  // source 过滤: ?source=free 取自由创作记录; ?source=storyboard 取正式分镜; 不传返回所有
+  const source = c.req.query('source')
+
+  let rows = db.select().from(schema.videoGenerations).all()
+
+  if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
+  if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
+  if (source === 'free' || source === 'storyboard') {
+    rows = rows.filter(r => (r.source || 'storyboard') === source)
+  }
+
+  return success(c, rows)
+})
+
+// DELETE /videos/:id
+app.delete('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  db.delete(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).run()
   return success(c)
 })
 
