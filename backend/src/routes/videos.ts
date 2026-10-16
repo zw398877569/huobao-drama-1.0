@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
@@ -147,6 +147,97 @@ app.post('/batch-schedules', async (c) => {
   }
 })
 
+/**
+ * Sprint 11c (PM msg-20261016-003): 给 plan 列表补耗时字段
+ *
+ * 耗时数据源全部现成, 不改表结构:
+ *   - 单镜耗时: video_generations.completed_at − created_at,
+ *     关联路径 plan.per_shot_status[i].video_generation_id → video_generations.id
+ *   - plan 总耗时: 所有成功 shot 里【最早 created_at】→【最晚 completed_at】的差值。
+ *     不能用 batch_video_schedules.started_at → finished_at: triggerPlan 是异步派发
+ *     就返回 (实测两者只差 1.0~1.3s), 真实生成在后台串行跑。
+ *   - 无成功 shot → 两个字段都 null (前端显示 '—')。
+ *
+ * 性能: 一次性收集所有 plan 引用到的 video_generation_id 去重, IN (...) 批量查一次,
+ *       不做 N+1 逐条查 (per_shot_status 最多几十项, 但保持干净)。
+ */
+function attachElapsedTime(rows: any[]): any[] {
+  // 1. 解析所有 plan 的 per_shot_status, 收集 video_generation_id
+  const parsedByPlan = new Map<number, Array<{ shot_id: number; status: string; video_generation_id?: number; error?: string; durationSecs?: number | null }>>()
+  const allIds = new Set<number>()
+  for (const row of rows) {
+    let items: any[] = []
+    if (row.perShotStatus) {
+      try {
+        const parsed = JSON.parse(row.perShotStatus)
+        if (Array.isArray(parsed)) items = parsed
+      } catch {
+        // 老数据 JSON 损坏时按空处理, 不影响其他 plan
+      }
+    }
+    parsedByPlan.set(row.id, items)
+    for (const it of items) {
+      const vgId = Number(it?.video_generation_id)
+      if (Number.isInteger(vgId) && vgId > 0) allIds.add(vgId)
+    }
+  }
+
+  // 2. 批量查 video_generations (一次 IN 查询, 不 N+1)
+  const vgById = new Map<number, { createdAt: string; completedAt: string | null }>()
+  if (allIds.size > 0) {
+    const vgRows = db.select({
+      id: schema.videoGenerations.id,
+      createdAt: schema.videoGenerations.createdAt,
+      completedAt: schema.videoGenerations.completedAt,
+    })
+      .from(schema.videoGenerations)
+      .where(inArray(schema.videoGenerations.id, [...allIds]))
+      .all()
+    for (const v of vgRows) vgById.set(v.id, { createdAt: v.createdAt, completedAt: v.completedAt })
+  }
+
+  // 3. 逐 plan 计算
+  return rows.map((row) => {
+    const items = parsedByPlan.get(row.id) || []
+    let minCreatedMs: number | null = null
+    let maxCompletedMs: number | null = null
+    const perSecs: number[] = []
+
+    const withDuration = items.map((it) => {
+      const vgId = Number(it?.video_generation_id)
+      const vg = vgId > 0 ? vgById.get(vgId) : undefined
+      let durationSecs: number | null = null
+      if (vg?.completedAt) {
+        const cMs = Date.parse(vg.createdAt)
+        const dMs = Date.parse(vg.completedAt)
+        if (Number.isFinite(cMs) && Number.isFinite(dMs) && dMs > cMs) {
+          durationSecs = Math.round((dMs - cMs) / 1000)
+          perSecs.push(durationSecs)
+          if (minCreatedMs === null || cMs < minCreatedMs) minCreatedMs = cMs
+          if (maxCompletedMs === null || dMs > maxCompletedMs) maxCompletedMs = dMs
+        }
+      }
+      // 失败 shot (无 video_generation_id 或未完成) → durationSecs 保持 null, 前端显示 '—'
+      return { ...it, durationSecs }
+    })
+
+    const planDurationSecs = (minCreatedMs !== null && maxCompletedMs !== null && maxCompletedMs > minCreatedMs)
+      ? Math.round((maxCompletedMs - minCreatedMs) / 1000)
+      : null
+    const avgDurationSecs = perSecs.length > 0
+      ? Math.round(perSecs.reduce((a, b) => a + b, 0) / perSecs.length)
+      : null
+
+    return {
+      ...row,
+      // perShotStatus 原样保留 (前端已有 parsePerShotStatus 解析逻辑), 后端另附一份结构化结果
+      perShotElapsed: withDuration,
+      planDurationSecs,
+      avgDurationSecs,
+    }
+  })
+}
+
 // GET /videos/batch-schedules?episode_id=N — 列出某 episode 的所有计划
 app.get('/batch-schedules', async (c) => {
   const episodeId = c.req.query('episode_id')
@@ -157,7 +248,15 @@ app.get('/batch-schedules', async (c) => {
     let rows: any[] = db.select().from(schema.batchVideoSchedules).all() ?? []
     if (episodeId) rows = rows.filter(r => r.episodeId === Number(episodeId))
     rows.sort((a, b) => (b.scheduledAt || '').localeCompare(a.scheduledAt || ''))
-    return success(c, rows)
+
+    // Sprint 11c (PM msg-20261016-003): 补耗时字段
+    //   plan 总耗时不能用 batch_video_schedules.started_at → finished_at ——
+    //   实测只差 1.0~1.3s, 因为 triggerPlan 是异步派发就返回, 真实生成在后台跑。
+    //   改用 video_generations 跨 shot 求: 最早 created_at → 最晚 completed_at。
+    //   per_shot_status[i].video_generation_id 关联 video_generations.id 算单镜耗时。
+    //   失败 shot 没有 video_generation_id, 单镜耗时为 null (不编造)。
+    const enriched = attachElapsedTime(rows)
+    return success(c, enriched)
   } catch (err: any) {
     // Bug C 防御: 抛错时也返回 200 with 空 array, 前端能正常显示 '没有计划' 不再 stuck
     logTaskError('BatchVideoSchedule', 'list-throw', { error: err?.message || String(err), stack: err?.stack?.slice(0, 500) })

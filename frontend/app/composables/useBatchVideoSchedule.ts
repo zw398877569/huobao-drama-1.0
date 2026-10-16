@@ -26,6 +26,22 @@ export interface BatchVideoPlan {
   //   格式: [{ shot_id, status: 'completed' | 'failed', video_generation_id?, error? }]
   //   null = 老 plan (v1 实施期没存此字段) 或 plan 没跑完 (status=running)
   perShotStatus: string | null
+  // Sprint 11c (PM msg-20261016-003): 生成耗时
+  //   planDurationSecs: plan 总耗时 (最早 shot created_at → 最晚 shot completed_at 的差值, 秒)
+  //     不能用 startedAt→finishedAt (triggerPlan 异步派发就返回, 实测只差 1s)
+  //     null = 无成功 shot / 还没跑完 / 已 cancelled
+  planDurationSecs?: number | null
+  //   avgDurationSecs: 各成功 shot 单镜耗时平均值 (后端已算好, 前端暂不显示, 供未来排序/统计)
+  avgDurationSecs?: number | null
+  //   perShotElapsed: perShotStatus 的结构化版本, 每项额外带 durationSecs (单镜耗时, 秒)
+  //     失败 shot 为 null (无 video_generation_id 关联不到耗时)。老后端不返此字段 → 前端降级读 perShotStatus
+  perShotElapsed?: Array<{
+    shot_id: number
+    status: 'completed' | 'failed'
+    video_generation_id?: number
+    error?: string
+    durationSecs?: number | null
+  }> | null
 }
 
 export interface CreateBatchVideoPlanInput {

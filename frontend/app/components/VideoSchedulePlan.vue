@@ -26,6 +26,8 @@
           <th>状态</th>
           <th>镜头</th>
           <th>成功 / 失败</th>
+          <!-- Sprint 11c (PM msg-20261016-003): 生成耗时列 (plan 总耗时) -->
+          <th>耗时</th>
           <th>配置</th>
           <th>详情</th>
           <th>操作</th>
@@ -40,6 +42,8 @@
             <td><span class="tag" :class="`tag-${p.status}`">{{ statusLabel(p.status) }}</span></td>
             <td>{{ p.shotCount }} 镜</td>
             <td>{{ p.successCount }} / {{ p.failedCount }}</td>
+            <!-- Sprint 11c: plan 总耗时 (串行生成, 约等于各单镜耗时之和) -->
+            <td class="mono">{{ fmtDuration(p.planDurationSecs) }}</td>
             <td>{{ p.videoConfigId ?? 'episode 锁定' }}</td>
             <td>
               <span class="expand-toggle">{{ expandedPlans.has(p.id) ? '▼' : '▶' }}</span>
@@ -55,15 +59,17 @@
             </td>
           </tr>
           <!-- 详情行: 只在展开时渲染 -->
-          <tr v-if="expandedPlans.has(p.id) && parsePerShotStatus(p.perShotStatus).length > 0" class="row-detail">
-            <td colspan="8">
+          <tr v-if="expandedPlans.has(p.id) && perShotElapsedOf(p).length > 0" class="row-detail">
+            <td colspan="9">
               <div class="per-shot-detail">
                 <div class="dim" style="margin-bottom: 6px;">per-shot 执行结果 ({{ p.successCount }} 成功 / {{ p.failedCount }} 失败):</div>
-                <div v-for="shot in parsePerShotStatus(p.perShotStatus)" :key="shot.shot_id" class="per-shot-row">
+                <div v-for="shot in perShotElapsedOf(p)" :key="shot.shot_id" class="per-shot-row">
                   <span class="mono">#{{ shot.shot_id }}</span>
                   <span v-if="shot.status === 'completed'" class="tag tag-done">✓ 成功</span>
                   <span v-else class="tag tag-failed">✗ 失败</span>
                   <span v-if="shot.video_generation_id" class="dim mono">vid={{ shot.video_generation_id }}</span>
+                  <!-- Sprint 11c: 单镜耗时 (来自 video_generations.created_at→completed_at) -->
+                  <span class="dim mono">⏱ {{ fmtDuration(shot.durationSecs) }}</span>
                   <span v-if="shot.error" class="dim per-shot-error">{{ shot.error }}</span>
                 </div>
               </div>
@@ -199,6 +205,38 @@ interface PerShotEntry {
   status: 'completed' | 'failed'
   video_generation_id?: number
   error?: string
+  /** Sprint 11c (PM msg-20261016-003): 单镜生成耗时 (秒)。失败 shot 为 null (无 video_generation_id)。 */
+  durationSecs?: number | null
+}
+
+/**
+ * Sprint 11c: 人类可读的耗时格式化 (PM msg-20261016-003 D2 规则)
+ *   null / undefined → '—'
+ *   < 60s           → 'Xs'        (如 '45s')
+ *   < 3600s         → 'Xm Ys'     (Ys=0 时省略, 如 '6m')
+ *   >= 3600s        → 'Xh Ym'     (如 '1h 7m')
+ */
+function fmtDuration(secs: number | null | undefined): string {
+  if (secs == null || !Number.isFinite(secs) || secs < 0) return '—'
+  const s = Math.round(secs)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const remS = s % 60
+  if (m < 60) return remS === 0 ? `${m}m` : `${m}m ${remS}s`
+  const h = Math.floor(m / 60)
+  const remM = m % 60
+  return remM === 0 ? `${h}h` : `${h}h ${remM}m`
+}
+
+/**
+ * Sprint 11c: 取 plan 的 per-shot 列表 (含后端算好的 durationSecs)。
+ *   优先 perShotElapsed (后端 GET 时按 video_generation_id 关联算好, 带耗时);
+ *   降级 parsePerShotStatus (老后端没返 perShotElapsed 时至少还能看成功/失败, 耗时显示 '—')。
+ */
+function perShotElapsedOf(p: BatchVideoPlan): PerShotEntry[] {
+  const enriched = (p as any).perShotElapsed
+  if (Array.isArray(enriched) && enriched.length > 0) return enriched as PerShotEntry[]
+  return parsePerShotStatus(p.perShotStatus)
 }
 function parsePerShotStatus(raw: string | null): PerShotEntry[] {
   if (!raw) return []
