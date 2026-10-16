@@ -25,6 +25,12 @@ import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
+// Sprint 11 (PM msg-20261016-001 Task A + msg-20261016-002 R1/R2/R3):
+//   V4 三步新链路接入共享模块 — 旧 agent 路径 (storyboard-tools.ts) 已改用同一份实现。
+//   - ensureH3ThreePartPrompt: 补 H3 三段式 header (背景音少的根因)
+//   - applyDurationPolicy: 时长体系 (因子估算 → 钩子/过渡 → Σ 收敛)
+import { ensureH3ThreePartPrompt } from '../utils/h3-prompt.js'
+import { applyDurationPolicy } from './shot-duration.js'
 import {
   salvageImagePromptPermanent,
   salvageShotPlanArray,
@@ -476,6 +482,13 @@ const ShotDetailsItemSchema = z.object({
   image_prompt_plot_state: z.string().optional(),
   video_prompt_permanent: z.string().optional(),
   video_prompt_plot_state: z.string().optional(),
+  // Sprint 11 Task A (PM msg-20261016-001): H3 声音两列 — V4 重构时遗落, 导致 19/19 video_prompt
+  //   缺三段式 header, H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)。
+  //   旧路径 agents/index.ts:580-588 已有既有措辞, 这里沿用同口径。
+  /** 环境底噪 + diegetic 音效 (画面内可听的声音)。无则写 'N/A' */
+  sound_effect: z.string().optional(),
+  /** 该镜配乐描述: 配器 + 速度 + 节奏 + 动态变化。禁止抽象情绪词。无则写 'N/A' */
+  bgm_prompt: z.string().optional(),
 })
 
 const Step2Schema = z.object({
@@ -529,8 +542,17 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
   - video_prompt_plot_state 写本镜剧情瞬时动作/表情/对话/物件状态 (跟 image_prompt_plot_state 字段分工一致)
   - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 跟 imagePrompt 拼接方式一致
   - 严禁把剧情动作塞到 video_prompt_permanent (后端拼不出剧情, 视频提示词没剧情); 严禁把摄影指令塞到 video_prompt_plot_state (冗余, 跟 permanent 重复)
+- Sprint 11 Task A (PM msg-20261016-001): sound_effect / bgm_prompt 必填 (无内容写 'N/A')
+  - sound_effect: 该镜【画面内可听的声音】= 环境底噪 (雨声/风声/室内嗡鸣/街道车流) + diegetic 音效 (脚步声/门响/器物碰撞/角色喘息)
+  - bgm_prompt: 该镜【配乐】= 配器 (钢琴/弦乐/电子/鼓组) + 速度 (缓慢/中速/急促) + 节奏 (稳定/渐进/骤变) + 动态变化 (渐强/渐弱/静默后爆发)
+  - ⚠️ 严禁用抽象情绪词 (如 "悲伤的感觉"/"紧张氛围") — H3 拿到抽象词会自由发挥, 产生不可控音频
+  - ⚠️ sound_effect 与 bgm_prompt 是两类不同声音, 不要混写 (前者画内, 后者画外配乐)
+  - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 再由 ensureH3ThreePartPrompt
+    补 "Overall soundscape:" (取 sound_effect) + "Non-diegetic music:" (取 bgm_prompt) 两段 header
+  - 背景: V4 重构时这两字段遗落, episode 12 的 19/19 video_prompt 缺三段式 header,
+    H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)
 plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
-输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state}] }`
+输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state, sound_effect, bgm_prompt}] }`
 
   const userPrompt = JSON.stringify({
     step1_plan: plan,
@@ -630,6 +652,25 @@ export async function runStep3(opts: {
   }
   const validatedDetails = revalidated.data
 
+  // ── Sprint 11 R1/R2/R3 (PM msg-20261016-002): 时长体系接入 V4 新链路 ──
+  //   修前: validatedDetails.map 直接用 det.duration (LLM 自由给值) 落库,
+  //         19 镜全是 4/5/6s 匀速短镜头 (episode 12 实测 Σ=92s vs 旧链路 episode 3 Σ=327s),
+  //         五因子估算 / 钩子保护 / 场景过渡 / Σ 收敛 全部失效 — 这是"AI 味""平"的直接原因。
+  //   修后: applyDurationPolicy 统一入口, 顺序跟旧 agent 路径 (storyboard-tools.ts) 完全一致:
+  //     阶段 1 (逐镜 R1+R3): 五因子估算 → 场景首镜 +0.5s → clamp [VIDEO_MIN=4, VIDEO_MAX=15]
+  //     阶段 2 (整集 R2):     Σ 收敛到自动 target, 钩子镜豁免 + 非钩子镜不低于 4s
+  //   VIDEO_MAX=15 是 H3 平台硬上限 (用户 2026-10-16 拍板 D2), 严禁放宽。
+  const convergedTotalDuration = applyDurationPolicy(episodeId, validatedDetails)
+  logTaskProgress('StoryboardPlanner', 'duration-policy-applied', {
+    episodeId,
+    shotCount: validatedDetails.length,
+    convergedTotal: convergedTotalDuration,
+    durationRange: {
+      min: Math.min(...validatedDetails.map(d => d.duration ?? 0)),
+      max: Math.max(...validatedDetails.map(d => d.duration ?? 0)),
+    },
+  })
+
   // 准备 INSERT values (含 V3 salvage 清洗 + imagePrompt 拼接), 放进 DB 事务里
   const insertPayloads = validatedDetails.map((det) => {
     const cleaned = salvageImagePromptPermanent(det.image_prompt_permanent, {
@@ -664,13 +705,25 @@ export async function runStep3(opts: {
         //   跟 imagePrompt 拼接方式一致 (permanent + description + plot_state 三段拼接),
         //   041 派单只改了 image_prompt_permanent 内部字段排序 (permanentToText), 没覆盖 video_prompt 拼接.
         //   之前 videoPrompt 只取 video_prompt_permanent, plot_state 字段存 db 但没拼, 视频提示词没剧情.
-        videoPrompt: [
-          det.video_prompt_permanent || '',
-          det.description || '',
-          det.video_prompt_plot_state || '',
-        ].filter(Boolean).join('。'),
+        // Sprint 11 Task A (PM msg-20261016-001): 三段式兜底 + 声音两列落库
+        //   ensureH3ThreePartPrompt 补 "Overall soundscape:" + "Non-diegetic music:" 两段 header,
+        //   内容分别取 sound_effect / bgm_prompt (缺失时填 'N/A')。
+        //   修前: V4 新链路不调本函数, 19/19 video_prompt 缺三段式 → H3 自由发挥 → 13/19 镜静音。
+        videoPrompt: ensureH3ThreePartPrompt(
+          [
+            det.video_prompt_permanent || '',
+            det.description || '',
+            det.video_prompt_plot_state || '',
+          ].filter(Boolean).join('。'),
+          det.sound_effect,
+          det.bgm_prompt,
+        ),
         imagePromptPlotState: plotStateText || null,
         videoPromptPlotState: det.video_prompt_plot_state || null,
+        // Sprint 11 Task A: H3 声音两列落库 (下游消费路径 — Task F 本期不做真实音频生成,
+        //   这两列进 video_prompt 由 H3 生成音频本身就是消费路径)
+        soundEffect: det.sound_effect?.trim() || null,
+        bgmPrompt: det.bgm_prompt?.trim() || null,
         imagePromptPermanent: cleaned.imagePromptPermanent
           ? JSON.stringify(cleaned.imagePromptPermanent)
           : null,

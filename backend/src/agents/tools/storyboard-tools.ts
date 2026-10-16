@@ -18,6 +18,23 @@ import { validateEventDensity } from '../../services/prompt-validation'
 import { checkPromptSafety } from '../../services/prompt-safety'
 import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
+// Sprint 11 (PM msg-20261016-001 Task A + msg-20261016-002 R1/R2/R3):
+//   以下函数从本文件抽出到共享模块, 供 V4 三步新链路 (storyboard-planner-service.ts) 共用。
+//   本文件 (旧 agent 路径) 行为完全不变 —— 只把本地定义换成 import。
+//   - ensureH3ThreePartPrompt: 移到 utils/h3-prompt.ts
+//   - computeShotDuration / getHookMin / applySceneTransitionBonus /
+//     buildFirstInSceneIndices / isCliffhangerScene / getEpisodeTargetSeconds /
+//     convergeShotDurations: 移到 services/shot-duration.ts
+import { ensureH3ThreePartPrompt } from '../../utils/h3-prompt.js'
+import {
+  computeShotDuration,
+  getHookMin,
+  applySceneTransitionBonus,
+  buildFirstInSceneIndices,
+  isCliffhangerScene,
+  getEpisodeTargetSeconds,
+  convergeShotDurations,
+} from '../../services/shot-duration.js'
 import {
   getBaselineFor,
   getDensityScale,
@@ -130,34 +147,6 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
   }
 }
 
-// 2026-09-10 fix: H3 三段式 video_prompt 兜底
-//   LLM 经常只输出 Integrated multimodal description 一段,导致
-//   Overall soundscape / Non-diegetic music 缺失, H3 模型对缺失段
-//   自由发挥, 产生不可控随机音频("杂乱的声音")。code 端必须保证
-//   video_prompt 字段始终包含完整三段式。
-//   music 兜底不允许用 atmosphere 推断 (atmosphere 不是音乐描述,
-//   会让 H3 看到抽象词后自由发挥) — 见 commit f927a6a。
-function ensureH3ThreePartPrompt(
-  prompt: string,
-  soundEffect?: string | null,
-  bgmPrompt?: string | null,
-): string {
-  let result = prompt
-  // 宽松匹配 H3 三段式 header (大小写、分隔符空格/_/- 都不敏感)
-  // LLM 翻译后可能写出 Overall soundscape: / Overall_Soundscape: /
-  // OVERALL SOUNDSCAPE: 等变体, 下面这个 regex 都接得住
-  const hasSoundscape = /(?:^|\n)\s*overall[\s_-]+soundscape[\s_-]*:/i.test(result)
-  const hasMusic = /(?:^|\n)\s*(?:non[\s_-]+diegetic[\s_-]+music|non-diegetic\s+music)[\s_-]*:/i.test(result)
-  if (!hasSoundscape) {
-    const soundscape = soundEffect?.trim() || 'N/A'
-    result = result.trimEnd() + "\n\nOverall soundscape:\n" + soundscape
-  }
-  if (!hasMusic) {
-    const music = bgmPrompt?.trim() || 'N/A'
-    result = result.trimEnd() + "\n\nNon-diegetic music:\n" + music
-  }
-  return result
-}
 
 export function createStoryboardTools(episodeId: number, dramaId: number) {
   // 预计算自动反词：按 drama.style 匹配一次，整个会话复用
@@ -727,198 +716,6 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
 
 // ── Phase 2 时长决策 helper functions (msg-20260920-003) ──────────────
 // 不混入主循环, 每个函数独立可测. 上游常量: ../../constants/shot-type-baseline.ts
-
-/**
- * 五因子粒度模型 → candidate duration (秒)
- *  factor-1: 景别 baseline (getBaselineFor)
- *  factor-2: 密度系数 (getDensityScale from intentTemplate.durationCoefficient)
- *  factor-4: 运镜速度系数 (getMoveScale from sp.movement)
- *  → baseline.min × density × move
- *  factor-3: dialogueFloor = ceil(对白字数 / 4.5) + 1
- *  → candidate = max(floor, scaled)
- *  P3: 短对白 (<10字) 压缩到 ≤ 8s
- *  最终: [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] clamp
- */
-function computeShotDuration(
-  sp: { shot_type: string; dialogue?: string; movement?: string },
-  intentTemplate: { durationCoefficient?: number; shotDensity?: string } | undefined,
-  // Step 3.G: scene-classifier 标记 climax 时应用 CLIMAX_BONUS_COEFFICIENT,
-  // 让该 scene 所有镜头延长 (但不破坏 intent-template 快慢节奏 + 不突破 VIDEO_MAX=15)
-  sceneTag: SceneTag = 'normal',
-): number {
-  const baseline = getBaselineFor(sp.shot_type)
-  const densityScale = intentTemplate?.durationCoefficient ?? FALLBACK_DENSITY_SCALE
-  const moveScale = getMoveScale(sp.movement)
-  // 对白按 char count (去空白), 中文 4.5 字/秒常识
-  const dialogueChars = (sp.dialogue || '').replace(/\s/g, '').length
-  const scaled = baseline.min * densityScale * moveScale
-  const floor = computeDialogueFloor(dialogueChars)
-  let candidate = Math.max(floor, scaled)
-  // Step 3.G: climax bonus (scene-classifier 3-vote 标记 climax 时)
-  //   1.3x 乘到 candidate, 让该 scene 镜头延长落点时间.
-  //   Σ 收敛时 climax 镜相对延长比例 1.3:1 仍保留 (绝对时长会被 Σ 缩, 但相对节奏稳).
-  if (sceneTag === 'climax') {
-    candidate *= CLIMAX_BONUS_COEFFICIENT
-  }
-  // P3: 短对白压缩 (< 10 字 → ≤ 8s, 避免空转)
-  if (dialogueChars > 0 && dialogueChars < SHORT_DIALOGUE_THRESHOLD) {
-    candidate = Math.min(candidate, SHORT_DIALOGUE_MAX)
-  }
-  return Math.round(candidate)
-}
-
-/**
- * 钩子保留 (O3)
- *  idx=0 → HOOK_OPENING_MIN (3s, 开场钩子)
- *  idx=last → HOOK_CLIFFHANGER_MIN (10s, 仅 cliffhanger) 或 HOOK_CLOSING_MIN (8s)
- *  其他 → 0 (不强制)
- */
-function getHookMin(idx: number, total: number, isCliffhanger: boolean): number {
-  if (idx === 0) return HOOK_OPENING_MIN
-  if (idx === total - 1) {
-    return isCliffhanger ? HOOK_CLIFFHANGER_MIN : HOOK_CLOSING_MIN
-  }
-  return 0
-}
-
-/**
- * 场景过渡 bonus (O2)
- *  每个 scene 第一个镜 +0.5s (观众认知切换需要缓冲)
- */
-function applySceneTransitionBonus(candidate: number, isFirstInScene: boolean): number {
-  return isFirstInScene ? candidate + SCENE_TRANSITION_BONUS : candidate
-}
-
-/**
- * scene 内第一镜索引集合 (Phase 2 C, 用于场景过渡 bonus)
- *  shot_plan 按 shot_number 顺序, 同一 scene_id 第一次出现算 first
- */
-function buildFirstInSceneIndices(
-  shot_plan: Array<{ scene_id: number }>
-): Set<number> {
-  const seenScenes = new Set<number>()
-  const firstIndices = new Set<number>()
-  shot_plan.forEach((sp, i) => {
-    if (!seenScenes.has(sp.scene_id)) {
-      seenScenes.add(sp.scene_id)
-      firstIndices.add(i)
-    }
-  })
-  return firstIndices
-}
-
-/**
- * cliffhanger 判定 (Phase 2 C placeholder, Phase 3 scene-classifier 会替换为更复杂逻辑)
- *  检查 scene 的 intention.function 字段是否命中 CLIFFHANGER_TAGS
- *  scene.intention 不存在 → false (无 cliffhanger)
- *  Phase 3: lib/scene-classifier.ts 会加 fallback 推断 (结构位置后 30% + description 冲突词 + 场景对峙)
- */
-function isCliffhangerScene(
-  sceneId: number,
-  sceneMap: Map<number, { intention?: { function?: string } | null }>
-): boolean {
-  const fn = sceneMap.get(sceneId)?.intention?.function
-  return fn ? CLIFFHANGER_TAGS.includes(fn as typeof CLIFFHANGER_TAGS[number]) : false
-}
-
-/**
- * episode target 来源 (Phase 2 C placeholder, Phase 3 estimator 替换)
- *  当前 episodes 表没有 target_duration 字段, fallback DEFAULT_EPISODE_TARGET_SECONDS (100s)
- *  Phase 3 lib/episode-duration-estimator.ts 接入后会先查 episodes.target_duration 字段再 fallback
- *  这里保留 placeholder 接口便于 Phase 3 直接替换
- */
-function getEpisodeTargetSeconds(episodeId: number): number {
-  // PM 派单 msg-20260920-004 Step 3.D 接入:
-  //   1. 先查 episodes.target_duration 字段（如有且不为 null）→ 直接返回
-  //   2. 否则调 estimateTargetDuration() (聚合 storyboards dialogue + sceneIntention)
-  //   3. 再 fallback 100s
-
-  // 1. user-set target duration
-  const episodeRow = db.select({ targetDuration: schema.episodes.targetDuration, dramaId: schema.episodes.dramaId })
-    .from(schema.episodes)
-    .where(eq(schema.episodes.id, episodeId))
-    .get()
-  if (episodeRow?.targetDuration != null && episodeRow.targetDuration > 0) {
-    return episodeRow.targetDuration
-  }
-
-  if (!episodeRow || episodeRow.dramaId == null) {
-    return DEFAULT_EPISODE_TARGET_SECONDS
-  }
-
-  // 2. 聚合 estimator 所需数据
-  //    drama 内所有 episodes (算 episode position penalty)
-  const dramaEpisodes = db.select().from(schema.episodes)
-    .where(eq(schema.episodes.dramaId, episodeRow.dramaId))
-    .all()
-
-  //    本 episode 所有 scenes
-  const scenes = db.select().from(schema.scenes)
-    .where(eq(schema.scenes.episodeId, episodeId))
-    .all()
-
-  //    本 episode 所有 storyboards (聚合 dialogue + intentionFunction per scene)
-  const storyboards = db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId))
-    .all()
-
-  const dialogueByScene = new Map<number, string>()
-  const intentionByScene = new Map<number, DramaticFunctionKey>()
-  for (const sb of storyboards) {
-    if (sb.sceneId == null) continue
-    if (sb.dialogue) {
-      dialogueByScene.set(sb.sceneId, (dialogueByScene.get(sb.sceneId) ?? '') + sb.dialogue)
-    }
-    if (sb.sceneIntention) {
-      // first-wins: 取第一个解析成功的 intention (同 scene 多 storyboard 时)
-      if (!intentionByScene.has(sb.sceneId)) {
-        try {
-          const parsed = JSON.parse(sb.sceneIntention) as { function?: string }
-          if (parsed.function) {
-            intentionByScene.set(sb.sceneId, parsed.function as DramaticFunctionKey)
-          }
-        } catch {
-          // 解析失败忽略, 下个 storyboard 再试
-        }
-      }
-    }
-  }
-
-  //    构造 EpisodeSceneData[] (caller 负责组装 dialogue/intentionFunction)
-  const episodeSceneData: EpisodeSceneData[] = scenes.map(s => ({
-    ...s,
-    dialogue: dialogueByScene.get(s.id),
-    intentionFunction: intentionByScene.get(s.id),
-  }))
-
-  // 3. estimator (返回 [60, 240] clamp 后的秒数)
-  return estimateTargetDuration(episodeId, dramaEpisodes, episodeSceneData)
-}
-
-/**
- * Σ 收敛 (Phase 2 C)
- *  当 Σ > target × tolerance, 按比例缩放非钩子镜头
- *  钩子镜 (idx=0, idx=last 且 cliffhanger) 强制 ≥ hookMin 不被缩
- *  返回新的 durations 数组 (新数组, 不修改入参)
- */
-function convergeShotDurations(
-  durations: number[],
-  episodeTargetSeconds: number,
-  isCliffhanger: (idx: number) => boolean,
-): number[] {
-  const total = durations.reduce((a, b) => a + b, 0)
-  const maxAllowed = episodeTargetSeconds * EPISODE_TARGET_TOLERANCE
-  if (total <= maxAllowed) return durations.slice()  // 不超, 不缩
-  const scale = maxAllowed / total
-  return durations.map((d, i) => {
-    const hookMin = getHookMin(i, durations.length, isCliffhanger(i))
-    if (hookMin > 0) return Math.max(d, hookMin)  // 钩子镜不缩
-    // QA ISSUE-002 (msg-20260920-006): 之前用 Math.max(1, ...) 兜底, 缩放后非钩子镜可能跌到 1-3s
-    //   违反 H3 VIDEO_MIN_DURATION=4 硬约束. EP=5 Σ=258s scale≈0.43 大概率触发.
-    //   修复: 兜底用 VIDEO_MIN_DURATION=4, 钩子镜仍保留 hook_min 不被缩
-    return Math.max(VIDEO_MIN_DURATION, Math.round(d * scale))
-  })
-}
 
 // ── Phase 2 helper functions 结束 ──────────────────────────────
 
