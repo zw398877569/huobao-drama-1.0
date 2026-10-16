@@ -802,7 +802,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
        - 默认 emotion=neutral, speed=1.0 (剧情高潮可调 emotion)
     5. 听 audio_base64 评估音色匹配度: 性别/年龄/情绪/整体气质
     6. 决策最佳 voice (评分: 5=完美匹配, 1=完全不合适)
-    7. 调 assign_voice(character_id, voice_id, reason) 写库
+    7. 调 assign_voice(character_id, voice_id, reason, sample_text) 写库
+       - sample_text 传该角色第 1-2 句真实台词 (跟 preview 阶段用的同一段, 这样试听样本就是真实音色)
+       - 后端会用它生成一条永久试听样本存到 static/audio/ 写入 voice_sample_url, 用户可在音色页试听
+       - 省略 sample_text 时后端 fallback 到默认问候语 ('你好,我是<角色名>'), 也能工作但不如真实台词贴切
 
   强制要求:
     ✗ 禁止: 在不调 preview_voice_tts 的情况下直接 assign_voice (凭直觉决策)
@@ -810,6 +813,8 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     ✗ 禁止: < 2 个 voice 候选就决策 (至少 preview 2 个对比)
     ✓ 鼓励: 同一角色 preview 3 个候选, 评分 5/3/2, 选最高分
     ✓ 鼓励: reason 写明 'preview N 个候选, voice X 音色 <具体描述> 最匹配'
+    ✓ 必须: assign_voice 传 sample_text (用 preview 阶段同一段台词), 否则用户试听到的是默认问候语不是角色真实声音
+       (Sprint 11 QA msg-20261016-067 Bug-A: 之前 voice_sample_url 全 null, 用户在音色页无法试听)
 
   性能:
     - 每次 preview ~3-5 秒 (含 TTS API 调用)

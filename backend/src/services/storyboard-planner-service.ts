@@ -40,6 +40,18 @@ import {
 } from './llm-schema-validator.js'
 import { stripReasoningBlocks } from './ai.js'
 
+// Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
+//   修前: drama 13 step1 首次跑 max_tokens 触顶 (completionTokens=32768 = 上限),
+//         finishReason='length' → 靠 sprint 27 的自动 retry (×2 → 65536) 救回来,
+//         但首次那 6-10 分钟白烧 (用户等一轮失败才看到成功)。
+//   修后: 首次就给 1.5x 预算 (32768→49152), 大幅降低首次触顶概率;
+//         retry ×2 兜底保留 (触顶时 → 98304), 极端 case 仍有容错。
+//   为什么选 49152 而不是直接 131072:
+//     - 用户 2026-10-16 拍板"最小调整", 131072 会显著抬高单次成本且多数场景用不到;
+//     - 根因是 reasoning_effort=medium 让 reasoning_tokens 占预算, 属配置问题不是上限问题
+//       (真要治本应调 reasoning_effort, 但那会改变 LLM 输出质量, 不属本次修复范围)。
+const DEFAULT_MAX_TOKENS = 49152
+
 // ─── Planning Data Storage ──────────────────────────────────────────────
 
 export interface PlanningData {
@@ -230,7 +242,8 @@ async function callLLMJson<T>(
         response_format: { type: 'json_object' },
         temperature: 0,
         // QA msg-20261010-033 sprint 27: max_tokens 16384 → 32768 (V3 step 2 输出 ~30KB)
-        max_tokens: opts.maxTokens ?? 32768,
+        // Sprint 11 Bug-D: 32768 → DEFAULT_MAX_TOKENS (49152), 降低首次触顶概率
+        max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
         extra_body: { reasoning: { enabled: false } },
       }
       if (supportsReasoningEffort(config.model)) {
@@ -269,15 +282,15 @@ async function callLLMJson<T>(
                 ...opts.ctx, attempt, model: config.model,
                 finishReason, completionTokens: usage.completion_tokens,
                 promptTokens: usage.prompt_tokens,
-                maxTokens: opts.maxTokens ?? 32768,
+                maxTokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
                 hint: 'max_tokens 触顶, LLM 还在生成 JSON content. 看 llm-debug-resp.log 确认 reasoning_tokens 占用',
               })
               // QA msg-20261010-033 sprint 27 Fix 2: 智能 retry — finish_reason=length 还有 retry 余量时, max_tokens × 2 续写
-              //   默认 max_tokens=32768, retry 1 时 max_tokens=65536 (32K→64K), 极端 case (drama 10+30 shot 复杂 prompt) 容错
+              // Sprint 11 Bug-D: 默认提到 49152, retry 时 → 98304 (48K→96K), 极端 case 容错
               if (attempt < maxRetries) {
-                const newMaxTokens = (opts.maxTokens ?? 32768) * 2
+                const newMaxTokens = (opts.maxTokens ?? DEFAULT_MAX_TOKENS) * 2
                 logTaskWarn('LLMCall', 'json-parse-truncated-retry', {
-                  ...opts.ctx, attempt, oldMaxTokens: opts.maxTokens ?? 32768, newMaxTokens,
+                  ...opts.ctx, attempt, oldMaxTokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS, newMaxTokens,
                   hint: 'finish_reason=length 触发 retry, max_tokens 自动 2x 续写, 避免再次截断',
                 })
                 return await callLLMJson(config, systemPrompt, userPrompt, validator, {
@@ -391,8 +404,18 @@ const ShotPlanItemSchema = z.object({
 })
 
 const Step1Schema = z.object({
-  shot_plan: z.array(ShotPlanItemSchema).min(5).max(30),
-  total_duration: z.number().min(10).max(300),
+  // Sprint 11 QA msg-20261016-067 Bug-C: 上限 30 → 50
+  //   修前: drama 13「雨夜」step1 第一次跑 zod-validation-failed code='too_big' maximum=30
+  //         (LLM 生成 >30 镜), 用户手动重跑第二次 12 秒才成功 — UX 差且白烧一次 LLM。
+  //   修后: 上限放宽到 50, 配合下面 prompt 强化 (明确写 ≤50 + 精简合并指引)。
+  //   下限 5 不变 (少于 5 镜的剧本信息量不足, 仍应拦)。
+  //   注意: VIDEO_MAX_DURATION=15 是 H3 单镜硬上限 (跟本项无关, 那是单镜时长不是镜数)。
+  shot_plan: z.array(ShotPlanItemSchema).min(5).max(50),
+  // Sprint 11 QA msg-20261016-067 Bug-C: 300 → 750
+  //   镜数上限放到 50 后, 50 镜 × VIDEO_MAX_DURATION 15s = 750s 是理论上限。
+  //   修前 total_duration max 300 会先于 shot_plan max 30 撞墙 (30×15=450 > 300),
+  //   导致"镜数没超但总时长超"也被 zod fail, 且错误信息指向 total_duration 让人误判。
+  total_duration: z.number().min(10).max(750),
   scene_distribution: z.record(z.string(), z.number()),
 })
 
@@ -421,6 +444,9 @@ export async function runStep1(opts: {
   - shot_number 1..N 连续递增
   - 同一 scene 的所有镜头相邻排列 (单调性, P3 约束)
   - Σ duration 接近 targetDuration (允许 ±10%)
+  - shot_plan 数组长度 5-50 个镜头 (硬上限 50)。⚠️ 严禁超过 50 个 — 会被 zod 拒绝整轮重跑。
+    剧情复杂/场景多时, 优先【合并同类镜头】(同场景同功能的连续动作合并成一镜) 而不是无脑加镜数。
+    短剧单集 15-30 镜是正常密度, 超过 40 镜通常说明拆分粒度过细。
 输出: 严格 JSON { shot_plan: [{shot_number, scene_id, duration, intent_function, action, character_ids}], total_duration: number, scene_distribution: {scene_id_str: count} }`
 
   const userPrompt = JSON.stringify({

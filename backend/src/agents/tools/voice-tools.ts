@@ -6,8 +6,10 @@ import { z } from 'zod'
 import { db, schema } from '../../db/index'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response'
-import { logTaskProgress, logTaskStart, logTaskSuccess } from '../../utils/task-logger'
+import { logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../../utils/task-logger'
 import { generateTTSPreview } from '../../services/tts-preview.js'
+// Sprint 11 QA msg-20261016-067 Bug-A: assignVoice 时把试听样本落到 static/audio/ 并写 characters.voice_sample_url
+import { generateTTS } from '../../services/tts-generation.js'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {
@@ -78,21 +80,65 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
 
   const assignVoice = createTool({
     id: 'assign_voice',
-    description: 'Assign a voice to a character.',
+    description: 'Assign a voice to a character. Also persists a playable voice sample (voice_sample_url) so the user can preview the voice in the UI.',
     inputSchema: z.object({
       character_id: z.number().describe('Character ID'),
       voice_id: z.string().describe('Voice ID from list_voices'),
       reason: z.string().optional().describe('Why this voice fits'),
+      sample_text: z.string().optional().describe(
+        '台词片段 (建议 5-15 字, 用该角色第 1-2 句真实台词)。会生成一条永久试听样本存到 static/audio/ 供前端播放。省略则用默认问候语。',
+      ),
     }),
-    execute: async ({ character_id, voice_id, reason }) => {
+    execute: async ({ character_id, voice_id, reason, sample_text }) => {
       const provider = getEpisodeAudioProvider() || 'minimax'
       logTaskProgress('VoiceTool', 'assign-begin', { episodeId, dramaId, characterId: character_id, voiceId: voice_id, provider, reason })
+
+      // Sprint 11 QA msg-20261016-067 Bug-A: 生成并持久化试听样本
+      //   修前: .set({ voiceSampleUrl: null }) → 3 角色 voice_sample_url 全 null,
+      //         前端 '生成试听' 按钮无可播放 sample (voiceSampleCount=0)。
+      //   修后: 用 agent 指定的台词 (或默认问候语) 生成一条 3-5s 样本写到 static/audio/<uuid>.mp3,
+      //         写入 characters.voice_sample_url。
+      //   为什么不用 tts-preview/: preview 样本在 data/tts-preview/ 且 24h lazy cleanup
+      //         会删掉 (services/tts-preview.ts PREVIEW_MAX_AGE_MS), 正式样本不能放那。
+      const [charRow] = db.select().from(schema.characters)
+        .where(eq(schema.characters.id, character_id)).all()
+      const charName = charRow?.name || `角色${character_id}`
+      const sampleText = (sample_text || '').trim() || `你好，我是${charName}。很高兴认识你，这是我的声音试听。`
+
+      let voiceSampleUrl: string | null = null
+      let sampleError: string | null = null
+      try {
+        const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+        voiceSampleUrl = await generateTTS({
+          text: sampleText,
+          voice: voice_id,
+          configId: ep?.audioConfigId ?? undefined,
+        })
+      } catch (err: any) {
+        // 样本生成失败不阻断音色分配 (音色已定, 只是前端试听不了)
+        sampleError = err?.message || String(err)
+        logTaskWarn('VoiceTool', 'assign-sample-failed', {
+          episodeId, characterId: character_id, voiceId: voice_id, error: sampleError,
+        })
+      }
+
       db.update(schema.characters)
-        .set({ voiceStyle: voice_id, voiceProvider: provider, voiceSampleUrl: null, updatedAt: now() })
+        .set({ voiceStyle: voice_id, voiceProvider: provider, voiceSampleUrl, updatedAt: now() })
         .where(eq(schema.characters.id, character_id))
         .run()
-      logTaskSuccess('VoiceTool', 'assign-complete', { episodeId, characterId: character_id, voiceId: voice_id, provider })
-      return { message: `Assigned voice "${voice_id}" to character ${character_id}`, reason }
+      logTaskSuccess('VoiceTool', 'assign-complete', {
+        episodeId, characterId: character_id, voiceId: voice_id, provider,
+        voiceSampleUrl, sampleError,
+      })
+      return {
+        message: `Assigned voice "${voice_id}" to character ${character_id}`,
+        reason,
+        voice_sample_url: voiceSampleUrl,
+        sample_error: sampleError,
+        instruction: voiceSampleUrl
+          ? '样本已持久化, 用户可在音色页试听该角色的声音。'
+          : '样本生成失败, 用户暂时无法试听 (音色已分配, 不影响后续配音生成)。',
+      }
     },
   })
 
