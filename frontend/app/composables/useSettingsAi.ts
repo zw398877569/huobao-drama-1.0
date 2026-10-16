@@ -62,6 +62,10 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     { type: 'image', label: '图片' },
     { type: 'video', label: '视频' },
     { type: 'audio', label: '音频' },
+    // Sprint 11 (QA msg-20261016-067): sanitizer 后端 2026-09-25 PM msg-20260924-006 (Q5 task_B)
+    //   就已支持 (backend ServiceType 类型含 'sanitizer', aiServiceConfigs.service_type 是纯 TEXT 无枚举约束),
+    //   但前端 UI 一直没加这个选项 → 只能从 DB 手动插数据。这里补齐 UI 入口。
+    { type: 'sanitizer', label: '提示词无害化' },
   ]
 
   const providers = [
@@ -75,6 +79,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     image: { label: '图片', desc: '角色图、场景图、镜头图与首尾帧等静态图像生成' },
     video: { label: '视频', desc: '镜头视频生成，支持单图、多图和首尾帧模式' },
     audio: { label: '音频', desc: '角色试听、旁白与对白语音生成' },
+    sanitizer: { label: '提示词无害化', desc: '生图 prompt 去敏改写 + 中译英（绕过三方生图 API 内容审核）' },
   }
 
   const providerPresets: Record<string, Record<string, any>> = {
@@ -119,6 +124,13 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     audio: {
       minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
       'autodl-comfyui': { label: 'AutoDL TTS 推荐', baseUrl: 'https://autodl.art/api/v1', models: ['indextts2-v1'] },
+    },
+    // Sprint 11: sanitizer 专用预设 — 后端优先取 sanitizer 类型配置, 没配才回退 text。
+    //   deepseek-chat 不输出 thinking block (省 token, 改写结果干净), MiniMax-M3 走 openai 兼容协议。
+    sanitizer: {
+      deepseek: { label: 'DeepSeek 推荐', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat'] },
+      openai: { label: 'MiniMax M3 推荐', baseUrl: 'https://api.minimaxi.com', models: ['MiniMax-M3'] },
+      chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['gemini-3-pro-preview'] },
     },
   }
 
