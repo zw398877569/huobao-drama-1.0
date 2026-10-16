@@ -23,6 +23,8 @@ import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskSuccess, logTaskWarn, logTaskError } from '../utils/task-logger.js'
 import { generateVideo } from './video-generation.js'
+// Sprint 045 QA msg-20261016-068 Bug-A: 显式 dramaId: undefined 导致 video_generations.dramaId 全 null
+import { lookupDramaIdByEpisode } from '../utils/drama-lookup.js'
 import { getConfigById } from './ai.js'
 
 // Sprint 10 v2 Task E (PM msg-20261014-002): 多 plan 防并发 — singleton Semaphore(1)
@@ -406,9 +408,22 @@ async function triggerPlanImpl(planId: number): Promise<void> {
     })
 
     try {
+      // Sprint 045 QA msg-20261016-068 Bug-A: 修前显式传 undefined (注释说"storyboard 已带 episodeId",
+      //   但 generateVideo 是直接把 params.dramaId 写进 DB, 不会自己反查) → cron 调度生成的
+      //   video_generations.dramaId 全 null (历史 67/80 条 null 的根因)。
+      //   修后: sb.episodeId → episodes.dramaId 两跳反查。查不到时传 undefined (跟修前语义一致,
+      //   不静默塞假值, 也不 throw 打断整批生成)。
+      const shotDramaId = lookupDramaIdByEpisode(sb.episodeId) ?? undefined
+      if (shotDramaId == null) {
+        logTaskWarn('BatchVideoScheduler', 'drama-id-lookup-failed', {
+          planId, shotId, episodeId: sb.episodeId,
+          hint: 'storyboard 的 episode 查不到 drama, video_generations.dramaId 将为 null',
+        })
+      }
+
       const videoGenerationId = await generateVideo({
         storyboardId: sb.id,
-        dramaId: undefined, // storyboard 已带 episodeId
+        dramaId: shotDramaId,
         source: 'storyboard',
         prompt,
         model: modelOverride,

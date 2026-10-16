@@ -98,6 +98,23 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
 
   const isFree = (params.source || 'storyboard') === 'free'
 
+  // Sprint 045 QA msg-20261016-068 Bug-C: 应用层 dramaId 缺失告警
+  //   修前: db/schema.ts:312 dramaId: integer('drama_id') 无 notNull 约束, 写 null 完全静默,
+  //         158 条历史里 80 条 (50.6%) null 长期没人发现 (drama 归属追溯不到)。
+  //   修后: 【不加 notNull 约束】—— 自由创作 (source='free') 天然没有 dramaId
+  //         (FreeCreationPanel.vue 不传 storyboard_id / drama_id, 脱离剧集独立创作),
+  //         加约束会让每次自由创作 INSERT 失败, 整个 tab 报错。
+  //         改在应用层: 正式分镜流缺 dramaId 时记 warn (flow-log 可查), 不 throw 打断生成。
+  //   未来若 free creation 也纳入剧集体系, 再考虑加约束 (届时 free 需补 drama 归属)。
+  if (!isFree && params.dramaId == null) {
+    logTaskWarn('VideoAPI', 'drama-id-missing', {
+      storyboardId: params.storyboardId,
+      source: params.source || 'storyboard',
+      hint: '正式分镜流缺 dramaId, video_generations.drama_id 将写 null 影响剧集追溯; ' +
+            '调用方应传 drama_id 或确保 storyboard 链路可反查到 episode',
+    })
+  }
+
   const res = db.insert(schema.videoGenerations).values({
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,

@@ -484,6 +484,43 @@ ensureColumn('storyboards', 'image_prompt_permanent', 'TEXT')
 //   启动 ensureColumn 自动加列, 无需手动 docker exec.
 ensureColumn('batch_video_schedules', 'per_shot_status', 'TEXT')
 
+// 2026-10-16 Sprint 045 QA msg-20261016-068: video_generations.drama_id 历史 null 行回填
+//   背景: 158 条 video_generations 里 80 条 (50.6%) drama_id=null, 无法追溯所属剧集。
+//     根因是调用方传 undefined (batch-video-scheduler.ts 显式 undefined + routes/videos.ts
+//     只用 body.drama_id), 已在新代码里用 utils/drama-lookup.ts 修掉 (只影响新数据)。
+//   这里做一次性回填: storyboard_id → storyboards.episode_id → episodes.drama_id 两跳。
+//   ⚠️ 自由创作 (source='free') 的记录 storyboard_id 也是 null, 无法反填 —— 这是正确的,
+//      自由创作脱离剧集本来就没有 drama 归属 (QA 实测 3 条, 保持 null 不强行造数据)。
+//   ⚠️ 不加 NOT NULL 约束: 自由创作天然无 drama_id, 加约束会打死该功能 (见 Bug-C 修正版)。
+//   ⚠️ 用 SQL 注释 (--), SQLite 不认 JS 风格 // (sprint 10 task B 翻车教训)。
+try {
+  const backfillResult = sqlite.prepare(`
+    UPDATE video_generations
+       SET drama_id = (
+             SELECT e.drama_id
+               FROM storyboards s
+               JOIN episodes e ON e.id = s.episode_id
+              WHERE s.id = video_generations.storyboard_id
+           )
+     WHERE drama_id IS NULL
+       AND storyboard_id IS NOT NULL
+       AND source != 'free'
+       AND EXISTS (
+             SELECT 1
+               FROM storyboards s
+               JOIN episodes e ON e.id = s.episode_id
+              WHERE s.id = video_generations.storyboard_id
+                AND e.drama_id IS NOT NULL
+           )
+  `).run()
+  if (backfillResult.changes > 0) {
+    console.log(`[DB] video_generations.drama_id backfilled: ${backfillResult.changes} rows`)
+  }
+} catch (err: any) {
+  // 回填失败不阻断启动 (表结构可能还没建 / 数据异常), 只记 warn
+  console.warn(`[DB] video_generations.drama_id backfill skipped: ${err?.message || err}`)
+}
+
 // 2026-09-28 增量: cron_runs 加 outputs 字段 (wrapper 从脚本 log 提 ✓ 路径)
 // 后端启动时 ALTER TABLE 自动加, 已有数据 outputs=NULL
 ensureColumn('cron_runs', 'outputs', 'TEXT')

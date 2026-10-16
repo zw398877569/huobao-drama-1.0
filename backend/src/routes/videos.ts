@@ -4,7 +4,9 @@ import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
-import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+// Sprint 045 QA msg-20261016-068 Bug-B: body.drama_id 缺失时按 storyboard 链路反查
+import { lookupDramaIdByStoryboard } from '../utils/drama-lookup.js'
+import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 /**
  * 规范化 scheduled_at 输入: 无 Z/时区后缀的 ISO 字符串当 Asia/Shanghai 本地时间, 转 UTC ISO 存 DB
@@ -54,9 +56,26 @@ app.post('/', async (c) => {
     // 避免误用正式分镜的配置; 同时 storyboardId/dramaId 保持 null 即可
     const source: 'storyboard' | 'free' = body.source === 'free' ? 'free' : 'storyboard'
     const traceId = (c as any).get('traceId') as string | undefined
+
+    // Sprint 045 QA msg-20261016-068 Bug-B: 修前只用 body.drama_id, 前端手动重跑 / 部分入口
+    //   没传该字段 → video_generations.dramaId 为 null (历史 10/80 条 null 的根因)。
+    //   修后: body.drama_id 缺失时按 storyboardId → episode → drama 反查 (跟 Bug-A 同一 helper)。
+    //   ⚠️ free 场景 storyboardId 恒 null, 反查必然返回 null —— 这是正确的:
+    //      自由创作脱离剧集, 本来就没有 drama 归属 (不能加 notNull 约束, 会打死这个功能)。
+    const effectiveStoryboardId = source === 'free' ? null : body.storyboard_id
+    const resolvedDramaId = body.drama_id
+      ?? lookupDramaIdByStoryboard(effectiveStoryboardId)
+      ?? undefined
+    if (source === 'storyboard' && resolvedDramaId == null) {
+      logTaskWarn('VideoAPI', 'drama-id-lookup-failed', {
+        storyboardId: body.storyboard_id,
+        hint: 'body.drama_id 缺失且 storyboard 链路反查不到 drama, video_generations.dramaId 将为 null',
+      })
+    }
+
     const id = await generateVideo({
-      storyboardId: source === 'free' ? null : body.storyboard_id,
-      dramaId: body.drama_id,
+      storyboardId: effectiveStoryboardId,
+      dramaId: resolvedDramaId,
       source,
       prompt: body.prompt,
       model: body.model || explicitModel,
