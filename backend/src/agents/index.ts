@@ -206,24 +206,29 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     - 主角 / 男主 / 女主 / 反派 / 配角 / 路人 / 旁白
     - 选择标准:本剧戏份权重(对白+动作占比),不是绝对出场次数
 
-  维3【永久外貌】(V3 治本扩面, msg-20261010-006 ISSUE-023): 必须输出 JSON, permanent_traits 强制 5 维 enum 结构化对象
+  维3【永久外貌】(V3 治本扩面, msg-20261010-006 ISSUE-023; Sprint 12 msg-20261017-072 加 gender): 必须输出 JSON, permanent_traits 强制 6 维 enum 结构化对象
     数据归属: character 只存 PERMANENT (永久特性), 瞬时剧情态 PLOT_STATE 严格禁止写入 character 表。
     permanent_traits: array of {category, value} 强约束, 2-10 项
-      5 维 enum: age / face / hair / body / outfit (跨剧情通用, 不接受 clothing/accessory/eyebrows 等扩展维度)
-      格式: [{"category": "age|face|hair|body|outfit", "value": "<具体描述 ≤ 50 字>"}, ...]
+      6 维 enum: gender / age / face / hair / body / outfit (跨剧情通用, 不接受 clothing/accessory/eyebrows 等扩展维度)
+      格式: [{"category": "gender|age|face|hair|body|outfit", "value": "<具体描述 ≤ 50 字>"}, ...]
       例: [
+        {"category": "gender", "value": "男性"},
         {"category": "age", "value": "25岁左右"},
         {"category": "face", "value": "鹅蛋脸"},
         {"category": "hair", "value": "黑色长发披肩"},
         {"category": "body", "value": "身形纤细"},
         {"category": "outfit", "value": "白衬衫+牛仔裤"}
       ]
+      ⚠️ gender 维度【必填】, 且 value 只写性别本身 (男性 / 女性 / 中性), 严禁写 "28岁男性" 这类混了年龄的写法 (年龄归 age 维度, 重复写会被拼接两次)
+      ⚠️ gender 是【合法维度】(Sprint 12 新增), 不是下面的"扩展维度" — 剧本里写了性别就必须落到这一维, 不准省
       不要写"漂亮""帅气"等抽象词,用具体特征代替
     permanent_outfit (string[]): 永久服装/装饰, 1-10 项, 每项 ≤ 50 字
       格式: ["<服装:版型/颜色/材质>", "<配饰>", ...]
       例: ["白衬衫+牛仔裤", "深蓝色帆布包", "银色耳钉"]
-    严禁 (PERMANENT 列约束, V3 5 维 enum + salvage 兜底):
-      - permanent_traits[i].category 写 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 (zod reject → salvage 移到 description + log)
+    严禁 (PERMANENT 列约束, V3 6 维 enum + salvage 兜底):
+      - ⚠️ gender 不在严禁清单里, 它是合法维度且必填 (Sprint 12 新增)。看到"不接受扩展维度"不要把 gender 也当非法维度省掉
+      - permanent_traits[i].category 写 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 (gender 不算扩展维度; 真扩展维度 zod reject → salvage 移到 description + log)
+      - permanent_traits[i].category == 'gender' 时 value 混了年龄/外貌 (如 "28岁男性") — 只写 "男性"/"女性"/"中性"
       - permanent_traits[i].value 含 "反过来 / 反转 / 后期突变 / 狂笑 / 诡异笑意 / 按下按钮 / 奄奄一息 / 虚弱 / 死亡 / 血契 / 灵宠 / 魔法灯" 等
         任何带 "剧情态瞬间" 含义的词 (具体剧情只属于 storyboards.image_prompt_plot_state)
       - 抽象词 (漂亮/帅气/邪恶/温暖/恐怖/阴森 等无拍摄参考价值的描述)
@@ -233,7 +238,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
       错误示例 (V2 治本失败, LLM 塞 plot_state 进 permanent_traits):
         permanent_traits: ["35岁东亚男性", "国字脸", "对豆豆感情深, 愿意用寿命换狗的命", "后期表情诡异狂笑按按钮"]
         → 整段作为 character trait value 写进, 物理上不可能, zod reject → salvagePermanentTraits 兜底 → description 字段 + log
-      正确示例 (V3 5 维 enum 强约束):
+      正确示例 (V3 6 维 enum 强约束):
         permanent_traits: [
           {"category": "age", "value": "35岁左右"},
           {"category": "face", "value": "国字脸带柔和下颌线"},

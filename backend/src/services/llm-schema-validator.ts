@@ -5,13 +5,13 @@
  *   string 可含任何内容, LLM 仍塞 plot 描述进去 (drama 9 主人 '深爱豆豆胜过自己'),
  *   zod 不报错, 软约束 (JSDoc) LLM 忽略。
  * V3 治本: 让 LLM 输出 array of {category: enum, value: string} 结构化对象,
- *   5 维 enum 强约束 (age/face/hair/body/outfit), LLM 想写 plot 描述
+ *   6 维 enum 强约束 (gender/age/face/hair/body/outfit), LLM 想写 plot 描述
  *   会因没匹配 category 被 zod reject。
  *
  * 公共逻辑:
  *   - V3ShotDetailsItemSchema: shot_plan[i] 的 V3 严格 schema, 用于 tool inputSchema + 后置 salvage
  *   - salvageShotDetailsItem: tool call 成功后, 二次扫描解析出来的对象,
- *     仍不达标的字段 (LLM 偶尔塞进 character_traits 但不属于 5 维 enum) → 移到 plot_state 字段 + logTaskWarn
+ *     仍不达标的字段 (LLM 偶尔塞进 character_traits 但不属于 6 维 enum) → 移到 plot_state 字段 + logTaskWarn
  *   - structureToText: V3 结构化对象 → 拼接成 imagePrompt 文本段 (跟 V2 拼接公式兼容)
  *
  * 跨 sprint 复用: V4 拆 3 步 endpoint 也用这套 schema + salvage。
@@ -22,12 +22,18 @@ import { logTaskWarn } from '../utils/task-logger.js'
 // ─── V3 enum 强约束定义 ────────────────────────────────────────
 
 /**
- * permanent_traits 强制 5 维 enum (PM msg-20261010-002 D1 拍板)。
+ * permanent_traits 强制 6 维 enum (PM msg-20261010-002 D1 拍板)。
  * 跨剧情通用 — 永久外貌任何剧情适用 (年龄/脸型/发型/体态/服装基准)。
  * 不接受 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 — 防止 enum 无限扩大,
+ * ⚠️ 但 'gender' 是【合法维度】(Sprint 12 加的第 6 维), 不是扩展维度。
  * 扩展维度时 fallback 到 plot_state, 由用户手动 review。
  */
-export const PERMANENT_TRAITS_CATEGORIES = ['age', 'face', 'hair', 'body', 'outfit'] as const
+// 2026-10-17 Sprint 12 (PM msg-20261017-072): 加 gender 成 6 维。
+//   根因: 5 维 enum 无 gender 槽位, 剧本里的「林达 男」结构性无处可存 →
+//   下游立绘 prompt 无性别词 → sanitizer 让 LLM 自由发挥 → 改写成 'Linda East Asian woman'。
+//   gender 放首位: 性别是最强视觉信号, 排在前面 prompt 里权重更高。
+//   不加独立 gender 列 (PM D1 拍板): 所有下游只读 appearancePermanent 一个拼接字段, enum 加一维即连锁生效。
+export const PERMANENT_TRAITS_CATEGORIES = ['gender', 'age', 'face', 'hair', 'body', 'outfit'] as const
 export type PermanentTraitsCategory = typeof PERMANENT_TRAITS_CATEGORIES[number]
 
 export const SHOT_TYPE_REFS = ['全景', '中景', '近景', '特写'] as const
@@ -37,7 +43,7 @@ export type ShotTypeRef = typeof SHOT_TYPE_REFS[number]
 
 /**
  * image_prompt_permanent 单条 schema。
- * character_traits 2-10 项, 每项 category 必须在 5 维 enum 内。
+ * character_traits 2-10 项, 每项 category 必须在 6 维 enum 内。
  * scene_aesthetic 0-5 项 (场景氛围数组, 不限 enum)。
  * shot_type_ref 必须是 SHOT_TYPE_REFS 之一。
  * angle / movement 自由 string (机位/运镜)。
@@ -49,10 +55,10 @@ export const V3ImagePromptPermanentSchema = z.object({
   // value 同步放宽到 500 + min/max 放宽到 2..20 的原因: 非法 category 的条目本来就要被移到 plotState
   //   (内容完整保留在 plotState 里), 如果 value 卡死 50 字 + zod reject 整个 response, 那些内容就彻底丢了。
   // 放宽后交给 salvage 分流 — 合法的截到 50, 非法的完整进 plotState。
-  // 放宽后 V3 5 维 enum 强约束的'物理保证'被削弱 — 变成 salvage 软约束
+  // 放宽后 V3 6 维 enum 强约束的'物理保证'被削弱 — 变成 salvage 软约束
   // (LLM 输 clothing 也能过, 只是会被挪到 plotState)。严格性由 salvage + flow log warn 保证可观测, 而不是 zod reject
   character_traits: z.array(z.object({
-    category: z.string(),          // salvage 会校验并 fallback, 不在 5 维 enum 的移到 plotState
+    category: z.string(),          // salvage 会校验并 fallback, 不在 6 维 enum 的移到 plotState
     value: z.string().max(500),    // 同时放宽: 非法 category 的描述可能较长, 截断到 500 再由 salvage 截到 50
   })).min(1).max(20),             // 2026-10-13 sprint 44 FIX-057 (QA msg-20261013-057 P1): min(2)→min(1), 跟 C 方案 salvage 补 placeholder + prompt 强化三层保险; salvage 函数 L160 仍会从 scene_aesthetic 借条补到 ≥ 2 (LLM 偶尔输出 1 项能过 zod, 视觉效果更完整)
   scene_aesthetic: z.array(z.string()).min(0).max(5),
@@ -212,7 +218,7 @@ export function salvageImagePromptPermanent(
       shotNumber: ctx.shotNumber,
       fallbackContent: fallbackParts.join(' | ').slice(0, 500),
       severity: 'config_drift',
-      hint: 'V3 enum 5 维外的内容自动移到 plot_state, 用户后续可在 UI 调整 (Sprint 9 V4 wizard 提供 review 入口)',
+      hint: 'V3 enum 6 维外的内容自动移到 plot_state, 用户后续可在 UI 调整 (Sprint 9 V4 wizard 提供 review 入口)',
     })
   }
 
@@ -243,11 +249,11 @@ export function permanentToText(
   return parts.join('。')
 }
 
-// ─── Character 5 维 enum (ISSUE-023) ─────────────────────────────────────
+// ─── Character 6 维 enum (ISSUE-023 + Sprint 12 gender) ──────────────────────
 
 /**
- * Permanent trait 单条 schema — 5 维 enum 强约束
- * 跨剧情通用: age / face / hair / body / outfit
+ * Permanent trait 单条 schema — 6 维 enum 强约束
+ * 跨剧情通用: gender / age / face / hair / body / outfit
  */
 export const V3PermanentTraitItemSchema = z.object({
   category: z.enum(PERMANENT_TRAITS_CATEGORIES),
@@ -255,7 +261,7 @@ export const V3PermanentTraitItemSchema = z.object({
 })
 
 /**
- * permanent_traits 完整 schema — 2-10 项 5 维 enum 结构化数组
+ * permanent_traits 完整 schema — 2-10 项 6 维 enum 结构化数组
  * 跟 V3ImagePromptPermanentSchema.character_traits 同源, V3 character 治本扩面 (ISSUE-023) 复用
  */
 export const V3PermanentTraitsSchema = z.array(V3PermanentTraitItemSchema).min(2).max(10)
@@ -269,7 +275,7 @@ export const V3PermanentOutfitSchema = z.array(z.string().max(50)).max(10)
 /**
  * permanent_traits salvage — 跟 salvageImagePromptPermanent 同源
  *
- * 当 LLM 输出 category 不在 5 维 enum (例如 'clothing/accessory/eyebrows') 或 value 含 plot_state 关键词
+ * 当 LLM 输出 category 不在 6 维 enum (例如 'clothing/accessory/eyebrows') 或 value 含 plot_state 关键词
  * (反转/狂笑/按按钮/后期/虚弱 等) 时, 整条移到 description 字段 + logTaskWarn.
  *
  * 返回 { permanent_traits: 清洗后 enum 数组, fallbackDescription: 拼接后的 description 追加内容 }
@@ -314,7 +320,7 @@ export function salvagePermanentTraits(
       characterName: ctx.characterName,
       fallbackContent: fallbackParts.join(' | ').slice(0, 500),
       severity: 'config_drift',
-      hint: 'V3 character 5 维 enum 外的 category 或 value 自动移到 description 字段, 用户后续可在 UI 调整',
+      hint: 'V3 character 6 维 enum 外的 category 或 value 自动移到 description 字段, 用户后续可在 UI 调整',
     })
   }
 
