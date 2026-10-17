@@ -37,11 +37,15 @@ import { stripReasoningBlocks, hasNonEnglishChars } from '../services/ai.js'
 //         C inputLen 太大: 1995 字符远未达限制;
 //         D 网速慢: 401 对照组只要 1.9s;
 //         E 模型不兼容: 请求能发出说明协议兼容, 只是响应慢于 8s。
-//   30s 的取值: M3 系列是推理模型 (reasoning_tokens 占输出预算), 用户实测平均 8-16s+。
-//     用户 2026-10-17 拍板"视频质量第一, 生成速度不是优化目标" ——
-//     宁可多等 20s 走 LLM 中文改写, 也不要 8s 超时后 fallback 到英文本地 prompt 降级。
-//     最坏情况 (2 次都超时): 30s + 10s delay + 30s = 70s, 但只在 LLM 完全不可用时发生。
-const LLM_TIMEOUT_MS = 30_000
+//   取值: 用户 2026-10-17 拍板"改大点无所谓, 宁可等满也不要提前 fallback 降级"。
+//     sanitizer 失败 → fallback-to-local 用英文本地 prompt, 会让 step 5/6/7/9/10 全部视觉降级,
+//     这个代价远大于多等一会儿, 所以 timeout 给得宽松。
+//   最坏总耗时: 180s (attempt1) + ~10s (retry delay 5-10s 随机) + 180s (attempt2) = 370s ≈ 6.2min。
+//     这个上限只在 LLM 彻底不可用时才会走到 (正常 M3 实测 8-16s, attempt1 就成功);
+//     走到最坏情况时也等价于"等了 6 分钟才 fallback", 但用户宁可等也不要视觉降级。
+//   无副作用: sanitizeImagePrompt 是 async 且不持有任何锁/连接, 每个调用独立,
+//     并发多路 (批量生成角色图) 互不影响, 只是各自最多等 180s。
+const LLM_TIMEOUT_MS = 180_000
 
 // 本地兜底:命中规则 → 中性视觉表达
 const FALLBACK_REPLACEMENTS = [
