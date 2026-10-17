@@ -19,7 +19,29 @@ import { logTaskError, logTaskProgress, logTaskWarn } from './task-logger.js'
 import { DEFAULT_IMAGE_SAFETY_SUFFIX } from '../services/image-generation.js'
 import { stripReasoningBlocks, hasNonEnglishChars } from '../services/ai.js'
 
-const LLM_TIMEOUT_MS = 8_000
+// 2026-10-17 Sprint 045 QA msg-20261017-069: 8s → 30s
+//   修前: LLM_TIMEOUT_MS = 8_000, MiniMax 官方 API (id=18, M3 / M3.1-Flash-Preview)
+//         每次都精确 8.0s 超时 → llm-rewrite-throw ×2 → fallback-to-local,
+//         中文 prompt 改写失效, step 5/6/7/9/10 全部降级用英文本地 prompt (视觉一致性受损)。
+//   证据 (flow-log 2026-10-17 trace e602cf37):
+//         05:08:37.214 llm-rewrite-start (inputLen 1995)
+//         05:08:45.255 llm-rewrite-throw attempt=1  ← 8.041s, 正好是旧 timeout
+//         05:08:45.285 llm-rewrite-retry (delay 8590ms)
+//         05:09:01.904 llm-rewrite-throw attempt=2  ← 又 8s
+//         05:09:01.926 sanitizer-llm-failed-twice → fallback-to-local
+//   对照组: 同日 id=17 (chatfire) 401 只花 1.9s (05:03:12.157 → 05:03:14.104)
+//         → 网络和端点都通, 纯粹是 8s 砍掉了推理模型的思考时间。
+//   排查过但排除的其他候选 (QA 工单列的 A/C/D/E):
+//         A endpoint 路径: getTextChatCompletionsUrl 拼 api.minimaxi.com/v1/chat/completions,
+//           OpenAI 兼容路径正确, 请求正常发出 (不是 4xx);
+//         C inputLen 太大: 1995 字符远未达限制;
+//         D 网速慢: 401 对照组只要 1.9s;
+//         E 模型不兼容: 请求能发出说明协议兼容, 只是响应慢于 8s。
+//   30s 的取值: M3 系列是推理模型 (reasoning_tokens 占输出预算), 用户实测平均 8-16s+。
+//     用户 2026-10-17 拍板"视频质量第一, 生成速度不是优化目标" ——
+//     宁可多等 20s 走 LLM 中文改写, 也不要 8s 超时后 fallback 到英文本地 prompt 降级。
+//     最坏情况 (2 次都超时): 30s + 10s delay + 30s = 70s, 但只在 LLM 完全不可用时发生。
+const LLM_TIMEOUT_MS = 30_000
 
 // 本地兜底:命中规则 → 中性视觉表达
 const FALLBACK_REPLACEMENTS = [
@@ -404,6 +426,9 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
       error: e?.message || String(err),
       errName: e?.name,
       isTimeout,
+      // 2026-10-17 Sprint 045: 把 timeout 设定值和 inputLen 带进日志, 下次排查不用再猜是"模型慢"还是"配置小"
+      timeoutMs: LLM_TIMEOUT_MS,
+      inputLen: rawPrompt.length,
     })
     return { outcome: isTimeout ? 'retryable-empty' : 'hard-fail' }
   }
