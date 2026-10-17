@@ -34,31 +34,6 @@ export function useImageGeneration(deps: Deps) {
   const pendingPropImageIds = ref<number[]>([])
   const pendingShotFrameKeys = ref<string[]>([])
 
-  // ============================================================================
-  // 临时诊断 — Sprint 045 QA msg-20261017-070 Bug-2 (点了"重新生成"按钮没置灰)
-  //
-  // 现象: 用户点"重新生成"后按钮没有置灰 / 没显示"生成中"。
-  // 已排除的推测 (dev 核实后):
-  //   - 不是 Vue 响应式问题: ref<number[]>([]) + push() 是深层响应式, isPendingCharImage
-  //     读 .value.includes() 会被 tracked;
-  //   - 不是 generateImage 立即 throw: 那会弹 toast.error, 用户会看到报错;
-  //   - 不是 genId 为 null 走 watchAsyncResult 分支的锅 (那条路 pending 会一直保留到图出现)。
-  // 真正待查: pending 置位到清除之间到底隔了多久 —— 如果后端同步完成 (图已存在),
-  // pollImageGeneration 第一次 sleep(8000) 后就返回 completed, 用户观感是"点了没反应"。
-  //
-  // 打开方式: 浏览器 DevTools Console 会打 [imggen-diag] 开头的日志。
-  // 看什么: 每个 id 的 'pending-set' → 'poll-enter' → 'poll-done' 三条时间戳差值。
-  //   若 'pending-set' 到 'poll-done' < 500ms → 置灰窗口太短, 肉眼看不清 (方案 2 修法);
-  //   若 'pending-set' 出现但 'poll-done' 迟迟不来 → poll 链路有问题 (另查);
-  //   若 'pending-set' 完全没出现 → 点击事件没触发 / 走了别的分支。
-  //
-  // ⚠️ 排查完请删除本段 + 下面所有 [imggen-diag] 日志 (AGENTS.md 纪律: 临时 debug 用完必删)。
-  // ============================================================================
-  const IMG_GEN_DIAG = true
-  function imgDiag(stage: string, charId: number, extra?: Record<string, unknown>) {
-    if (!IMG_GEN_DIAG) return
-    console.log(`[imggen-diag] ${new Date().toISOString().slice(11, 23)} ${stage}`, { charId, ...extra })
-  }
 
   function framePendingKey(id: number, frameType: string) {
     return `${id}:${frameType}`
@@ -215,31 +190,25 @@ export function useImageGeneration(deps: Deps) {
   // 批量场景: 每个 tick 一次 Promise.all(genIds) 而不是 N 次串行,所有角色
   // 共用 30 次 tick 周期,而不是 N×30 次。
   async function pollImageGeneration(genId: number, charId: number) {
-    const pollStart = Date.now()
     for (let i = 0; i < 30; i++) {
       await sleep(8000)
       try {
         const res = await imageAPI.get(genId)
         // 状态字段: 后端 DB 写 'completed',某些 adapter 早期写过 'succeeded'
-        imgDiag('poll-tick', charId, { tick: i, genId, status: res?.status, pollElapsedMs: Date.now() - pollStart })
         if (res?.status === 'completed' || res?.status === 'succeeded') {
           await refresh()
-          imgDiag('poll-cleared-completed', charId, { genId, tick: i, pollElapsedMs: Date.now() - pollStart })
           pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
           return
         }
         if (res?.status === 'failed') {
-          imgDiag('poll-cleared-failed', charId, { genId, tick: i, pollElapsedMs: Date.now() - pollStart })
           pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
           toast.error(res?.error_msg || res?.errorMsg || '图片生成失败')
           return
         }
       } catch (e: any) {
-        imgDiag('poll-tick-threw', charId, { tick: i, error: e?.message })
       }
     }
     // 超时
-    imgDiag('poll-timeout', charId, { genId, pollElapsedMs: Date.now() - pollStart })
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
     toast.error('图片生成超时')
   }
@@ -282,21 +251,16 @@ export function useImageGeneration(deps: Deps) {
 
   async function genCharImg(id: number) {
     let genId: number | null = null
-    const t0 = Date.now()
     try {
       if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
-      imgDiag('pending-set', id, { wasAlreadyPending: isPendingCharImage(id) })
       const resp = await characterAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value) as any
       genId = resp?.image_generation_id || null
-      imgDiag('api-returned', id, { genId, elapsedMs: Date.now() - t0 })
       toast.success('角色图片生成中')
       await refresh()
-      imgDiag('refresh-done', id, { elapsedMs: Date.now() - t0 })
       // 早期实现: watchAsyncResult 内每 2s 调 imageAPI.get(genId) — 60 次多余请求
       // 新实现: 显式 for + sleep(8s) + 单次 imageAPI.get — 最多 30 次
       if (genId) {
         await pollImageGeneration(genId, id)
-        imgDiag('poll-done', id, { totalElapsedMs: Date.now() - t0 })
       } else {
         // 拿不到 genId(极端情况) — 退回 watchAsyncResult 模式
         await watchAsyncResult(() => {
@@ -310,7 +274,6 @@ export function useImageGeneration(deps: Deps) {
         })
       }
     } catch (e: any) {
-      imgDiag('error-catch', id, { error: e?.message, totalElapsedMs: Date.now() - t0 })
       pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       toast.error(e.message)
     }
