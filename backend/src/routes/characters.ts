@@ -6,6 +6,8 @@ import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
+// Sprint 12 Task B (PM msg-20261017-072): 立绘 prompt 后置保险 — gender 被 LLM 改写丢失时 append 英文兜底词
+import { extractGenderTrait, ensureGenderInPrompt } from '../utils/gender-guard.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
 import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
@@ -137,7 +139,14 @@ app.post('/:id/generate-image', async (c) => {
     'consistent character design across all views, clean light gradient background',
     'high quality, detailed illustration, professional character art',
   ].filter(Boolean).join(', ')
-  const prompt = await sanitizeImagePrompt(rawPrompt)
+  const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt)
+  // Sprint 12 Task B: 后置保险 — sanitizeImagePrompt 是 LLM 改写环节, 可能把 gender 丢掉
+  //   (实际事故: drama 14 林达剧本明确"男" 被改写成 'Linda East Asian woman')。
+  //   纯正则校验, 不调 LLM 不增加耗时; 老数据无 gender trait (PM D2 锁定不回填) → 自动跳过。
+  const prompt = ensureGenderInPrompt(sanitizedPrompt, extractGenderTrait(char.permanentTraits), {
+    characterId: id,
+    dramaId: char.dramaId,
+  })
   try {
     logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
     // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model
@@ -204,7 +213,12 @@ app.post('/batch-generate-images', async (c) => {
       'consistent character design across all views, clean light gradient background',
       'high quality, detailed illustration, professional character art',
     ].filter(Boolean).join(', ')
-    const prompt = await sanitizeImagePrompt(rawPrompt)
+    const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt)
+    // Sprint 12 Task B: 同 B1, 每个角色独立校验各自的 gender (批量不能共用一个判断)
+    const prompt = ensureGenderInPrompt(sanitizedPrompt, extractGenderTrait(char.permanentTraits), {
+      characterId: cid,
+      dramaId: char.dramaId,
+    })
     try {
       // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model
       const { configId: explicitConfigId, model: explicitModel } = parseConfigIdWithModel(body?.config_id)
