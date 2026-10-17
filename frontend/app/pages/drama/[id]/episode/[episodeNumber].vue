@@ -994,7 +994,7 @@
                 <div class="asset-foot">
                   <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
                   <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : ((c.image_url || c.imageUrl) ? '重新生成' : '生成') }}</button>
                 </div>
               </div>
             </div>
@@ -1039,7 +1039,7 @@
                 <div class="asset-foot">
                   <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isPendingSceneImage(s.id) && 'pending']" />
                   <span class="dim" style="font-size:10px">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id)" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成' }}</button>
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id)" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : ((s.image_url || s.imageUrl) ? '重新生成' : '生成') }}</button>
                 </div>
               </div>
             </div>
@@ -1088,7 +1088,7 @@
                 <div class="asset-foot">
                   <span :class="['dot', (p.image_url || p.imageUrl) && 'ok', isPendingPropImage(p.id) && 'pending']" />
                   <span class="dim" style="font-size:10px">{{ (p.image_url || p.imageUrl) ? '已生成' : (isPendingPropImage(p.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingPropImage(p.id)" @click="genPropImg(p.id)">{{ isPendingPropImage(p.id) ? '生成中' : '生成' }}</button>
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingPropImage(p.id)" @click="genPropImg(p.id)">{{ isPendingPropImage(p.id) ? '生成中' : ((p.image_url || p.imageUrl) ? '重新生成' : '生成') }}</button>
                 </div>
               </div>
             </div>
