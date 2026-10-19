@@ -84,7 +84,7 @@ Ref2V 多图+多音频 v2（1-10s）
 输入：prompt + 最多 9 张参考图 + 多段音频（音频驱动画面）
 路由：用户显式选择
 场景：角色台词/旁白对口型、配乐驱动画面节奏
-注意：当前前端未接 audioUrls schema，audio 字段为空（Phase 3b 再加）
+注意：Sprint 14 起 audioUrls 由 video-generation.ts 从 storyboards.tts_audio_url 自动注入（无需前端传参）
 */
   static readonly WORKFLOW_REF2V_AUDIO = 'minimax_h3_image_audio_to_video_v2'
   /**
@@ -107,11 +107,26 @@ Ref2V 多图+多音频 v2 15s 版
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
   ]
 
+  /**
+   * 「H3 多图多音频」工作流子集 — 只有这 4 个接受 ref_audio_0/1/2 输入。
+   * 纯 Ref2V (v5 / v5_15s)、T2V、FL2V 不接受音频，传了也会被平台忽略。
+   * 依据: autodl-workflow详解.md 各工作流「输入」段（zm_u08/zm_u24/image_audio_to_video_v2[_15s] 均列了 ref_audio_0~2）
+   */
+  private static readonly REF2V_AUDIO_VARIANTS = [
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+  ]
+
+  /** 音频参考最多 3 段 (ref_audio_0/1/2)，平台硬上限 */
+  private static readonly REF2V_MAX_AUDIO = 3
+
   /** Ref2V 1-10s 用 v5; 11-15s 自动切到 v5_15s */
   private static readonly REF2V_MAX_SHORT_S = 10
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
-    const { workflowId, body } = this.buildBodyForRecord(record)
+    const { workflowId, body, fallbackReason } = this.buildBodyForRecord(record)
     const url = joinProviderUrl(
       config.baseUrl || 'https://autodl.art/api/v1',
       '',
@@ -127,6 +142,7 @@ Ref2V 多图+多音频 v2 15s 版
         'Authorization': config.apiKey,
       },
       body,
+      fallbackReason,
     }
   }
 
@@ -193,7 +209,7 @@ Ref2V 多图+多音频 v2 15s 版
 
   // ============ 内部 helpers ============
 
-  private buildBodyForRecord(record: VideoGenerationRecord): { workflowId: string; body: any } {
+  private buildBodyForRecord(record: VideoGenerationRecord): { workflowId: string; body: any; fallbackReason?: string } {
     const mode = record.referenceMode || 'none'
     const refCount = this.countRefImages(record.referenceImageUrls)
     const hasFirstLast = !!(record.firstFrameUrl && record.lastFrameUrl)
@@ -202,27 +218,33 @@ Ref2V 多图+多音频 v2 15s 版
     let refs: string[] = []
     let firstFrame: string | undefined
     let lastFrame: string | undefined
+    /** Sprint 14: 实际 workflow 跟用户所选模型不一致时置位, 透传给调用方落库 */
+    let fallbackReason: string | undefined
 
-    // 用户显式选了具体 workflow (通过 record.model,前端 model 弹窗选了 zm_u24/u08/audio 等) 时,
-    // 强制走 Ref2V body 构造。audio 字段暂未接入(后续 Phase 3b 加 audioUrls schema 再说)。
-    // 仅当 mode 是 multiple/single 时显式选择才生效 — FL2V/T2V 模式不接 Ref2V 变体
+    // Sprint 14 (PM msg-20261019-074): 配音音频由后端从 storyboards.tts_audio_url 归一化后注入 (前端不传参),
+    //   最多 3 段 — 平台 ref_audio_0/1/2 硬上限。
+    const audioUrls = (record.audioUrls || [])
+      .filter(Boolean)
+      .slice(0, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_AUDIO)
+
+    // 用户显式选了具体 workflow (record.model = 前端视频模型弹窗选的) 时优先听用户的,
+    // 但只在真的拿得到参考图 (mode=multiple/single 且图非空) 时才直接生效。
     const explicitModel = record.model
     const isExplicitRef2V =
       !!explicitModel && (AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(explicitModel)
+    const explicitRefs = isExplicitRef2V && (mode === 'multiple' || mode === 'single')
+      ? (mode === 'multiple' ? this.parseRefImages(record.referenceImageUrls) : (record.imageUrl ? [record.imageUrl] : []))
+      : []
 
-    // 用户显式选了 Ref2V 变体但 mode 不匹配 (first_last / none) 时, 会被下面逻辑强行
-    // fallback 到 FL2V/T2V — 这是因为新加的 zm_u24/u08/audio 等 Ref2V 变体都不接
-    // first_frame/last_frame 输入, 没图时 Ref2V API 也没法调。
-    // 这种 fallback 是故意的 (保持 batch 流不中断), 但要 log 一条 model-mode-mismatch
-    // 方便排查「为什么我选了 zm_u24 但实际跑了 FL2V」。
-    let modelModeMismatch: 'first_last' | 'no_reference_images' | null = null
-    const userPickedRef2V = isExplicitRef2V
-
-    if (userPickedRef2V && (mode === 'multiple' || mode === 'single')) {
+    if (explicitRefs.length > 0) {
       workflowId = explicitModel!
-      refs = mode === 'multiple'
-        ? this.parseRefImages(record.referenceImageUrls)
-        : [record.imageUrl!]
+      refs = explicitRefs
+      // D2 (用户 2026-10-19 拍板): 选了音频工作流但本镜没配音 → 自动退回普通 Ref2V (v5 / v5_15s)。
+      //   属正常兜底 (没配音就不用做口型同步), 不提示前端, 只 flow-log 记一笔供事后核对。
+      if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)) {
+        fallbackReason = 'no_audio_fallback'
+        workflowId = this.pickRef2VWorkflowId(record.duration)
+      }
     } else if (mode === 'multiple' && refCount >= 1) {
       // 多图参考: 走 Ref2V 工作流 (按 duration 自动选 v5 / v5_15s)
       workflowId = this.pickRef2VWorkflowId(record.duration)
@@ -233,29 +255,60 @@ Ref2V 多图+多音频 v2 15s 版
       workflowId = this.pickRef2VWorkflowId(record.duration)
       refs = [record.imageUrl]
     } else if (mode === 'first_last' || hasFirstLast || record.firstFrameUrl || record.lastFrameUrl) {
-      // 首尾帧: 走 FL2V 工作流
       // 2026-10-12 sprint 43 FIX-8 (QA msg-20261012-043): 用户生成了 first_frame_image 后,
       //   应该自动用首帧图模式 (FL2V), 不该再走 T2V (no_pic)。前端只传 firstFrameUrl
       //   不传 lastFrameUrl 时也走这里, last_frame 字段在下面 if (lastFrame) 防御性跳过
-      workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V
-      firstFrame = record.firstFrameUrl || undefined
-      lastFrame = record.lastFrameUrl || undefined
-      if (userPickedRef2V) modelModeMismatch = 'first_last'
+      const frameRefs = [record.firstFrameUrl, record.lastFrameUrl].filter(Boolean) as string[]
+
+      // D1 (用户 2026-10-19 拍板): 选了 Ref2V 变体但 mode 是 first_last → 不再静默退 FL2V,
+      //   改拿首/尾帧当 ref_image_N 跑 Ref2V — 否则「要口型同步」的诉求会被 FL2V 整条吃掉。
+      //   一张参考图都没有时 (ref_image_0 是平台必填) 只能退 T2V, 记 mode_mismatch_no_images。
+      if (isExplicitRef2V && frameRefs.length > 0) {
+        workflowId = explicitModel!
+        refs = frameRefs
+        fallbackReason = 'mode_mismatch_ref2v'
+        // 同 D2: 再判一次没配音的情况, 但保留更重要的 mode_mismatch_ref2v 原因码
+        if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)) {
+          workflowId = this.pickRef2VWorkflowId(record.duration)
+        }
+      } else if (isExplicitRef2V) {
+        workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V
+        fallbackReason = 'mode_mismatch_no_images'
+      } else {
+        // 首尾帧: 走 FL2V 工作流
+        workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V
+        firstFrame = record.firstFrameUrl || undefined
+        lastFrame = record.lastFrameUrl || undefined
+      }
     } else {
       // 其他: 文生视频
       workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V
-      if (userPickedRef2V) modelModeMismatch = 'no_reference_images'
+      if (isExplicitRef2V) fallbackReason = 'mode_mismatch_no_images'
     }
 
-    if (modelModeMismatch) {
-      // 用户在 model 弹窗选了 Ref2V 变体 (zm_u24/u08/audio 等), 但 storyboard 没有
-      // 相应的参考模式 — adapter 静默 fallback 到 FL2V/T2V。记录原因便于排查。
-      logTaskWarn('VideoTask', 'model-mode-mismatch', {
+    if (fallbackReason) {
+      // 降级留痕 — flow-log 里能直接 grep 到「为什么选了 zm_u08 却跑了别的」。
+      // fallbackReason 同时回填到 video_generations.fallback_reason 供前端提示。
+      logTaskWarn('VideoTask', 'model-fallback', {
         videoGenId: record.id,
         requestedModel: explicitModel,
         actualWorkflow: workflowId,
-        reason: modelModeMismatch,
+        reason: fallbackReason,
         referenceMode: mode,
+        audioCount: audioUrls.length,
+        hint: fallbackReason === 'no_audio_fallback'
+          ? '音频工作流缺配音, 已自动退普通 Ref2V; 本镜不做口型同步'
+          : '模式与所选 Ref2V 变体不匹配, 已自动换 workflow (首/尾帧当 ref_image_N)',
+      })
+    }
+
+    if (audioUrls.length > 0 && !this.isAudioWorkflow(workflowId)) {
+      // 本镜有配音但所选工作流吃不了音频 → 口型同步不会生效。这条最容易踩, 单独记一笔。
+      logTaskWarn('VideoTask', 'audio-unsupported-by-workflow', {
+        videoGenId: record.id,
+        actualWorkflow: workflowId,
+        audioCount: audioUrls.length,
+        hint: '需改选 zm_u08 / zm_u24 / image_audio_to_video_v2 才能做口型同步',
       })
     }
 
@@ -288,16 +341,27 @@ Ref2V 多图+多音频 v2 15s 版
     if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V) {
       if (firstFrame) body.first_frame = firstFrame
       if (lastFrame) body.last_frame = lastFrame
-    } else if (
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
-    ) {
+    } else if ((AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(workflowId)) {
+      // Sprint 14 修 bug: 改前只给 v5 / v5_15s 填 ref_image_N, 用户显式选 zm_u24 / zm_u08 /
+      //   image_audio_to_video_v2 时 refs 算了却没进 body → 平台收到一个没有参考图的 Ref2V 请求。
+      //   现在所有 Ref2V 变体统一填 (平台上限 9 张)。
       refs.slice(0, 9).forEach((url, i) => {
         body[`ref_image_${i}`] = url
       })
+      // ref_audio_0/1/2 — H3 多图多音频工作流的口型同步入口 (Sprint 14 核心)
+      if (this.isAudioWorkflow(workflowId)) {
+        audioUrls.slice(0, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_AUDIO).forEach((url, i) => {
+          body[`ref_audio_${i}`] = url
+        })
+      }
     }
 
-    return { workflowId, body }
+    return { workflowId, body, fallbackReason }
+  }
+
+  /** 该 workflow 是否接受 ref_audio_0/1/2 (H3 多图多音频工作流) */
+  private isAudioWorkflow(workflowId: string): boolean {
+    return (AutoDLComfyUIWorkflowAdapter.REF2V_AUDIO_VARIANTS as readonly string[]).includes(workflowId)
   }
 
   /**

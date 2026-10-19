@@ -66,6 +66,14 @@ export interface ProviderRequest {
   method: string
   headers: Record<string, string>
   body: any
+  /**
+   * Sprint 14 (PM msg-20261019-074): adapter 把用户选的模型换成别的 workflow 时回填的原因码。
+   * undefined = 没换。调用方 (video-generation.ts) 据此落库 video_generations.fallback_reason。
+   * 已知值: 'no_audio_fallback' (音频工作流缺音频 → 退普通 Ref2V, 属正常兜底, 前端不提示)
+   *        | 'mode_mismatch_ref2v' (模式不匹配 → 改跑 Ref2V, 值得一提)
+   *        | 'mode_mismatch_no_images' (模式不匹配且无图可参考 → 只能 T2V)
+   */
+  fallbackReason?: string
 }
 
 export interface AIConfig {
@@ -96,6 +104,12 @@ export interface VideoGenerationRecord {
   firstFrameUrl?: string | null
   lastFrameUrl?: string | null
   referenceImageUrls?: string | null
+  /**
+   * Sprint 14 (PM msg-20261019-074): 配音音频 URL (已归一化成公网 URL 或 data: base64)。
+   * 由 video-generation.ts 从 storyboards.tts_audio_url 取, 不接受前端传参 (后端是唯一真源)。
+   * H3 多图多音频工作流 (zm_u08 / zm_u24 / image_audio_to_video_v2[_15s]) 用它填 ref_audio_0/1/2 做口型同步。
+   */
+  audioUrls?: string[] | null
   duration?: number | null
   aspectRatio?: string | null
   // ... 其他字段
