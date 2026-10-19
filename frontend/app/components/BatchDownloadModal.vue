@@ -71,6 +71,8 @@
  *
  * 内存注意: 11 镜 × 15MB ≈ 165MB, 峰值可能更高。必须用 streamFiles: true 降低峰值。
  */
+import { computed, ref, watch } from 'vue'
+import { toast } from 'vue-sonner'
 import JSZip from 'jszip'
 
 interface ShotItem {

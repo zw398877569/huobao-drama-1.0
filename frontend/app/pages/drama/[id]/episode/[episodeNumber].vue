@@ -1544,6 +1544,11 @@
               </button>
               <span v-if="videoConfigIds['videos']" class="tag" style="font-size:10px">自定义</span>
               <div class="ml-auto flex gap-1">
+                <!-- Sprint 13 Task E: 批量下载原始视频 (用户 2026-10-19 确认 videos 页=原始, compose 页=合成后) -->
+                <button class="btn btn-sm" :disabled="!shotVidCount" @click="openBatchDownload('videos')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  批量下载
+                </button>
                 <button class="btn btn-sm" @click="batchVideos(videoConfigId)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
@@ -1598,6 +1603,11 @@
               <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 个镜头</span>
               <span class="tag mono">{{  composedCount  }}/{{  sbs?.length ?? 0  }} 已合成</span>
               <div class="ml-auto flex gap-1">
+                <!-- Sprint 13 Task E: 批量下载合成后成品 (compose 页, 与 videos 页的原始视频不同) -->
+                <button class="btn btn-sm" :disabled="!composedCount" @click="openBatchDownload('compose')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  批量下载
+                </button>
                 <button class="btn btn-sm" @click="batchCompose">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   批量合成
@@ -2087,6 +2097,14 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- Sprint 13 Task E: 批量下载弹窗 (Nuxt 3 components/ auto-import, 无需显式 import) -->
+    <BatchDownloadModal
+      v-model:open="batchDownloadOpen"
+      :title="batchDownloadTitle"
+      :shots="batchDownloadShots"
+      :episode-label="batchDownloadEpisodeLabel"
+    />
   </div>
 </template>
 
@@ -2607,6 +2625,36 @@ function watchAsyncResult(check, attempts = 120, delay = 2000) {
 function getFirstFrame(s) { return s?.first_frame_image || s?.firstFrameImage || null }
 function getLastFrame(s) { return s?.last_frame_image || s?.lastFrameImage || null }
 function getStoryboardCover(s) { return s?.composed_image || s?.composedImage || getFirstFrame(s) || getLastFrame(s) || null }
+// ── Sprint 13 Task E: 批量下载 ──
+//   videos 页传原始视频 (getVideoUrl), compose 页传合成后成品 (getComposedVideoUrl)。
+//   两个页面共用 BatchDownloadModal 组件, 弹窗状态互相独立 (各自 openBatchDownload 调用)。
+const batchDownloadOpen = ref(false)
+const batchDownloadKind = ref<'videos' | 'compose'>('videos')
+
+function openBatchDownload(kind: 'videos' | 'compose') {
+  batchDownloadKind.value = kind
+  batchDownloadOpen.value = true
+}
+
+const batchDownloadShots = computed(() => {
+  const kind = batchDownloadKind.value
+  return (sbs.value || []).map((sb: any, i: number) => ({
+    id: sb.id,
+    storyboardNumber: sb.storyboard_number ?? sb.storyboardNumber ?? (i + 1),
+    description: sb.description || sb.title || '',
+    duration: sb.duration ?? null,
+    url: kind === 'videos' ? (getVideoUrl(sb) || '') : (getComposedVideoUrl(sb) || ''),
+  })).filter((x: any) => !!x.url)
+})
+
+const batchDownloadTitle = computed(() =>
+  batchDownloadKind.value === 'videos'
+    ? `批量下载原始视频 (第${episodeNumber}集)`
+    : `批量下载合成后视频 (第${episodeNumber}集)`
+)
+
+const batchDownloadEpisodeLabel = computed(() => `第${String(episodeNumber).padStart(2, '0')}集`)
+
 function getVideoUrl(s) { return s?.video_url || s?.videoUrl || null }
 function getComposedVideoUrl(s) { return s?.composed_video_url || s?.composedVideoUrl || null }
 function hasImg(s) { return !!getStoryboardCover(s) }
