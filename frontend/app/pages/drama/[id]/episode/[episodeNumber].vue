@@ -1585,6 +1585,7 @@
                     <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
                     <span :class="['dot', hasVid(sb) && 'ok', isPendingVideo(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingVideo(sb.id) ? '视频生成中' : '视频' }}</span>
                   </div>
+                  <div v-if="videoFallbackNote(sb.id)" class="prod-fallback-note" :title="'你选的视频模型与该镜头实际用的工作流不一致, 已自动降级 (不会中断生成)。想强制指定请确认该镜头有参考图/配音; 详细原因见 flow-log 的 VideoTask/model-fallback'">{{ videoFallbackNote(sb.id) }}</div>
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
@@ -2221,6 +2222,8 @@ const {
 const {
   pendingVideoIds, pendingComposeIds, failedVideoMessages, failedComposeMessages,
   isPendingVideo, videoFailMessage, isPendingCompose, composeFailMessage,
+  // Sprint 14 (PM msg-20261019-074): 降级 tag —— 用户选的模型跟实际跑的 workflow 不一致时提示
+  videoFallbackNote, loadVideoFallbackNotes,
   genVid, batchVideos, doCompose, batchCompose, pollVideoGeneration, pollComposeStatus,
 } = useVideoGeneration({
   ctx: { sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
@@ -2299,6 +2302,13 @@ const {
   saveRaw, saveScr,
   hasDialogue, hasTTS,
 })
+
+// Sprint 14 (PM msg-20261019-074): 降级 tag 在刷新页面后也要能看到, 所以进 videos tab 时拉一次本剧集视频记录。
+// 必须放在 useEpisodePipeline 之后 —— prodTab 在那里才解构出来, 放前面是 TDZ ReferenceError。
+// 不在 onMounted 拉: 用户可能先进别的 tab, 白跑一次请求。
+watch(prodTab, (tab) => {
+  if (tab === 'videos') void loadVideoFallbackNotes()
+}, { immediate: true })
 
 // Sprint 6 Task E — 分镜模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, QA msg-20260930-002 修: 挪到 destructuring 块外前面)
 const selectedTextConfigId = ref<string | null>(null)
@@ -4209,6 +4219,18 @@ onMounted(() => { refresh() })
   overflow-wrap: anywhere;
   max-height: 4.5em;       /* 3 行封顶 */
   overflow-y: auto;
+}
+/* Sprint 14 (PM msg-20261019-074): 模型降级提示 — 琥珀色, 跟红色错误区分开 (这是提示不是失败) */
+.prod-fallback-note {
+  margin-top: 6px;
+  padding: 3px 6px;
+  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: #b45309;
+  cursor: help;
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }

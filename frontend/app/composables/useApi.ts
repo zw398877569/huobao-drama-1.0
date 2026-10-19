@@ -109,6 +109,9 @@ export const videoAPI = {
   get: (id: number) => api.get(`/videos/${id}`),
   // 自由创作历史: ?source=free 返回非正式分镜记录 (与正式分镜视频列表隔离)
   listFree: () => api.get('/videos?source=free'),
+  // Sprint 14 (PM msg-20261019-074): 按剧集拉视频生成记录, 前端取 fallback_reason 渲染降级 tag
+  list: (params: { drama_id?: number | string; storyboard_id?: number | string } = {}) =>
+    api.get('/videos?' + new URLSearchParams(params as any).toString()),
 }
 // 外部 launchd cron 任务监控 — 来自 ~/bin/task-runner.sh 上报
 export const cronAPI = {

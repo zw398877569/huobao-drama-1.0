@@ -38,6 +38,53 @@ export function useVideoGeneration(deps: Deps) {
   const failedVideoMessages = ref<Record<number, string>>({})
   const failedComposeMessages = ref<Record<number, string>>({})
 
+  // Sprint 14 (PM msg-20261019-074): 降级提示, key = storyboardId, value = 展示文案。
+  //   后端 video_generations.fallback_reason 落库, 这里只做「原因码 -> 中文」映射。
+  //   注意 no_audio_fallback 故意不展示 —— 那是「本镜没配音所以不做口型同步」的正常兜底,
+  //   刷一屏 tag 只会让用户以为出错了 (用户 2026-10-19 拍板)。
+  const videoFallbackNotes = ref<Record<number, string>>({})
+
+  const FALLBACK_NOTE_TEXT: Record<string, string> = {
+    mode_mismatch_ref2v: '模式不匹配·已转多图参考',
+    mode_mismatch_no_images: '无参考图·已转文生视频',
+  }
+
+  function videoFallbackNote(id: number) {
+    return videoFallbackNotes.value[id]
+  }
+
+  function applyFallbackReason(storyboardId: number, reason?: string | null) {
+    const next = { ...videoFallbackNotes.value }
+    const text = reason ? FALLBACK_NOTE_TEXT[reason] : undefined
+    if (text) next[storyboardId] = text
+    else delete next[storyboardId]
+    videoFallbackNotes.value = next
+  }
+
+  /** 刷新页面后降级 tag 还在: 拉本剧集视频记录, 每个镜头只留最新一条的降级原因 */
+  async function loadVideoFallbackNotes() {
+    try {
+      const rows = await videoAPI.list({ drama_id: ctx.dramaId })
+      const list = Array.isArray(rows) ? rows : (rows?.data || [])
+      const latest: Record<number, { id: number; reason: string | null }> = {}
+      for (const r of list) {
+        const sbId = Number(r?.storyboardId ?? r?.storyboard_id)
+        if (!sbId) continue
+        if (!latest[sbId] || Number(r?.id) > latest[sbId].id) {
+          latest[sbId] = { id: Number(r?.id), reason: r?.fallbackReason ?? r?.fallback_reason ?? null }
+        }
+      }
+      const next: Record<number, string> = {}
+      for (const [sbId, info] of Object.entries(latest)) {
+        const text = info.reason ? FALLBACK_NOTE_TEXT[info.reason] : undefined
+        if (text) next[Number(sbId)] = text
+      }
+      videoFallbackNotes.value = next
+    } catch {
+      // 拉不到就保持现状, 不打断页面 (降级 tag 是辅助信息, 不是主流程)
+    }
+  }
+
   function isPendingVideo(id: number) {
     return pendingVideoIds.value.includes(id)
   }
@@ -73,6 +120,7 @@ export function useVideoGeneration(deps: Deps) {
     else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
     try {
       delete failedVideoMessages.value[sb.id]
+      applyFallbackReason(sb.id, null)  // Sprint 14: 重新生成前先清掉上一轮的降级 tag
       if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
       const generation = await videoAPI.generate(params)
       toast.success('视频生成中')
@@ -102,6 +150,8 @@ export function useVideoGeneration(deps: Deps) {
       try {
         const res = await videoAPI.get(generationId)
         await refresh()
+        // Sprint 14: adapter 换过 workflow 时把原因码转成 tag (no_audio_fallback 会被映射表过滤掉)
+        applyFallbackReason(storyboardId, res?.fallbackReason ?? res?.fallback_reason)
         if (res?.status === 'completed') {
           pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
           delete failedVideoMessages.value[storyboardId]
@@ -216,6 +266,7 @@ export function useVideoGeneration(deps: Deps) {
   return {
     pendingVideoIds, pendingComposeIds, failedVideoMessages, failedComposeMessages,
     isPendingVideo, videoFailMessage, isPendingCompose, composeFailMessage,
+    videoFallbackNotes, videoFallbackNote, loadVideoFallbackNotes,
     genVid, batchVideos, doCompose, batchCompose, pollVideoGeneration, pollComposeStatus,
   }
 }
