@@ -191,6 +191,8 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(vRecord.id, vRecord.firstFrameUrl)
         const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(vRecord.id, vRecord.lastFrameUrl)
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
+        // Sprint 14: 配音音频 (口型同步)。自由创作 (source='free') 没 storyboard, 天然拿不到。
+        const resolvedAudioUrls = await resolveStoryboardAudioUrls(vRecord.id, vRecord.storyboardId)
 
         // 提示词翻译: 非英文 prompt 先翻译为英文再发给 Agnes
         // 自由创作模式跳过翻译 — 用户自己控制中英文, 不要静默改写原文
@@ -217,6 +219,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           firstFrameUrl: resolvedFirstFrameUrl,
           lastFrameUrl: resolvedLastFrameUrl,
           referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
+          audioUrls: resolvedAudioUrls,
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
         })
@@ -227,6 +230,9 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           url: redactUrl(url),
           model: vRecord.model,
           referenceMode: vRecord.referenceMode,
+          // Sprint 14: 实际发出的 ref_image / ref_audio 数量, 排查「音频没生效」时第一眼看这里
+          refImageCount: resolvedReferenceImageUrls.length,
+          audioCount: resolvedAudioUrls.length,
         })
         logTaskPayload('VideoTask', 'request payload', {
           id,
@@ -345,7 +351,17 @@ function markStoryboardFailed(storyboardId: number | null | undefined, errorMsg:
   logTaskProgress('VideoTask', 'failed-backfill-storyboard', { storyboardId })
 }
 
-async function normalizeVideoReferenceUrl(vRecordId: number, value: string | null | undefined): Promise<string | null> {
+/**
+ * 归一化视频生成用到的参考素材 URL (参考图 / 配音音频)。
+ *
+ * kind 只影响两件事: 读本地文件时的 mime 兜底 + 失败日志的事件名 ——
+ * 业务上音频走 ref_audio_* 而不是 ref_image_*，但 URL 归一化逻辑完全一样。
+ */
+async function normalizeVideoReferenceUrl(
+  vRecordId: number,
+  value: string | null | undefined,
+  kind: 'image' | 'audio' = 'image',
+): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
   if (raw.startsWith('data:')) {
@@ -370,10 +386,12 @@ async function normalizeVideoReferenceUrl(vRecordId: number, value: string | nul
     try {
       const buffer = fs.readFileSync(filePath)
       const ext = path.extname(filePath).toLowerCase()
-      const mimeType = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[ext] || 'image/png'
+      // Sprint 14: 音频扩展名映射 (ref_audio_* 支持 MP3/WAV/MP4/FLAC)。
+      //   改前只有图片 mime, 音频会被兜底标成 image/png → 平台按图片解音频直接失败。
+      const mimeType = AUDIO_MIME_BY_EXT[ext] ?? IMAGE_MIME_BY_EXT[ext] ?? (kind === 'audio' ? 'audio/mpeg' : 'image/png')
       return `data:${mimeType};base64,${buffer.toString('base64')}`
     } catch (err: any) {
-      logTaskWarn('VideoTask', 'read-local-image-failed', {
+      logTaskWarn('VideoTask', kind === 'audio' ? 'read-local-audio-failed' : 'read-local-image-failed', {
         videoGenId: vRecordId,
         filePath,
         error: err.message,
@@ -382,6 +400,50 @@ async function normalizeVideoReferenceUrl(vRecordId: number, value: string | nul
     return null
   }
   return raw
+}
+
+/** 图片扩展名 → mime (原有逻辑抽成常量, Sprint 14 只是加了 AUDIO_MIME_BY_EXT) */
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+}
+
+/**
+ * Sprint 14 (PM msg-20261019-074): 音频扩展名 → mime。
+ * 平台 ref_audio_* 文档写明支持 MP3/WAV/MP4/FLAC; .m4a 也按 audio/mp4 处理。
+ */
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'audio/mp4',
+}
+
+/**
+ * Sprint 14: 取本镜配音音频, 归一化成 adapter 能直接用的 URL。
+ *
+ * 真源是 storyboards.tts_audio_url (配好音后 storyboards.ts 写入, 格式 static/audio/tts_<sbId>_<ts>.mp3),
+ * 不接受前端传参 —— 前端说什么不算数, 避免刷脏数据。
+ *
+ * 一次只取整段合并音频 (tts_concat 产物), 不拆 tts_segments 分段:
+ *   H3 一次最多吃 3 段 ref_audio, 而本项目一镜的配音本来就是「一镜一段」,
+ *   拆开反而会让平台按多说话人对齐, 跟 ffmpeg-compose 阶段的混音逻辑对不上。
+ * 配套注意: zm_u08/u24 生成的视频可能自带口型音轨, 合成阶段要防重复混音 (见 handoff)。
+ */
+async function resolveStoryboardAudioUrls(
+  vRecordId: number,
+  storyboardId: number | null | undefined,
+): Promise<string[]> {
+  if (!storyboardId) return []
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+  const raw = sb?.ttsAudioUrl
+  if (!raw) return []
+  const normalized = await normalizeVideoReferenceUrl(vRecordId, raw, 'audio')
+  return normalized ? [normalized] : []
 }
 
 async function normalizeVideoReferenceUrls(raw: string | null | undefined): Promise<string[]> {
