@@ -335,6 +335,8 @@ export const videoGenerations = sqliteTable('video_generations', {
   status: text('status').default('pending'),
   taskId: text('task_id'),
   errorMsg: text('error_msg'),
+  /** Sprint 14 (PM msg-20261019-074): adapter 换 workflow 的原因码, 没换过为 null */
+  fallbackReason: text('fallback_reason'),
   width: integer('width'),
   height: integer('height'),
   createdAt: text('created_at').notNull(),

@@ -451,6 +451,17 @@ ensureColumn('video_generations', 'negative_prompt', 'TEXT')
 // 列表接口可按 ?source= 过滤
 ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 
+// 2026-10-19 Sprint 14 (PM msg-20261019-074): video_generations.fallback_reason 降级留痕
+//   背景: video_generations.model 存的是「用户选的」model, 不是实际跑的 workflowId,
+//     所以 adapter 换了 workflow 之后前端完全看不出来 (「选了 zm_u08 但没口型同步」查不出根因)。
+//   存 adapter 回填的原因码, 已知值:
+//     no_audio_fallback       = 音频工作流缺配音 -> 自动退普通 Ref2V (正常兜底, 前端不提示)
+//     mode_mismatch_ref2v     = 模式不匹配 -> 改跑 Ref2V (前端提示)
+//     mode_mismatch_no_images = 模式不匹配且无图可参考 -> 只能 T2V (前端提示)
+//   没降级时为 NULL, 老数据 NULL 兼容 (前端 null 时不渲染 tag)。
+//   启动 ensureColumn 自动加列, 无需手动 docker exec / 手动跑 SQL。
+ensureColumn('video_generations', 'fallback_reason', 'TEXT')
+
 // 2026-09-24 split appearance: 拆 characters.appearance 为永久外貌 (PERMANENT) + 剧情态变化 (PLOT_STATE)
 // PM msg-20260924-002 — 解决角色立绘 plot 态污染 (dramaId=7 characterId=21 案例)
 // 2026-10-10 V2 治本 (PM msg-20261010-001): 见上方注释, plot_state 从 character 移到 storyboard, characters.appearance_plot_state 列被 manual migration DROP

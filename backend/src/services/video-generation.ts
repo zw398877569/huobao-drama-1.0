@@ -208,7 +208,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           }
         }
 
-        const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
+        const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
           id: vRecord.id,
           model: vRecord.model,
           prompt: finalPrompt,
@@ -223,6 +223,22 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
         })
+        // Sprint 14: adapter 换过 workflow 时把原因码落库。
+        //   必须落库的原因: video_generations.model 存的是「用户选的」model, 实际跑的 workflowId 只在
+        //   adapter 的 url 里, 不记这一笔的话前端/DB 都看不出「我选了 zm_u08 却没做口型同步」。
+        if (fallbackReason) {
+          db.update(schema.videoGenerations)
+            .set({ fallbackReason, updatedAt: now() })
+            .where(eq(schema.videoGenerations.id, id))
+            .run()
+          logTaskWarn('VideoTask', 'fallback-recorded', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            requestedModel: vRecord.model,
+            reason: fallbackReason,
+          })
+        }
+
         logTaskProgress('VideoTask', 'request', {
           id,
           provider: config.provider,
@@ -233,6 +249,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           // Sprint 14: 实际发出的 ref_image / ref_audio 数量, 排查「音频没生效」时第一眼看这里
           refImageCount: resolvedReferenceImageUrls.length,
           audioCount: resolvedAudioUrls.length,
+          fallbackReason: fallbackReason || null,
         })
         logTaskPayload('VideoTask', 'request payload', {
           id,
