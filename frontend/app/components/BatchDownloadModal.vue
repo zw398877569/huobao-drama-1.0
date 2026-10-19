@@ -140,16 +140,19 @@ function buildFilename(shot: ShotItem): string {
 }
 
 function extractUrlPath(url: string): string {
-  // 兼容 'videos/x.mp4' / 'static/videos/x.mp4' / 完整 http URL 三种写法
+  // ⚠️ 修法要点 (2026-10-20 用户实测踩坑): localPath 实际格式是 'static/videos/<uuid>.mp4'
+  //   (带 static/ 前缀), 静态服务挂载点 app.use('/static/*', serveStatic({root: data}))。
+  //   之前这里把 'static/' 前缀剥掉了 → 请求 '/videos/x.mp4' → 404 →
+  //   zip 里全是 976 B 的错误页而不是视频 (用户截图确认每个文件都是 976 B)。
+  //   现在只补前导 '/', 保留 static/ 前缀。
   if (url.startsWith('http')) {
-    try {
-      return new URL(url).pathname
-    } catch {
-      return url
-    }
+    // 完整外网 URL (video_generations.videoUrl, 带 TOS 签名有时效):
+    //   不剥 query (签名在 query 里), 直接用原 URL fetch。
+    //   正常情况 storyboards.video_url 存的是 localPath, 不会走到这个分支;
+    //   万一走到, 跨域由三方端点自己决定 (本地已存档, 正常不依赖这条路径)。
+    return url
   }
-  const clean = url.replace(/^\/?static\//, '')
-  return `/${clean}`
+  return `/${url.replace(/^\/+/, '')}`
 }
 
 async function startDownload() {
@@ -165,6 +168,17 @@ async function startDownload() {
       try {
         const resp = await fetch(extractUrlPath(shot.url))
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        // ⚠️ content-type 校验 (2026-10-20 用户实测踩坑):
+        //   URL 打错时静态服务会 fallback 到 index.html, 返回 200 + text/html (976 B)。
+        //   只看 resp.ok 判断不出来 —— 垃圾页会被当成视频打进 zip。
+        //   所以必须校验 content-type 是 video/* (或 application/octet-stream), 否则判失败跳过。
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase()
+        const looksLikeVideo = contentType.startsWith('video/')
+          || contentType === 'application/octet-stream'
+          || contentType.startsWith('application/mp4')
+        if (!looksLikeVideo) {
+          throw new Error(`not a video (content-type: ${contentType || 'unknown'})`)
+        }
         const blob = await resp.blob()
         zip.file(buildFilename(shot), blob)
       } catch {
