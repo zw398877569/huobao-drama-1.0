@@ -37,6 +37,19 @@ const videoGenLock = new Mutex()
 // backend 重启后失效, D 任务 initBatchVideoScheduler 重读 pending 重建
 const cronJobs = new Map<string, ScheduledTask>()
 
+// 2026-10-19 Sprint 13 Task A (PM msg-20261019-073): 视频提交间隔 5s。
+//   修前: triggerPlanImpl 的 for 循环无间隔连续派发, 实测 5 个任务 created_at 跨度仅 690ms
+//         (08:35:00.640 → 08:35:01.330), 11 镜那次更集中 —— 几乎同时打向 AutoDL ComfyUI。
+//         episode 15 plan 15 (11 镜) 实跑失败 1 条: `AutoDL ComfyUI: no task_id in response`,
+//         重试 3 次 (16:58:23 / 16:58:39 / 16:58:58) 全失败。
+//   修后: 每提交一个 shot 后等 5s 再提交下一个, 给 ComfyUI 侧留出 task_id 落库的时间窗。
+//   为什么不是真串行 (用户 2026-10-19 拍板): generateVideo 是 fire-and-forget
+//         (video-generation.ts:158 processVideoGeneration 不 await), 循环里的 await 只等
+//         「提交成功」不等「生成完成」, 所以生成阶段本来就并发。间隔只兜底提交节奏,
+//         代价是 11 镜多花 50s 提交时间, 生成阶段仍并发, 总耗时几乎不变。
+//   可配置: 设 VIDEO_SUBMIT_INTERVAL_MS=0 可关掉间隔 (调试 / 对照测试用)。
+const SUBMIT_INTERVAL_MS = Number(process.env.VIDEO_SUBMIT_INTERVAL_MS ?? 5000)
+
 // Sprint 10 v2 Task B (PM msg-20261014-002): per-shot 执行状态, 存 batch_video_schedules.per_shot_status JSON
 //   格式: [{ shot_id, status: 'completed' | 'failed', video_generation_id?, error? }]
 export interface ShotStatus {
@@ -350,7 +363,7 @@ async function triggerPlanImpl(planId: number): Promise<void> {
   // Sprint 10 v2 Task B: 每 shot 完成 / 失败 push 一项, 最后跟 plan 一起 UPDATE 到 per_shot_status JSON
   const perShotStatus: ShotStatus[] = []
 
-  for (const shotId of shotIds) {
+  for (const [shotIndex, shotId] of shotIds.entries()) {
     const [sb] = db.select().from(schema.storyboards)
       .where(eq(schema.storyboards.id, shotId)).all()
     if (!sb) {
@@ -452,6 +465,17 @@ async function triggerPlanImpl(planId: number): Promise<void> {
         planId, shotId, error: err?.message || String(err),
       })
       // 继续跑下一个 shot, 不 break (用户拍板 "失败不重跑, 但 batch 内串行继续")
+    }
+
+    // Sprint 13 Task A: 提交间隔 — 成功/失败都等, 但最后一镜之后不等 (不占 Semaphore)。
+    //   放在 try/catch 外: generateVideo 抛异常时也要间隔, 否则失败的那镜会立刻被下一镜顶上,
+    //   重现「连续快速失败 → ComfyUI 被打爆」的场景。
+    const isLastShot = shotIndex === shotIds.length - 1
+    if (!isLastShot && SUBMIT_INTERVAL_MS > 0) {
+      logTaskProgress('BatchVideoScheduler', 'submit-stagger', {
+        planId, shotId, index: shotIndex + 1, total: shotIds.length, intervalMs: SUBMIT_INTERVAL_MS,
+      })
+      await new Promise(r => setTimeout(r, SUBMIT_INTERVAL_MS))
     }
   }
 
