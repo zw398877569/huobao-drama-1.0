@@ -2,6 +2,19 @@ import { toast } from 'vue-sonner'
 import { videoAPI, composeAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
+// 2026-10-19 Sprint 13 Task B (PM msg-20261019-073): 批量视频提交间隔 5s。
+//   修前: pendingIds.forEach 一次性提交所有待生成镜头, 无间隔 —— 跟后端定时计划
+//         (batch-video-scheduler.ts triggerPlanImpl) 同样的风险。
+//   修后: 串行 + 间隔, 与后端 SUBMIT_INTERVAL_MS 语义对齐。
+//         后端可用 env VIDEO_SUBMIT_INTERVAL_MS 覆盖; 前端固定 5000ms (不必读 env)。
+//   为什么需要 (PM 实测): episode 15 plan 15 (11 镜) 实跑, plan 记 11/11 成功,
+//         实际 video_generations completed=10 / failed=1 / processing=1,
+//         失败那条是 `AutoDL ComfyUI: no task_id in response`, 重试 3 次全失败。
+//         5 个任务 created_at 跨度仅 690ms —— 几乎同时打向 ComfyUI。
+//   注意: 生成阶段仍并发 (genVid 内部是 fire-and-forget, 等的是「提交成功」不是「生成完成」),
+//         间隔只兜底提交节奏。代价是 11 镜多花 50s 提交时间, 总耗时几乎不变。
+const BATCH_SUBMIT_INTERVAL_MS = 5000
+
 type Deps = {
   ctx: {
     sbs: Ref<any[]>
@@ -116,22 +129,35 @@ export function useVideoGeneration(deps: Deps) {
 
   function batchVideos(configId?: number | string | null) {
     const pendingIds = ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-    pendingIds.forEach(id => {
-      const sb = ctx.sbs.value.find(item => item.id === id)
-      if (sb) genVid(sb, configId)
-    })
-    if (pendingIds.length) {
-      pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
-      void watchAsyncResult(() => pendingIds.every(id => {
-        const target = ctx.sbs.value.find(s => s.id === id)
-        // 成功: 有视频; 失败: status=failed — 两种终态都算完成
-        const isFailed = target?.status === 'failed'
-        const done = !!(target?.video_url || target?.videoUrl) || isFailed
-        if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
-        if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
-        return done
-      }), 80, 4000)
+    if (!pendingIds.length) return
+
+    // Sprint 13 Task B: 串行 + 间隔提交 (替代原 pendingIds.forEach 一次性全量提交)。
+    //   间隔放在 for 循环里, 最后一镜之后不等 (跟后端 triggerPlanImpl 逻辑对称)。
+    //   用 deps 注入的 sleep helper, 不自己造 setTimeout Promise。
+    const submitAll = async () => {
+      for (let i = 0; i < pendingIds.length; i++) {
+        const id = pendingIds[i]
+        const sb = ctx.sbs.value.find(item => item.id === id)
+        if (sb) await genVid(sb, configId)
+        if (i < pendingIds.length - 1) await sleep(BATCH_SUBMIT_INTERVAL_MS)
+      }
     }
+
+    // UI 反馈: 间隔期间用户可能以为卡住, 提前告知为什么要等 (工单明确要求)
+    toast.info(`开始批量生成 ${pendingIds.length} 个视频, 每隔 ${BATCH_SUBMIT_INTERVAL_MS / 1000}s 提交一个`)
+
+    pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
+    void submitAll()
+    // watchAsyncResult 只轮询完成状态, 与提交节奏无关, 不用改 (工单 do_not_touch)
+    void watchAsyncResult(() => pendingIds.every(id => {
+      const target = ctx.sbs.value.find(s => s.id === id)
+      // 成功: 有视频; 失败: status=failed — 两种终态都算完成
+      const isFailed = target?.status === 'failed'
+      const done = !!(target?.video_url || target?.videoUrl) || isFailed
+      if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
+      if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
+      return done
+    }), 80, 4000)
   }
 
   async function doCompose(sb: any) {
