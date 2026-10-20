@@ -15,6 +15,8 @@ import { analyzeSceneIntentionForScene } from '../scene-intention'
 import { applyQualityChecklist } from '../../services/prompt-quality'
 import { V3ShotDetailsItemSchema, salvageImagePromptPermanent, permanentToText, V3ImagePromptPermanentSchema } from '../../services/llm-schema-validator.js'
 import { validateEventDensity } from '../../services/prompt-validation'
+// Sprint 16 Bug-B: 补单镜头重拆路径漏掉的 dialogueInline (台词不写进 prompt, H3 不知道谁张嘴)
+import { embedDialogueInline } from '../../utils/dialogue-timeline'
 import { checkPromptSafety } from '../../services/prompt-safety'
 import { autoFillSpeakerFromScript } from '../../utils/dialogue-parser'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../director-intent-templates'
@@ -532,7 +534,13 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         // 2026-09-10: 只对 integrated 段做事件密度检查 (避免 soundscape/music 描述里的句号被算成事件)
         const densityInput = cleanedVideo.split(/\n\n(?:Overall|non[\s_-]+diegetic)[\s_-]+(?:soundscape|music)[\s_-]*:/i)[0]
         const densityResult = validateEventDensity(densityInput)
-        updates.videoPrompt = cleanedVideo
+        // Sprint 16 Bug-B (PM msg-20261020-072): 本路径漏了 dialogueInline。
+        //   全量拆解路径 (saveStoryboards:1010) 一直有 ` 开口:'...'`, 单镜头重拆没有,
+        //   产出的 video_prompt 不含台词 → H3 不知道谁张嘴, 配合 ref_audio 就是画面/声音错配。
+        //   台词来源: 本次 fields 优先, 没传就用库里现值 (跟 soundEffect/bgmPrompt 同套路)。
+        //   ⚠️ 事件密度仍按【嵌入前】的文本算 —— 台词本身是已知信息, 不该因为补上它就触发密度告警,
+        //      那是 sprint-11/12 已验证过的逻辑, 不在本单改动范围。
+        updates.videoPrompt = embedDialogueInline(cleanedVideo, fields.dialogue ?? curSb?.dialogue)
         updates.eventDensity = densityResult.density
         updates.eventList = densityResult.events.length ? JSON.stringify(densityResult.events) : ''
       }

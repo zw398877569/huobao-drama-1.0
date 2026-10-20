@@ -30,6 +30,8 @@ import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 //   - ensureH3ThreePartPrompt: 补 H3 三段式 header (背景音少的根因)
 //   - applyDurationPolicy: 时长体系 (因子估算 → 钩子/过渡 → Σ 收敛)
 import { ensureH3ThreePartPrompt } from '../utils/h3-prompt.js'
+// Sprint 16 Bug-B: 台词嵌入 (V4 planner 路径此前漏了, 跟老全量路径对齐)
+import { embedDialogueInline } from '../utils/dialogue-timeline.js'
 import { applyDurationPolicy } from './shot-duration.js'
 import {
   salvageImagePromptPermanent,
@@ -746,14 +748,22 @@ export async function runStep3(opts: {
         //   ensureH3ThreePartPrompt 补 "Overall soundscape:" + "Non-diegetic music:" 两段 header,
         //   内容分别取 sound_effect / bgm_prompt (缺失时填 'N/A')。
         //   修前: V4 新链路不调本函数, 19/19 video_prompt 缺三段式 → H3 自由发挥 → 13/19 镜静音。
-        videoPrompt: ensureH3ThreePartPrompt(
-          [
-            det.video_prompt_permanent || '',
-            det.description || '',
-            det.video_prompt_plot_state || '',
-          ].filter(Boolean).join('。'),
-          det.sound_effect,
-          det.bgm_prompt,
+        // Sprint 16 Bug-B (PM msg-20261020-072): 本路径也漏了台词嵌入。
+        //   全量拆解的老路径 (storyboard-tools.ts saveStoryboards:1010) 一直有 dialogueInline,
+        //   V4 planner 这条链没有 —— video_prompt 里只有动作没有台词, H3 不知道谁张嘴。
+        //   embedDialogueInline 内部带「已有 开口: 就跳过」保护: Step2 prompt (sprint-15-a)
+        //   已经要求 LLM 自己把台词写进 video_prompt_plot_state, LLM 照做了就不会重复嵌。
+        videoPrompt: embedDialogueInline(
+          ensureH3ThreePartPrompt(
+            [
+              det.video_prompt_permanent || '',
+              det.description || '',
+              det.video_prompt_plot_state || '',
+            ].filter(Boolean).join('。'),
+            det.sound_effect,
+            det.bgm_prompt,
+          ),
+          det.dialogue,
         ),
         imagePromptPlotState: plotStateText || null,
         videoPromptPlotState: det.video_prompt_plot_state || null,
