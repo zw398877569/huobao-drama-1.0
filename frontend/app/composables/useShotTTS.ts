@@ -80,6 +80,13 @@ export function useShotTTS(deps: Deps) {
     } catch { return null }
   }
 
+  // 台词有几段 (按行/分号计) —— 多角色规范化后是多行, 卡片上要能一眼看出
+  function getDialogueLineCount(sb: any) {
+    const d = (sb?.dialogue || '').trim()
+    if (!d) return 0
+    return d.split(/\r?\n|;/).map((l: string) => l.trim()).filter(Boolean).length
+  }
+
   function getDialogueSpeaker(sb: any) {
     const speaker = getDialogueSpeakerRaw(sb)
     if (!speaker) return '旁白'
@@ -125,12 +132,85 @@ export function useShotTTS(deps: Deps) {
     }
   }
 
+  // ── Sprint 18 Task C: 台词编辑弹窗 + 实时解析预览 ──
+  //   为什么要这个: 多角色台词挤在一行时, 自动解析可能判错 (QA msg-20261021-078)。
+  //   用户需要能看见"后端把它拆成了几段、每段是谁", 并手动改。
+  //   ⚠️ 解析一律走后端 preview 接口 —— 前端自己做一份会跟后端 parser 漂移。
+  const editTarget = ref<any>(null)
+  const editText = ref('')
+  const editPreview = ref<{ segments: any[]; normalized: string; changed: boolean; suspect: boolean } | null>(null)
+  const editPreviewing = ref(false)
+  const editSaving = ref(false)
+  let editPreviewTimer: ReturnType<typeof setTimeout> | null = null
+
+  function openEditDialog(sb: any) {
+    editTarget.value = sb
+    editText.value = sb?.dialogue || ''
+    editPreview.value = null
+    scheduleEditPreview()
+  }
+
+  function closeEditDialog() {
+    editTarget.value = null
+    editText.value = ''
+    editPreview.value = null
+    if (editPreviewTimer) { clearTimeout(editPreviewTimer); editPreviewTimer = null }
+  }
+
+  // 输入防抖 300ms —— 边打字边调接口会打爆后端
+  function scheduleEditPreview() {
+    if (editPreviewTimer) clearTimeout(editPreviewTimer)
+    editPreviewTimer = setTimeout(() => { void runEditPreview() }, 300)
+  }
+
+  async function runEditPreview() {
+    const sb = editTarget.value
+    if (!sb) return
+    editPreviewing.value = true
+    try {
+      const r = await storyboardAPI.previewDialogue(sb.id, { dialogue: editText.value })
+      editPreview.value = r as any
+    } catch {
+      // 预览失败不打断编辑 —— 用户照样能改能存
+      editPreview.value = null
+    } finally {
+      editPreviewing.value = false
+    }
+  }
+
+  // 一键采用后端给的规范格式
+  function applyNormalizedDialogue() {
+    const n = editPreview.value?.normalized
+    if (!n) return
+    editText.value = n
+    scheduleEditPreview()
+  }
+
+  async function saveEditDialog() {
+    const sb = editTarget.value
+    if (!sb) return
+    editSaving.value = true
+    try {
+      await storyboardAPI.update(sb.id, { dialogue: editText.value })
+      // 后端 PUT 在 body 含 dialogue 时会清掉 ttsAudioUrl + subtitleUrl —— 必须提示重新生成
+      toast.success('台词已保存, 请重新生成配音')
+      closeEditDialog()
+      await refresh()
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      editSaving.value = false
+    }
+  }
+
   return {
     IGNORE_TTS_SPEAKERS, IGNORE_TTS_TEXT,
     getDialogueSpeakerRaw, getDialogueText, getDialogueBodyNormalized, isTTSIgnorable,
     hasDialogue, hasTTS, getTTSUrl,
-    getTTSSegments, getDialogueSpeaker,
+    getTTSSegments, getDialogueSpeaker, getDialogueLineCount,
     pendingTTSIds, isPendingTTS,
     genShotTTS, batchShotTTS,
+    editTarget, editText, editPreview, editPreviewing, editSaving,
+    openEditDialog, closeEditDialog, scheduleEditPreview, applyNormalizedDialogue, saveEditDialog,
   }
 }

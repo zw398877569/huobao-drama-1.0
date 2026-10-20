@@ -65,6 +65,8 @@ export const storyboardAPI = {
   get: (id: number) => api.get(`/storyboards/${id}`),
   update: (id: number, data: any) => api.put(`/storyboards/${id}`, data),
   generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
+  // Sprint 18: 台词编辑弹窗的实时解析预览 (纯只读, 后端解析, 前端不自己解析)
+  previewDialogue: (id: number, body: { dialogue: string }) => api.post(`/storyboards/${id}/preview-dialogue`, body),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
   evaluate: (id: number) => api.post(`/storyboards/${id}/evaluate`),
   retake: (id: number, body: { dimension: string; user_note?: string }) => api.post(`/storyboards/${id}/retake`, body),

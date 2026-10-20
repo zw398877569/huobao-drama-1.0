@@ -10,7 +10,8 @@ import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuc
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
 import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
-import { autoFillSpeakerFromScript } from '../utils/dialogue-parser.js'
+import { autoFillSpeakerFromScript, normalizeDialogueForStorage, parseDialogueSegments } from '../utils/dialogue-parser.js'
+import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 
 const app = new Hono()
 
@@ -212,6 +213,38 @@ app.post('/:id/generate-tts', async (c) => {
     logTaskError('StoryboardAPI', 'generate-tts', { storyboardId: id, error: err.message })
     return badRequest(c, err.message)
   }
+})
+
+// POST /storyboards/:id/preview-dialogue
+// Sprint 18 (QA msg-20261021-078) Task C: 配音页「编辑台词」的实时解析预览。
+//   纯只读 —— 不落库、不改任何字段。
+//   ⚠️ 前端【不做本地解析】(会跟后端 parser 漂移), 一律调这个接口拿结果。
+app.post('/:id/preview-dialogue', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}) as any)
+  const dialogue = typeof body?.dialogue === 'string' ? body.dialogue : ''
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+
+  // 剧本角色白名单 —— 跟配音生成用的是同一份, 预览结果才跟实际生成一致
+  const speakerWhitelist = getEpisodeSpeakerWhitelist(sb.episodeId)
+  const parsed = parseDialogueSegments(dialogue, speakerWhitelist)
+  const normalized = normalizeDialogueForStorage(dialogue, speakerWhitelist)
+
+  // 疑似没拆开: 只解析出 1 段, 但文本里还有白名单里的别的角色名 → 前端要醒目提示
+  let suspect = false
+  if (parsed.segments.length === 1 && speakerWhitelist.size > 0) {
+    const only = parsed.segments[0]
+    suspect = [...speakerWhitelist].some((s) => s.length >= 2 && only.text.includes(s))
+  }
+
+  return success(c, {
+    segments: parsed.segments,
+    normalized: normalized.text,
+    changed: normalized.changed,
+    suspect,
+    whitelist_size: speakerWhitelist.size,
+  })
 })
 
 // DELETE /storyboards/:id

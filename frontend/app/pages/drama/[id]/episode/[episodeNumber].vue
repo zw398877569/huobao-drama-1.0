@@ -1125,7 +1125,7 @@
                       <span class="frame-num">#{{ String(sb.storyboard_number || sb.storyboardNumber || i + 1).padStart(2, '0') }}</span>
                       <span class="frame-badge">{{ getDialogueSpeaker(sb) }}</span>
                     </div>
-                    <div class="dub-desc">{{ getDialogueText(sb) || '未填写文本' }}</div>
+                    <div class="dub-desc">{{ getDialogueText(sb) || '未填写文本' }}<span v-if="getDialogueLineCount(sb) > 1" class="tag tag-info" style="margin-left:6px">{{ getDialogueLineCount(sb) }} 段</span></div>
                     </div>
                     <span class="tag" :class="hasTTS(sb) ? 'tag-success' : ''">{{ hasTTS(sb) ? '已生成' : '待生成' }}</span>
                   </div>
@@ -1142,10 +1142,50 @@
                 </div>
                 <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
                   <div v-else class="dim" style="font-size:12px">尚未生成语音文件</div>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingTTS(sb.id)" @click="genShotTTS(sb)">
+                  <button class="btn btn-sm ml-auto" :disabled="isPendingTTS(sb.id)" @click="openEditDialog(sb)" title="手动编辑台词 (多角色请分行)">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+                    编辑台词
+                  </button>
+                  <button class="btn btn-sm" :disabled="isPendingTTS(sb.id)" @click="genShotTTS(sb)">
                     <Loader2 v-if="isPendingTTS(sb.id)" :size="11" class="animate-spin" />
                     {{ isPendingTTS(sb.id) ? '生成中…' : (hasTTS(sb) ? '重新生成' : '生成配音') }}
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sprint 18 Task C: 台词编辑弹窗 (解析预览走后端, 前端不自己解析) -->
+            <div v-if="editTarget" class="modal-overlay" @click.self="closeEditDialog">
+              <div class="modal">
+                <div class="modal-head">
+                  <div class="modal-title">编辑台词 · 镜头 #{{ String(editTarget.storyboard_number || editTarget.storyboardNumber || editTarget.id).padStart(2, '0') }}</div>
+                  <button class="btn btn-sm btn-ghost" @click="closeEditDialog">关闭</button>
+                </div>
+                <div class="modal-body">
+                  <div class="form-row">
+                    <label>每行一段对白, 格式: 角色名：台词。多个角色请分行。</label>
+                    <textarea class="textarea" v-model="editText" rows="7" placeholder="林达：您……您姓什么？&#10;王秀兰：王秀兰，八三年的。" @input="scheduleEditPreview" />
+                  </div>
+                  <div class="preview-box">
+                    <div class="preview-head">
+                      <span>解析预览</span>
+                      <span v-if="editPreviewing" class="dim">解析中…</span>
+                      <span v-else-if="editPreview" class="dim">{{ editPreview.segments.length }} 段</span>
+                      <button v-if="editPreview && editPreview.changed" class="btn btn-sm ml-auto" @click="applyNormalizedDialogue">应用建议格式</button>
+                    </div>
+                    <div v-if="editPreview && editPreview.suspect" class="tag-warning" style="padding:6px 10px; border-radius:6px; font-size:12px;">
+                      只解析出 1 段, 但文本里还有别的角色名 —— 多角色可能没分开, 建议手动分行
+                    </div>
+                    <div v-for="(seg, i) in (editPreview ? editPreview.segments : [])" :key="i" class="preview-row">
+                      <span class="preview-speaker">{{ seg.speaker }}</span>
+                      <span class="preview-text">{{ seg.text }}</span>
+                    </div>
+                    <div v-if="editPreview && !editPreview.segments.length" class="dim" style="font-size:12px;">解析不出对白 (会被当成没有台词, 不会生成配音)</div>
+                  </div>
+                </div>
+                <div class="modal-foot">
+                  <button class="btn" @click="closeEditDialog">取消</button>
+                  <button class="btn btn-primary" :disabled="editSaving" @click="saveEditDialog">{{ editSaving ? '保存中…' : '保存' }}</button>
                 </div>
               </div>
             </div>
@@ -2274,6 +2314,9 @@ const {
   getTTSSegments, getDialogueSpeaker,
   pendingTTSIds, isPendingTTS,
   genShotTTS, batchShotTTS,
+  getDialogueLineCount,
+  editTarget, editText, editPreview, editPreviewing, editSaving,
+  openEditDialog, closeEditDialog, scheduleEditPreview, applyNormalizedDialogue, saveEditDialog,
 } = useShotTTS({
   ctx: { sbs },
   refresh,
@@ -4879,4 +4922,69 @@ onMounted(() => { refresh() })
 .wizard-actions { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }
 .wizard-done { text-align: center; padding: 40px 20px; }
 .wizard-done p { font-size: 16px; color: #065f46; margin-bottom: 20px; }
+
+/* Sprint 18 Task C: 台词编辑弹窗 —— 样式照抄 components/VideoSchedulePlan.vue 的 modal 段
+   (那边是 scoped style, 跨组件用不了, 这里复制一份) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.modal {
+  background: var(--bg-1, #fff);
+  border-radius: 10px;
+  width: 560px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+.modal-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-title { font-weight: 600; font-size: 15px; }
+.modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.form-row { display: flex; flex-direction: column; gap: 6px; }
+.form-row label { font-size: 12px; color: var(--text-1); font-weight: 500; }
+.form-row .textarea { min-height: 120px; line-height: 1.7; }
+.preview-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-0);
+}
+.preview-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.preview-row { display: flex; gap: 8px; font-size: 12px; align-items: baseline; }
+.preview-speaker {
+  flex: 0 0 auto;
+  min-width: 64px;
+  font-weight: 600;
+  color: var(--accent-text, var(--text-1));
+}
+.preview-text { flex: 1; color: var(--text-1); word-break: break-word; }
 </style>
