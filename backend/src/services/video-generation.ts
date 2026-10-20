@@ -304,6 +304,11 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           refImageCount: resolvedReferenceImageUrls.length,
           audioCount: resolvedAudioUrls.length,
           fallbackReason: fallbackReason || null,
+          // Sprint 15: 最终 prompt 原样落 flow-log。
+          //   translated-prompt 那条日志打在【注入台词之前】, 光看它看不到台词时间轴,
+          //   而「prompt 里到底有没有台词+时间轴」正好是本单的验收点 —— 没有这条没法验。
+          //   truncateForLog 上限 200KB, prompt 上限 10000 字符, 不会被截。
+          prompt: truncateForLog(finalPrompt),
         })
         logTaskPayload('VideoTask', 'request payload', {
           id,
