@@ -568,6 +568,17 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
   - video_prompt_plot_state 写本镜剧情瞬时动作/表情/对话/物件状态 (跟 image_prompt_plot_state 字段分工一致)
   - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 跟 imagePrompt 拼接方式一致
   - 严禁把剧情动作塞到 video_prompt_permanent (后端拼不出剧情, 视频提示词没剧情); 严禁把摄影指令塞到 video_prompt_plot_state (冗余, 跟 permanent 重复)
+- Sprint 15 (PM msg-20261020-075): 对白嵌入 video_prompt (口型同步的文字侧前提)
+  - dialogue 字段里的每一句【角色台词】都必须按时间顺序写进 video_prompt_plot_state, 不能省略
+  - 格式: <角色动作>，开口:'<对白原文>' — 台词原文照抄 dialogue 字段, 不要改写/概括/翻译
+  - ⚠️ 旁白 (isNarrator 的段) 【不要】写进 video_prompt —— 旁白是画外音, 画面里没人张嘴;
+    写进去会让视频模型误以为要动嘴, 反而破坏口型同步
+  - 多角色多轮对白按 dialogue 字段里的出现顺序
+  - ⚠️ 台词念完的时长不要超过本镜 duration, 说不完的镜头把台词写短一点
+    (超时会在 flow-log 的 VideoTask/dialogue-exceeds-duration 里报出来)
+  - 说明: 后端还有一层代码兜底 (按 tts_segments 实测每段音频时长自动拼时间轴),
+    本条是让 LLM 输出的动作描述跟台词时序更契合, 两者互补。
+    即使本条没完全生效, 口型同步也不会彻底失效 —— 代码兜底仍然会把台词+时间轴拼进去。
 - Sprint 11 Task A (PM msg-20261016-001): sound_effect / bgm_prompt 必填 (无内容写 'N/A')
   - sound_effect: 该镜【画面内可听的声音】= 环境底噪 (雨声/风声/室内嗡鸣/街道车流) + diegetic 音效 (脚步声/门响/器物碰撞/角色喘息)
   - bgm_prompt: 该镜【配乐】= 配器 (钢琴/弦乐/电子/鼓组) + 速度 (缓慢/中速/急促) + 节奏 (稳定/渐进/骤变) + 动态变化 (渐强/渐弱/静默后爆发)
