@@ -366,6 +366,9 @@ export function applyDurationPolicy(
   } as const
   type DensityTier = keyof typeof SCENE_DENSITY_RULES
 
+  // 被阶段 1.5 调整过的 scene (阶段 3 要复查有没有被 Σ 收敛压回去)
+  const sceneAdjusted = new Map<number, { before: number; after: number; density: string }>()
+
   // 按 scene_id 分组 (保持 shots 顺序)
   const sceneGroups = new Map<number, number[]>()
   shots.forEach((sp, i) => {
@@ -415,6 +418,7 @@ export function applyDurationPolicy(
       shots[i].duration = next
       after += next
     })
+    sceneAdjusted.set(sceneId, { before: total, after, density })
     logTaskProgress('ShotDuration', 'scene-sum-adjusted', {
       sceneId,
       density,
@@ -436,6 +440,30 @@ export function applyDurationPolicy(
       : false),
   )
   shots.forEach((sp, i) => { sp.duration = converged[i] })
+
+  // ── 阶段 3: 复查场景 Σ 有没有又被收敛压出密度区间 ──
+  //   阶段 1.5 把场景 Σ 拉到区间里, 但阶段 2 的整集 Σ 收敛会按比例缩回来, 可能把场景 Σ 压出区间。
+  //   老路径也是这个顺序 (轴4.5 校验 → Σ 收敛), 强行反过来会破坏 episode target 收敛,
+  //   所以这里【不强制改】, 只告警让这事可见 —— 静默覆盖的话用户会以为密度规则生效了, 实际没有。
+  for (const [sceneId, indices] of sceneGroups) {
+    const adj = sceneAdjusted.get(sceneId)
+    if (!adj) continue
+    const fn = shots[indices[0]]?.intent_function || intentionByScene.get(sceneId)
+    const density = (fn && INTENTION_TEMPLATES[fn as DramaticFunctionKey]?.shotDensity) || 'medium'
+    const rule = SCENE_DENSITY_RULES[density as DensityTier]
+    if (!rule) continue
+    const total = indices.reduce((a, i) => a + (shots[i].duration || 0), 0)
+    if (total >= rule.sceneMinTotal && total <= rule.sceneMaxTotal) continue
+    logTaskWarn('ShotDuration', 'scene-sum-clipped-by-global-converge', {
+      sceneId,
+      density,
+      total,
+      targetRange: [rule.sceneMinTotal, rule.sceneMaxTotal],
+      adjustedTo: adj.after,
+      convergedTo: total,
+      hint: '场景 Σ 被整集 Σ 收敛压出了密度区间 —— 老路径同样是这个顺序 (轴4.5 → Σ 收敛), 只能靠调 episode target 解决',
+    })
+  }
 
   return converged.reduce((a, b) => a + b, 0)
 }
