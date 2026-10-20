@@ -38,6 +38,7 @@ import {
   buildContinuityBlock,
   buildResultBlock,
   ensureIntegratedHeader,
+  findLeakedProps,
   getRhythmFormula,
   insertIntoIntegratedSection,
 } from '../utils/storyboard-rules.js'
@@ -617,6 +618,19 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
      pan left/pan right/handheld/tilt up/tilt down + 景深 shallow f/1.8/standard f/4/deep f/8 +
      视角 eye-level/low angle/high angle/dutch tilt/over-shoulder/POV
      例: "MS 50mm, eye-level, slow dolly in, shallow f/1.8" —— 缺维度 H3 会自己补, 画面失控
+- Sprint 17 (PM msg-20261021-076) Task F: 补回老 storyboard_planner 的规则 (V4 重构时丢失)
+  ★ 道具时序 (轴5): 角色身上的"情节道具"只能在所属 scene 的 description 里被显式提到时, 才能在本镜出现;
+    character.description 里描述的情节瞬间 (例如"前爪按红色按钮"这种特定剧情动作/物体) 不算"角色固有道具",
+    首镜 frame/正文严禁默认带入; 违反 = 剧情时序错乱, 观众看不懂为什么某镜有某物
+  ★ 本镜窗口 (轴5.5): shot.action / description / result / atmosphere / dialogue 必须严格只描述本镜
+    [start_time, end_time] 时间窗口内的瞬时状态; 禁止包含 (a) 后续剧情高潮时刻的动作/表情/眼神
+    (例: 开场镜严禁写"复活后眼睛放光、嘴角咧开露出诡异笑意" —— 那是后续高潮镜的状态)
+    (b) 后续剧情才出现的道具 (例: 开场镜严禁写"爪子飞快按动按钮" —— 按钮是后续高潮镜才出现的)
+    (c) 角色 appearance 里夹杂的"剧情态瞬间"; 强制: 想象本镜只占 X 秒, 只写这 X 秒内的瞬时状态
+  ★ character_ids 必填: 画面里出现任何角色 (包括背景人影、远处轮廓), character_ids 必须用数字 ID 列出;
+    仅"纯环境空镜"(画面无任何角色/肢体/身影, 仅建筑/风景) 才能用空数组, 不允许用空数组偷懒
+  ★ 情绪景别 (轴2): 情绪越强 → 景别越近 + 运镜越慢 (ECU > CU > MS > MLS > WS)
+  ★ 节奏控制 (轴3): 动静结合, 关键处制造停顿 —— 不要"全程加速", 用停顿/慢推替代连切
 plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
 输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state, sound_effect, bgm_prompt}] }`
 
@@ -718,8 +732,9 @@ export async function runStep3(opts: {
   }
   const validatedDetails = revalidated.data
 
-  // Sprint 17 (PM msg-20261021-076) Task A/B/C: 注入需要 ctx
-  //   ctx.characters → 角色外貌 (Task A)
+  // Sprint 17 (PM msg-20261021-076) Task A/B/C/F: 注入 + 校验需要 ctx
+  //   ctx.characters → 角色外貌 (Task A) + character_ids 反查 (Task F③)
+  //   ctx.scenes[].prompt → 场景 description (Task F① 道具时序校验的"合法来源")
   const ctx = await readStoryboardContextForPlanner(episodeId, dramaId)
 
   // ── Sprint 11 R1/R2/R3 (PM msg-20261016-002): 时长体系接入 V4 新链路 ──
@@ -772,6 +787,58 @@ export async function runStep3(opts: {
     const resultBlock = buildResultBlock(det.result)
     const rhythmFormula = getRhythmFormula(det.intent_function)
     const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join(' ')
+
+    // ── Sprint 17 Task F③: character_ids 必填 (老路径 character_ids 必填规则) ──
+    //   画面里画了角色 (image_prompt_permanent.character_traits 非空) 却给空数组 → 反查补齐 + warn
+    let characterIds = det.character_ids || []
+    if (characterIds.length === 0) {
+      const traitCount = cleaned.imagePromptPermanent?.character_traits?.length || 0
+      if (traitCount > 0) {
+        const mentionText = `${det.description || ''} ${det.action || ''} ${det.dialogue || ''}`
+        const recovered = ctx.characters
+          .filter((c) => c.name && c.name.length >= 2 && mentionText.includes(c.name))
+          .map((c) => c.id)
+        if (recovered.length > 0) {
+          characterIds = recovered
+          logTaskWarn('StoryboardPlanner', 'character-ids-recovered', {
+            episodeId,
+            shotNumber: det.shot_number,
+            recovered,
+            traitCount,
+            hint: '本镜画了角色但 character_ids 为空, 已按正文里的角色名反查补齐 (老路径 character_ids 必填规则)',
+          })
+        } else {
+          logTaskWarn('StoryboardPlanner', 'character-ids-empty-but-traits', {
+            episodeId,
+            shotNumber: det.shot_number,
+            traitCount,
+            hint: '本镜 character_traits 非空 (画了角色) 但 character_ids 为空 且正文里找不到角色名 —— 人工确认画面里到底有没有角色',
+          })
+        }
+      }
+    }
+
+    // ── Sprint 17 Task F①: 道具时序 (老路径 轴5) ──
+    //   本镜出现的"情节道具", 如果所属 scene 的 description 没提过、前面同场景镜头也没提过 → 提前泄露 warn
+    const sceneDescription = ctx.scenes.find((s) => s.id === det.scene_id)?.prompt || ''
+    const earlierSceneTexts = validatedDetails
+      .slice(0, idx)
+      .filter((d) => d.scene_id === det.scene_id)
+      .map((d) => `${d.description || ''} ${d.image_prompt_plot_state || ''}`)
+    const leakedProps = findLeakedProps(
+      `${det.description || ''} ${det.image_prompt_plot_state || ''} ${det.video_prompt_plot_state || ''}`,
+      sceneDescription,
+      earlierSceneTexts,
+    )
+    if (leakedProps.length > 0) {
+      logTaskWarn('StoryboardPlanner', 'prop-leaked-before-scene-mention', {
+        episodeId,
+        shotNumber: det.shot_number,
+        sceneId: det.scene_id,
+        props: leakedProps,
+        hint: '本镜出现了场景 description 里还没提过的道具 (老路径 轴5 道具时序) —— 词表不全, 只告警不拦截, 人工确认是否剧情时序错乱',
+      })
+    }
 
     // ── video_prompt 拼装 (Sprint 17: 补 Integrated header + 3 个注入段) ──
     let videoPromptText = ensureIntegratedHeader(
@@ -838,7 +905,7 @@ export async function runStep3(opts: {
         createdAt: now(),
         updatedAt: now(),
       },
-      characterIds: det.character_ids || [],
+      characterIds,
     }
   })
 

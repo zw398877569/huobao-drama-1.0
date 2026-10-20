@@ -45,6 +45,8 @@ import {
 import { estimateTargetDuration } from '../lib/episode-duration-estimator.js'
 import { INTENTION_TEMPLATES, type DramaticFunctionKey } from '../agents/director-intent-templates.js'
 import { classifyEpisodeScenes, type EpisodeSceneData, type SceneTag } from '../lib/scene-classifier.js'
+// Sprint 17 (PM msg-20261021-076) Task F④: 场景 Σ 密度区间约束 (老路径 轴4.5) 的告警
+import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 
 export { VIDEO_MIN_DURATION, VIDEO_MAX_DURATION }
 
@@ -341,6 +343,89 @@ export function applyDurationPolicy(
     candidate = applySceneTransitionBonus(candidate, firstInSceneIndices.has(i))
     sp.duration = Math.max(VIDEO_MIN_DURATION, Math.min(VIDEO_MAX_DURATION, candidate))
   })
+
+  // ── 阶段 1.5: 场景 Σ 密度区间 (Sprint 17 Task F④, 老路径 轴4.5) ──
+  //   老路径 agents/index.ts:1054-1062 的 scene 密度软联动约束:
+  //     low    (铺垫/余韵/悬念):      单镜 ≥8s, 本场景 Σ 25-50s
+  //     medium (揭露/对峙):          单镜 ≥5s, 本场景 Σ 15-35s
+  //     high   (反转/高潮/情感爆发):  单镜 ≥3s, 本场景 Σ 10-25s
+  //
+  //   老路径的做法是【抛错让 planner retry】(agents/tools/storyboard-tools.ts:893-940)。
+  //   V4 路径改成【自动拉伸/压缩】(PM Task F④ 拍板) —— retry 一次要 +3~5 分钟,
+  //   Sprint 16 实测整集拆解已经跑到 700s, 不能再来一轮整集重试。
+  //
+  //   ⚠️ 只管【场景 Σ 区间】, 不动单镜下限:
+  //      - 单镜时长由 R1 的五因子估算负责 (景别 baseline × 密度 × 运镜 × 对白下限)
+  //      - 老路径的"低密度场景单镜 ≥8s"会把悬念戏的特写也拉成 8s, 节奏反而更平
+  //      - PM 明确要求"不破坏 Sprint 11 R1/R2/R3 的单镜时长逻辑"
+  //      → 单镜下限违反只告警, 由人工决定要不要拉长
+  const SCENE_DENSITY_RULES = {
+    high:   { minMirror: 3, sceneMinTotal: 10, sceneMaxTotal: 25 },
+    medium: { minMirror: 5, sceneMinTotal: 15, sceneMaxTotal: 35 },
+    low:    { minMirror: 8, sceneMinTotal: 25, sceneMaxTotal: 50 },
+  } as const
+  type DensityTier = keyof typeof SCENE_DENSITY_RULES
+
+  // 按 scene_id 分组 (保持 shots 顺序)
+  const sceneGroups = new Map<number, number[]>()
+  shots.forEach((sp, i) => {
+    if (typeof sp.scene_id !== 'number') return
+    const list = sceneGroups.get(sp.scene_id)
+    if (list) list.push(i)
+    else sceneGroups.set(sp.scene_id, [i])
+  })
+
+  for (const [sceneId, indices] of sceneGroups) {
+    // 密度档: 优先用【本场景第一镜】的 intent_function (老路径口径: 场景功能是本场所有镜头的叙事锚),
+    //   拿不到再退回 DB 里的 scene_intention.function。
+    const firstShotFn = shots[indices[0]]?.intent_function
+    const fn = firstShotFn || intentionByScene.get(sceneId)
+    const density = (fn && INTENTION_TEMPLATES[fn as DramaticFunctionKey]?.shotDensity) || 'medium'
+    const rule = SCENE_DENSITY_RULES[density as DensityTier]
+    if (!rule) continue
+
+    const total = indices.reduce((a, i) => a + (shots[i].duration || 0), 0)
+    if (total <= 0) continue
+
+    // 单镜下限: 只告警不动 (见上面说明)
+    const minShot = Math.min(...indices.map((i) => shots[i].duration || 0))
+    if (minShot < rule.minMirror) {
+      logTaskWarn('ShotDuration', 'scene-shot-below-density-floor', {
+        sceneId,
+        density,
+        minShot,
+        floor: rule.minMirror,
+        shotNumbers: indices.map((i) => shots[i].shot_type),
+        hint: '本场景有镜头短于该密度档的单镜下限 —— 老路径轴4.5 的要求, 这里只告警不自动改 (R1 五因子估算负责单镜)',
+      })
+    }
+
+    let scale = 1
+    if (total < rule.sceneMinTotal) scale = rule.sceneMinTotal / total
+    else if (total > rule.sceneMaxTotal) scale = rule.sceneMaxTotal / total
+    if (Math.abs(scale - 1) < 0.01) continue
+
+    // 拉伸时保 VIDEO_MAX, 压缩时保 VIDEO_MIN
+    let after = 0
+    indices.forEach((i) => {
+      const cur = shots[i].duration || 0
+      let next = Math.round(cur * scale)
+      if (scale < 1) next = Math.max(VIDEO_MIN_DURATION, next)
+      else next = Math.min(VIDEO_MAX_DURATION, next)
+      shots[i].duration = next
+      after += next
+    })
+    logTaskProgress('ShotDuration', 'scene-sum-adjusted', {
+      sceneId,
+      density,
+      before: total,
+      after,
+      targetRange: [rule.sceneMinTotal, rule.sceneMaxTotal],
+      scale: Math.round(scale * 100) / 100,
+      shotCount: indices.length,
+      hint: '老路径轴4.5 场景Σ密度区间 —— V4 路径自动拉伸/压缩 (老路径是抛错重试, 这里改成自动修正)',
+    })
+  }
 
   // ── 阶段 2: Σ 收敛 (钩子镜豁免)  [R2]
   const converged = convergeShotDurations(
