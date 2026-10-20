@@ -1,6 +1,8 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
+// Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
+import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -206,6 +208,58 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             logTaskWarn('VideoTask', 'translation-failed', { id, error: err.message })
             // translation failure is non-fatal, use original prompt
           }
+        }
+
+        // Sprint 15 (PM msg-20261020-075): 台词 + 时间轴注入。
+        //   放在【翻译之后】是刻意的: translateVideoPromptToEnglish 只保护 开口:'...' 引号里的正文,
+        //   时间码在引号外, 让翻译器过一遍有被改写/丢掉的风险。翻译完再拼 = 时间轴完全可控。
+        //   (台词本身保持中文 —— 音频是中文配音, 台词翻成英文反而对不上嘴型)
+        //   绝不因这一步失败而中断视频生成, 所以整段包 try/catch。
+        try {
+          const timeline = await buildStoryboardDialogueTimeline(vRecord.id, vRecord.storyboardId)
+          logTaskProgress('VideoTask', 'dialogue-timeline', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            segments: timeline.count,
+            totalSec: timeline.totalSec,
+            skipped: timeline.skippedCount,
+            filtered: timeline.filteredCount,
+            injected: !!timeline.text,
+          })
+
+          if (timeline.text) {
+            // Sprint 15 Task D (PM 拍板: 只报告不自动改 duration):
+            //   台词比视频长时 H3 只能截断, 后半句说不完。让用户知道哪些镜头有这个问题。
+            const videoSec = Number(vRecord.duration || 0)
+            if (videoSec > 0 && timeline.totalSec > videoSec) {
+              logTaskWarn('VideoTask', 'dialogue-exceeds-duration', {
+                id,
+                storyboardId: vRecord.storyboardId,
+                audioSec: timeline.totalSec,
+                videoSec,
+                overflowSec: Math.round((timeline.totalSec - videoSec) * 10) / 10,
+                hint: '台词比视频长, 后半句可能说不完或被截断 (PM 拍板不自动改 duration, 需人工调该镜时长)',
+              })
+            }
+
+            finalPrompt = injectDialogueTimeline(finalPrompt, timeline.text)
+            if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
+              logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
+                id,
+                storyboardId: vRecord.storyboardId,
+                chars: finalPrompt.length,
+                limit: H3_PROMPT_MAX_CHARS,
+                hint: '加了台词后超过 H3 prompt 上限, 平台可能截断; 考虑拆短该镜台词',
+              })
+            }
+          }
+        } catch (err: any) {
+          logTaskWarn('VideoTask', 'dialogue-timeline-failed', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            error: err.message,
+            hint: '台词时间轴拼装失败, 本次不带台词生成 (视频照常出, 只是口型可能对不上)',
+          })
         }
 
         const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
@@ -461,6 +515,33 @@ async function resolveStoryboardAudioUrls(
   if (!raw) return []
   const normalized = await normalizeVideoReferenceUrl(vRecordId, raw, 'audio')
   return normalized ? [normalized] : []
+}
+
+/**
+ * Sprint 15: 取本镜台词时间轴, 并格式化成能直接注入 prompt 的字符串。
+ *
+ * 跟 resolveStoryboardAudioUrls 分开而不是合并 —— 两者读的是同一行 storyboards,
+ * 但一个产出 URL (Sprint 14 给 ref_audio_0) 一个产出文本 (Sprint 15 拼 prompt),
+ * 拆开各自好测也好改。视频生成本身要跑几分钟, 多一次主键查询无所谓。
+ *
+ * 没配音 / 没拆段 / 解析失败 → 全部返回空, 调用方一个字都不加, 行为跟 Sprint 14 之前完全一致。
+ */
+async function buildStoryboardDialogueTimeline(
+  vRecordId: number,
+  storyboardId: number | null | undefined,
+): Promise<{ text: string; count: number; totalSec: number; skippedCount: number; filteredCount: number }> {
+  const empty = { text: '', count: 0, totalSec: 0, skippedCount: 0, filteredCount: 0 }
+  if (!storyboardId) return empty
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+  if (!sb?.ttsSegments) return empty
+  const result = await buildDialogueTimeline(sb.ttsSegments, storyboardId)
+  return {
+    text: formatDialogueTimeline(result.items),
+    count: result.items.length,
+    totalSec: result.totalSec,
+    skippedCount: result.skippedCount,
+    filteredCount: result.filteredCount,
+  }
 }
 
 async function normalizeVideoReferenceUrls(raw: string | null | undefined): Promise<string[]> {
