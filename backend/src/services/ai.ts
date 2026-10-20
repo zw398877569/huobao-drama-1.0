@@ -297,8 +297,9 @@ async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): P
           { role: 'user', content: userPrompt },
         ],
         temperature: 0,
-        // 800 在中文角色 prompt + think overhead 下必截。提到 2000 给足缓冲。
-        max_tokens: 2000,
+        // 800 在中文角色 prompt + think overhead 下必截。先提到 2000, sprint 16 加了对齐职责
+        // (要按时间轴重写描述) 再提到 2600 留余量 —— 截断会直接毁掉整个 prompt。
+        max_tokens: 2600,
         // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染翻译结果 (与 prompt-sanitizer.ts:296 一致)
         extra_body: { reasoning: { enabled: false } },
       }),
@@ -372,16 +373,28 @@ export async function translateImagePromptToEnglish(prompt: string): Promise<str
  *   - 删掉 speaker 前缀 (如 "年轻人:" 应被剥掉, 只保留台词)
  */
 export async function translateVideoPromptToEnglish(prompt: string): Promise<string> {
+  // Sprint 16 (PM msg-20261020-072) 在原有翻译职责上加了「描述/说话时间轴对齐」:
+  //   翻译本质就是改写整个 prompt, 让同一次调用顺手把 integrated 描述里的角色动作
+  //   跟末尾的说话时间轴对齐 —— 等于白捡一次对齐, 不额外花 LLM 调用。
+  //   不对齐的后果 (QA 2026-10-20 实测): 描述写 "Linda sits completely still" 而音频里
+  //   Linda 在说话, H3 两个都看到了 -> 画面让另一个人动嘴, 音频是 Linda 的声音。
   const systemPrompt = (
-    'You are translating a video generation prompt for an AI video model. '
+    'You are translating AND aligning a video generation prompt for an AI video model. '
     + 'Preserve the three H3 sections exactly with their English headers: '
     + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
-    + 'Keep XML-style tags intact: <n>0-3s</n> timecodes, <location>X</location>, '
+    + 'Keep XML-style tags intact: <n>0-3s</n> and <n>0-3秒：</n> timecodes, <location>X</location>, '
     + '<role>X</role>, <voice>X</voice>. '
     + 'CRITICAL: Dialogue inside 开口:\'...\' or <d>...</d> tags MUST stay in the '
     + 'ORIGINAL language — do NOT translate the spoken words. Translate only the '
     + 'surrounding action/description. Strip speaker name prefix (e.g. "年轻人:" '
     + 'before the line should be removed, keep only the spoken words). '
+    + 'SPEAKING SCHEDULE (critical): the user text ends with a schedule of segments like '
+    + '<n>0-4秒：王秀兰开口:\'...\'</n>. That schedule is the AUTHORITATIVE source of who speaks when. '
+    + 'Rewrite the Integrated multimodal description so it AGREES with the schedule: '
+    + 'inside each time range, the speaker named in the schedule must be the one talking / moving their mouth; '
+    + 'never describe a speaking character as still, motionless, silent, or not moving; '
+    + 'and never describe a non-speaking character as talking. '
+    + 'Keep the schedule segments themselves byte-identical (same timecodes, same speaker names, same dialogue text). '
     + 'Output ONLY the English translation, no commentary, no thinking blocks.'
   )
   return callTextLLMForPrompt(prompt, systemPrompt)

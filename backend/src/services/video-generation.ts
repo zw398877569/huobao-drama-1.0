@@ -2,7 +2,7 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
-import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
+import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -196,27 +196,22 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         // Sprint 14: 配音音频 (口型同步)。自由创作 (source='free') 没 storyboard, 天然拿不到。
         const resolvedAudioUrls = await resolveStoryboardAudioUrls(vRecord.id, vRecord.storyboardId)
 
-        // 提示词翻译: 非英文 prompt 先翻译为英文再发给 Agnes
-        // 自由创作模式跳过翻译 — 用户自己控制中英文, 不要静默改写原文
-        let finalPrompt: string = vRecord.prompt || ''
-        if (!isFree && hasNonEnglishChars(finalPrompt)) {
-          try {
-            logTaskProgress('VideoTask', 'translating-prompt', { id, original: truncateForLog(finalPrompt) })
-            finalPrompt = await translateVideoPromptToEnglish(finalPrompt)
-            logTaskProgress('VideoTask', 'translated-prompt', { id, translated: truncateForLog(finalPrompt) })
-          } catch (err: any) {
-            logTaskWarn('VideoTask', 'translation-failed', { id, error: err.message })
-            // translation failure is non-fatal, use original prompt
-          }
-        }
+        // 翻译决策仍然只看【原始】prompt —— 台词时间轴是中文的, 如果拿注入后的文本去判断,
+        // 会把「本来是纯英文的 prompt」也拖进翻译, 属于本单不该引入的行为变化。
+        const shouldTranslate = !isFree && hasNonEnglishChars(vRecord.prompt || '')
 
-        // Sprint 15 (PM msg-20261020-075): 台词 + 时间轴注入。
-        //   放在【翻译之后】是刻意的: translateVideoPromptToEnglish 只保护 开口:'...' 引号里的正文,
-        //   时间码在引号外, 让翻译器过一遍有被改写/丢掉的风险。翻译完再拼 = 时间轴完全可控。
-        //   (台词本身保持中文 —— 音频是中文配音, 台词翻成英文反而对不上嘴型)
-        //   绝不因这一步失败而中断视频生成, 所以整段包 try/catch。
+        // Sprint 16 (PM msg-20261020-072) A2 合并版: 台词时间轴挪到【翻译之前】注入。
+        //   为什么挪: 这一步之后本来就有一次 LLM 调用 (提示词翻译, 实测 13s), 而「翻译」本质就是
+        //   改写 prompt —— 让同一次调用顺手把「描述里的角色动作」跟「说话时间轴」对齐,
+        //   等于白捡一次对齐, 不额外花 LLM 调用 (独立做要再 +13s/镜)。
+        //   Sprint 15 选「翻译后注入」是为了保护时间码不被翻译器改, 现在改用:
+        //     翻译 system prompt 里显式要求保留时间码 + 做对齐
+        //     + 翻译后校验 开口: 数量, 对不上就 warn 并降级补注 (见下面)
+        let promptWithTimeline = vRecord.prompt || ''
+        let timelineText = ''
+        let dialogueMarkersBefore = 0
         try {
-          const timeline = await buildStoryboardDialogueTimeline(vRecord.id, vRecord.storyboardId)
+          const timeline = await buildStoryboardDialogueTimeline(vRecord.id, vRecord.storyboardId, vRecord.duration)
           logTaskProgress('VideoTask', 'dialogue-timeline', {
             id,
             storyboardId: vRecord.storyboardId,
@@ -224,11 +219,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             totalSec: timeline.totalSec,
             skipped: timeline.skippedCount,
             filtered: timeline.filteredCount,
+            truncated: timeline.truncatedCount,
             injected: !!timeline.text,
           })
 
           if (timeline.text) {
-            // Sprint 15 Task D (PM 拍板: 只报告不自动改 duration):
+            // Sprint 15 Task D (PM 拍板只报告不自动改 duration):
             //   台词比视频长时 H3 只能截断, 后半句说不完。让用户知道哪些镜头有这个问题。
             const videoSec = Number(vRecord.duration || 0)
             if (videoSec > 0 && timeline.totalSec > videoSec) {
@@ -238,20 +234,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
                 audioSec: timeline.totalSec,
                 videoSec,
                 overflowSec: Math.round((timeline.totalSec - videoSec) * 10) / 10,
-                hint: '台词比视频长, 后半句可能说不完或被截断 (PM 拍板不自动改 duration, 需人工调该镜时长)',
+                hint: '台词比视频长, 后半句可能说不完或被截断 (PM 拍板不自动改 duration, 需人工调该镜时长; 时间轴已按 duration 截断)',
               })
             }
-
-            finalPrompt = injectDialogueTimeline(finalPrompt, timeline.text)
-            if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
-              logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
-                id,
-                storyboardId: vRecord.storyboardId,
-                chars: finalPrompt.length,
-                limit: H3_PROMPT_MAX_CHARS,
-                hint: '加了台词后超过 H3 prompt 上限, 平台可能截断; 考虑拆短该镜台词',
-              })
-            }
+            timelineText = timeline.text
+            promptWithTimeline = injectDialogueTimeline(promptWithTimeline, timelineText)
+            dialogueMarkersBefore = countDialogueMarkers(promptWithTimeline)
           }
         } catch (err: any) {
           logTaskWarn('VideoTask', 'dialogue-timeline-failed', {
@@ -259,6 +247,42 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             storyboardId: vRecord.storyboardId,
             error: err.message,
             hint: '台词时间轴拼装失败, 本次不带台词生成 (视频照常出, 只是口型可能对不上)',
+          })
+        }
+
+        // 提示词翻译 + (Sprint 16) 描述/时间轴对齐, 一次 LLM 调用完成
+        // 自由创作模式跳过翻译 — 用户自己控制中英文, 不要静默改写原文
+        let finalPrompt: string = promptWithTimeline
+        if (shouldTranslate) {
+          try {
+            logTaskProgress('VideoTask', 'translating-prompt', { id, original: truncateForLog(promptWithTimeline) })
+            finalPrompt = await translateVideoPromptToEnglish(promptWithTimeline)
+            // Sprint 16: 校验翻译器有没有把台词整段吃掉。吃掉了 prompt 会静默变回「没有台词」,
+            //   口型又对不上且零报错 —— 所以必须数一遍, 对不上就 warn 并把中文时间轴补回去。
+            if (dialogueMarkersBefore > 0 && countDialogueMarkers(finalPrompt) < dialogueMarkersBefore) {
+              logTaskWarn('VideoTask', 'dialogue-timeline-lost-in-translation', {
+                id,
+                storyboardId: vRecord.storyboardId,
+                before: dialogueMarkersBefore,
+                after: countDialogueMarkers(finalPrompt),
+                hint: '翻译后台词标记变少, 已把中文时间轴补回; 本镜描述未跟时间轴对齐 (对齐要靠翻译器, 这次没成功)',
+              })
+              finalPrompt = injectDialogueTimeline(finalPrompt, timelineText)
+            }
+            logTaskProgress('VideoTask', 'translated-prompt', { id, translated: truncateForLog(finalPrompt) })
+          } catch (err: any) {
+            logTaskWarn('VideoTask', 'translation-failed', { id, error: err.message })
+            // translation failure is non-fatal, use original prompt (此时 promptWithTimeline 已含中文时间轴)
+          }
+        }
+
+        if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
+          logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            chars: finalPrompt.length,
+            limit: H3_PROMPT_MAX_CHARS,
+            hint: '加了台词后超过 H3 prompt 上限, 平台可能截断; 考虑拆短该镜台词',
           })
         }
 
@@ -534,18 +558,22 @@ async function resolveStoryboardAudioUrls(
 async function buildStoryboardDialogueTimeline(
   vRecordId: number,
   storyboardId: number | null | undefined,
-): Promise<{ text: string; count: number; totalSec: number; skippedCount: number; filteredCount: number }> {
-  const empty = { text: '', count: 0, totalSec: 0, skippedCount: 0, filteredCount: 0 }
+  videoDuration?: number | null,
+): Promise<{ text: string; count: number; totalSec: number; skippedCount: number; filteredCount: number; truncatedCount: number }> {
+  const empty = { text: '', count: 0, totalSec: 0, skippedCount: 0, filteredCount: 0, truncatedCount: 0 }
   if (!storyboardId) return empty
   const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
   if (!sb?.ttsSegments) return empty
-  const result = await buildDialogueTimeline(sb.ttsSegments, storyboardId)
+  // videoDuration 传进去是为了让时间码不超出画面时长 (Sprint 16) —— prompt 写到 9.7s 而
+  // H3 只生成 9s 画面, 多出来的时间码没有意义。totalSec 仍报真实音频总时长, overflow 告警靠它。
+  const result = await buildDialogueTimeline(sb.ttsSegments, storyboardId, videoDuration)
   return {
     text: formatDialogueTimeline(result.items),
     count: result.items.length,
     totalSec: result.totalSec,
     skippedCount: result.skippedCount,
     filteredCount: result.filteredCount,
+    truncatedCount: result.truncatedCount,
   }
 }
 
