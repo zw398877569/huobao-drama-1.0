@@ -1,4 +1,10 @@
 /**
+ * Sprint 16 (PM msg-20261020-072) 补正了两处 Sprint 15 的问题:
+ *   1) <n> 标签格式: Sprint 15 用了闭合形式 <n>0-4s</n>, 但本项目【一直】用不闭合形式
+ *      (skills/storyboard_breaker/SKILL.md + planner prompt + 全量拆解路径 都是 `<n>0-3秒：内容`),
+ *      <n> 是「段落分隔符」不是自闭合标签。两种混在一个 prompt 里 H3 会解析不一致。
+ *   2) 时间轴可能超出视频时长 (音频 9.7s / 视频 9s), 现在按 maxSec 截断。
+ *
  * Sprint 15 (PM msg-20261020-075): 台词时间轴
  *
  * 把 storyboards.tts_segments 的每段配音换算成 [startSec, endSec] 区间, 拼进 video_prompt
@@ -37,12 +43,14 @@ export interface DialogueTimelineItem {
 
 export interface DialogueTimelineResult {
   items: DialogueTimelineItem[]
-  /** 全部有效段累加的总时长 (= 拼接音频时长, 不含 lead-in / gap) */
+  /** 全部有效段累加的总时长 (= 拼接音频时长, 不含 lead-in / gap, 不受 maxSec 截断影响) */
   totalSec: number
   /** 因为文件缺失/测不到时长被跳过的段数 */
   skippedCount: number
   /** 解析或过滤掉的段数 (含旁白) */
   filteredCount: number
+  /** 因为超出 maxSec 被丢弃或截断的段数 */
+  truncatedCount: number
 }
 
 /**
@@ -79,8 +87,10 @@ function round1(n: number): number {
 export async function buildDialogueTimeline(
   ttsSegmentsJson: string | null | undefined,
   storyboardId: number | null | undefined,
+  /** 视频时长上限 (秒)。超过这个点的段会被截断/丢弃 —— prompt 时间码不能超出画面时长 */
+  maxSec?: number | null,
 ): Promise<DialogueTimelineResult> {
-  const empty: DialogueTimelineResult = { items: [], totalSec: 0, skippedCount: 0, filteredCount: 0 }
+  const empty: DialogueTimelineResult = { items: [], totalSec: 0, skippedCount: 0, filteredCount: 0, truncatedCount: 0 }
   if (!ttsSegmentsJson) return empty
 
   let parsed: any
@@ -98,7 +108,9 @@ export async function buildDialogueTimeline(
   const items: DialogueTimelineItem[] = []
   let skippedCount = 0
   let filteredCount = 0
+  let truncatedCount = 0
   let cursor = 0
+  const cap = maxSec && maxSec > 0 ? maxSec : null
 
   for (const seg of parsed) {
     const speaker = String(seg?.speaker || '').trim()
@@ -138,21 +150,33 @@ export async function buildDialogueTimeline(
 
     const startSec = round1(cursor)
     cursor += durationSec
-    items.push({ speaker, text, startSec, endSec: round1(cursor) })
+
+    // Sprint 16: 音频可能比视频长 (shot 17 = 9.7s 音频 / 9s 视频)。
+    //   prompt 里的时间码超出画面时长没有意义 —— H3 只会生成 duration 那么长的画面,
+    //   多出来的时间轴要么被忽略, 要么把后面的段落挤出画面。
+    //   整段都在画面之外 → 丢弃; 跨边界 → 保留但把 endSec 收到 duration (台词说不完, 但至少位置对)
+    if (cap != null && startSec >= cap) {
+      truncatedCount++
+      continue
+    }
+    const endSec = cap != null ? Math.min(round1(cursor), round1(cap)) : round1(cursor)
+    if (cap != null && round1(cursor) > round1(cap)) truncatedCount++
+    items.push({ speaker, text, startSec, endSec })
   }
 
-  return { items, totalSec: round1(cursor), skippedCount, filteredCount }
+  return { items, totalSec: round1(cursor), skippedCount, filteredCount, truncatedCount }
 }
 
 /**
  * 格式化成 H3 认识的台词段。
  *
- * 格式: `<n>0.0-3.9s</n> 王秀兰开口:'我姓王,八三年的。'`
+ * 格式: `<n>0-4秒：王秀兰开口:'我姓王,八三年的。'`
  *
- * 为什么用 `<n>` 时间码而不是工单原写的 `王秀兰开口:'台词'(0.0-3.9s)`:
- *   `<n>` 分段是本项目【已经在用】的 H3 描述段时间码格式 (planner prompt 让 LLM 按 <n> 分段,
- *   translateVideoPromptToEnglish 也专门保护 <n>0-3s</n> 不让翻译器改), H3 对这个格式最熟;
- *   而时间轴挂在引号后面容易被当成台词的一部分被念出来。
+ * ⚠️ Sprint 16 修正: Sprint 15 用的是闭合形式 `<n>0-4s</n> ...`, 但本项目【一直】用不闭合形式
+ *   (skills/storyboard_breaker/SKILL.md:48-49 + planner prompt + 全量拆解路径 都是
+ *   `<n>3-6秒：内容`) —— <n> 在 H3 这里是「段落分隔符」, 不是自闭合标签。
+ *   两种写法混在同一个 prompt 里 H3 会按不同规则切段, 反而更乱。
+ *   这里统一成项目规范 (中文「秒」+ 全角冒号), 因为注入发生在【翻译之前】, 此时 prompt 是中文的。
  *
  * 引号转义: 外层用 ASCII 单引号, 所以正文里的 ASCII 单引号要换成全角, 否则闭合错乱。
  *   中文引号 “” 原样保留 (不影响解析, 也是原文语义)。
@@ -162,9 +186,21 @@ export function formatDialogueTimeline(items: DialogueTimelineItem[]): string {
     .map((it) => {
       const safeText = it.text.replace(/'/g, '’')
       const who = it.speaker || '角色'
-      return `<n>${it.startSec}-${it.endSec}s</n> ${who}开口:'${safeText}'`
+      return `<n>${it.startSec}-${it.endSec}秒：${who}开口:'${safeText}'`
     })
     .join(' ')
+}
+
+/**
+ * 数 prompt 里还剩几个「开口:」标记。
+ *
+ * 用途 (Sprint 16): 台词时间轴现在在【翻译之前】注入, 万一翻译器把它整段吃掉,
+ *   prompt 会静默变回「没有台词」的样子 —— 口型又对不上, 而且没有任何报错。
+ *   所以翻译前后各数一次, 对不上就 warn + 走降级补注。
+ */
+export function countDialogueMarkers(prompt: string): number {
+  const m = prompt.match(/开口:/g)
+  return m ? m.length : 0
 }
 
 /**
@@ -178,16 +214,48 @@ export function formatDialogueTimeline(items: DialogueTimelineItem[]): string {
  * 匹配大小写/分隔符不敏感 (翻译器可能写出 Overall_Soundscape: / OVERALL SOUNDSCAPE:)。
  */
 export function injectDialogueTimeline(prompt: string, timelineText: string): string {
-  const timeline = (timelineText || '').trim()
-  if (!timeline) return prompt
+  return insertIntoIntegrated(prompt, (timelineText || '').trim())
+}
+
+/**
+ * Sprint 16 / Bug-B: 把【原始台词】按 saveStoryboards 已有的格式嵌进 integrated 段。
+ *
+ * 背景: 全量拆解路径 (storyboard-tools.ts:1010 saveStoryboards) 一直有 dialogueInline,
+ *   但另外两条构造 video_prompt 的路径都没有 ——
+ *     - updateStoryboard (单镜头重拆, sprint-10 加的增量功能)
+ *     - storyboard-planner-service (V4 planner 全量拆解)
+ *   两条路径产出的 video_prompt 都不含台词, 而 H3 是靠 prompt 里的台词决定谁张嘴的。
+ *
+ * 格式跟 saveStoryboards 保持一致 (` 开口:'...'` 拼在动作描述后), 三条路径最终收敛成同一种形状。
+ * 没台词 → 原样返回, 不改变任何现有行为。
+ */
+export function embedDialogueInline(prompt: string, dialogue: string | null | undefined): string {
+  const d = (dialogue || '').trim()
+  if (!d) return prompt
+  // 已经有 开口: 就别再嵌一遍 —— planner 路径的 Step2 prompt (sprint-15-a) 已经要求 LLM
+  // 自己把台词写进 video_prompt_plot_state, LLM 照做了的话再补一次就成了重复台词。
+  if (countDialogueMarkers(prompt) > 0) return prompt
+  return insertIntoIntegrated(prompt, `开口:'${d.replace(/'/g, '’')}'`)
+}
+
+/**
+ * 往 H3 三段式 prompt 的【描述段】末尾插一段文本。
+ *
+ * ⚠️ 不能插到 prompt 末尾 —— 末尾是 Non-diegetic music 段, 台词掉进去 H3 会当成配乐描述
+ *   (Sprint 15 调研发现的坑)。header 匹配大小写/分隔符不敏感 (翻译器会写出
+ *   Overall_Soundscape: / OVERALL SOUNDSCAPE: 等变体)。
+ */
+function insertIntoIntegrated(prompt: string, text: string): string {
+  const block = (text || '').trim()
+  if (!block) return prompt
 
   const headerRe = /^[ \t]*(?:overall[\s_-]+soundscape|non[\s_-]+diegetic[\s_-]+music)[\s_-]*:/im
   const m = headerRe.exec(prompt)
   if (m && m.index != null) {
     const head = prompt.slice(0, m.index).trimEnd()
     const tail = prompt.slice(m.index)
-    return `${head}\n\n${timeline}\n\n${tail}`
+    return `${head}\n\n${block}\n\n${tail}`
   }
   // 没有三段式 header (比如自由创作没走 ensureH3ThreePartPrompt) → 直接接在末尾
-  return `${prompt.trimEnd()}\n\n${timeline}`
+  return `${prompt.trimEnd()}\n\n${block}`
 }
