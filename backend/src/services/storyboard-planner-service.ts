@@ -599,6 +599,24 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
     补 "Overall soundscape:" (取 sound_effect) + "Non-diegetic music:" (取 bgm_prompt) 两段 header
   - 背景: V4 重构时这两字段遗落, episode 12 的 19/19 video_prompt 缺三段式 header,
     H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)
+- Sprint 17 (PM msg-20261021-076) Task D: V4 重构时丢失的 5 条影视规则 —— 补回, 违反 = 镜头作废
+  ① 镜头顺序铁律 (老路径 二): 场景切换的开头第一镜必须是全景(交代地点), 不要一上来就切特写;
+     同一场景内的镜头顺序遵循"建立关系 → 进入情绪"; 避免"全景→特写→中景"这种无逻辑跳切
+  ② 单镜头硬约束 (老路径 四.1): 每个 video_prompt 必须描述"仅限一个不间断的单镜头",
+     不要在单个 storyboard 内跨场景/跨机位切换 (转场交给拼接阶段)
+  ③ 场景一致性 6 维 (老路径 六): 空间(室内外/前后景) + 核心元素(桌/椅/灯/窗) + 光线方向(侧逆光/顶光)
+     + 色调(主+辅色) + 时间/天气 + 风格统一; 同一 scene_id 下所有镜头的 atmosphere 关键词
+     必须从这 6 维派生, 禁止每镜随意发挥
+  ④ 时间戳分段 (老路径 四.4): 本镜【无 dialogue】时, video_prompt_plot_state 按动作顺序分段写,
+     每段用 <n>起-止秒：内容</n> 形式 (不闭合, 项目规范), 每段约 3 秒, 连续不间断, 总时长对齐本镜 duration
+     ⚠️ 本镜【有 dialogue】时严禁自己写带时间码的段落 —— 台词时间轴由后端按配音音频自动生成,
+     你只按动作顺序写动作, 否则两套时间码会重叠打架
+  ⑤ 禁止混写 (老路径 十): 禁止把 action + result + dialogue 混在一句话 (分开填三个字段)
+  ⑥ 5D 摄影参数 (老路径 七): video_prompt_permanent 必须写全 5 维, 每维各选一项, 用英文术语:
+     景别 ECU/CU/MS/MLS/WS + 焦距 24mm/35mm/50mm/85mm + 运镜 static/slow dolly in/dolly out/
+     pan left/pan right/handheld/tilt up/tilt down + 景深 shallow f/1.8/standard f/4/deep f/8 +
+     视角 eye-level/low angle/high angle/dutch tilt/over-shoulder/POV
+     例: "MS 50mm, eye-level, slow dolly in, shallow f/1.8" —— 缺维度 H3 会自己补, 画面失控
 plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
 输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state, sound_effect, bgm_prompt}] }`
 
