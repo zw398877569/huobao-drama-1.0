@@ -199,6 +199,8 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         // 翻译决策仍然只看【原始】prompt —— 台词时间轴是中文的, 如果拿注入后的文本去判断,
         // 会把「本来是纯英文的 prompt」也拖进翻译, 属于本单不该引入的行为变化。
         const shouldTranslate = !isFree && hasNonEnglishChars(vRecord.prompt || '')
+        // 翻译前先记一下原文的中文字数, 翻译后用来判断「到底翻没翻」
+        const chineseBefore = countChineseChars(vRecord.prompt || '')
 
         // Sprint 16 (PM msg-20261020-072) A2 合并版: 台词时间轴挪到【翻译之前】注入。
         //   为什么挪: 这一步之后本来就有一次 LLM 调用 (提示词翻译, 实测 13s), 而「翻译」本质就是
@@ -268,6 +270,20 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
                 hint: '翻译后台词标记变少, 已把中文时间轴补回; 本镜描述未跟时间轴对齐 (对齐要靠翻译器, 这次没成功)',
               })
               finalPrompt = injectDialogueTimeline(finalPrompt, timelineText)
+            }
+            // Sprint 16 QA msg-20261021-073: 翻译/对齐失败时, 之前只有 PromptTranslation scope 的
+            //   WARN 能看出来, video 自己的日志里完全看不出「这次没翻译」→ 对齐没跑 → 错角色说台词。
+            //   这里补一条 VideoTask 层的信号: 原文的中文基本还在 (只扣掉时间轴贡献的中文),
+            //   就说明翻译没成功。跟 dialogue-timeline-lost-in-translation 一起 grep 就能定位。
+            const chineseLeft = countChineseChars(finalPrompt) - countChineseChars(timelineText)
+            if (chineseBefore > 0 && chineseLeft > chineseBefore * 0.3) {
+              logTaskWarn('VideoTask', 'translation-fallback-untranslated', {
+                id,
+                storyboardId: vRecord.storyboardId,
+                chineseBefore,
+                chineseLeft,
+                hint: '翻译/对齐没跑成 (超时或失败), prompt 仍是中文 —— integrated 描述跟时间轴的冲突没被修正, 本镜可能还是错角色说台词',
+              })
             }
             logTaskProgress('VideoTask', 'translated-prompt', { id, translated: truncateForLog(finalPrompt) })
           } catch (err: any) {
@@ -544,6 +560,12 @@ async function resolveStoryboardAudioUrls(
   if (!raw) return []
   const normalized = await normalizeVideoReferenceUrl(vRecordId, raw, 'audio')
   return normalized ? [normalized] : []
+}
+
+/** 数中文字符个数 —— 用来判断 prompt 到底翻没翻 (翻译 fallback 时 prompt 还是中文) */
+function countChineseChars(text: string): number {
+  const m = String(text || '').match(/[\u4e00-\u9fff]/g)
+  return m ? m.length : 0
 }
 
 /**

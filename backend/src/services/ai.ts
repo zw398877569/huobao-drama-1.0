@@ -274,6 +274,35 @@ export function stripReasoningBlocks(text: string): string {
  * @returns 清洗后的英文翻译; 任何失败路径 (无 text config / HTTP 错 / 空内容 / 截断) 都 fallback 原 prompt,
  *   保证上游生图链路不被打断。
  */
+/**
+ * Sprint 16 QA msg-20261021-073: 翻译/对齐调用的超时 + 重试策略。
+ *
+ * 背景: 30s 硬超时 + 零重试, MiniMax-M3 偶发慢响应 (实测 id=180 跑了 30.099s 才被掐断)
+ *   就会 fallback 回原中文 prompt —— 对齐 (A2) 完全没跑, integrated 描述跟时间轴继续互相矛盾,
+ *   用户观感就是「错角色说台词」。
+ *   本函数还兼着 sprint-16 的描述/时间轴对齐职责, 比普通翻译更重, 30s 偏紧。
+ *
+ * 超时值参考同项目其它 LLM 链路: scene-intention.ts 60s, storyboard-planner-service 420s。
+ * 这里取 90s —— 正常路径 13s 左右返回, 超时只在真的慢的时候才吃到, 不拖正常流程。
+ *
+ * 全部可用 env 覆盖 (不设就用默认值):
+ *   PROMPT_TRANSLATION_TIMEOUT_MS      默认 90000
+ *   PROMPT_TRANSLATION_MAX_RETRIES     默认 1
+ *   PROMPT_TRANSLATION_RETRY_GAP_MS    默认 3000
+ *   PROMPT_TRANSLATION_MODEL           默认不覆盖 (用 active text config 的模型);
+ *                                     填了则只用这个模型做翻译/对齐, 不影响拆解/音色等其它链路
+ */
+const PROMPT_TRANSLATION_TIMEOUT_MS = Number(process.env.PROMPT_TRANSLATION_TIMEOUT_MS || 90_000)
+const PROMPT_TRANSLATION_MAX_RETRIES = Number(process.env.PROMPT_TRANSLATION_MAX_RETRIES || 1)
+const PROMPT_TRANSLATION_RETRY_GAP_MS = Number(process.env.PROMPT_TRANSLATION_RETRY_GAP_MS || 3_000)
+/** 800 在中文角色 prompt + think overhead 下必截。先提到 2000, sprint 16 加了对齐职责
+ *  (要按时间轴重写描述) 再提到 2600 留余量 —— 截断会直接毁掉整个 prompt。 */
+const PROMPT_TRANSLATION_MAX_TOKENS = 2600
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): Promise<string> {
   const config = getActiveConfig('text')
   if (!config) {
@@ -282,63 +311,126 @@ async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): P
   }
 
   const url = getTextChatCompletionsUrl(config)
-  let resp: Response
-  try {
-    resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model || 'agnes-2.0-flash',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0,
-        // 800 在中文角色 prompt + think overhead 下必截。先提到 2000, sprint 16 加了对齐职责
-        // (要按时间轴重写描述) 再提到 2600 留余量 —— 截断会直接毁掉整个 prompt。
-        max_tokens: 2600,
-        // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染翻译结果 (与 prompt-sanitizer.ts:296 一致)
-        extra_body: { reasoning: { enabled: false } },
-      }),
-      signal: AbortSignal.timeout(30_000),
-    })
-  } catch (err: any) {
-    logTaskWarn('PromptTranslation', 'http-threw', { error: err?.message || String(err) })
-    return userPrompt
+  const model = process.env.PROMPT_TRANSLATION_MODEL?.trim() || config.model || 'agnes-2.0-flash'
+  // 日志底座: 排查「是慢还是失败」靠这几个数, 不用再去翻 llm-debug-*.log
+  const logMeta = {
+    provider: config.provider,
+    model,
+    systemLen: systemPrompt.length,
+    userLen: userPrompt.length,
+    maxTokens: PROMPT_TRANSLATION_MAX_TOKENS,
+    timeoutMs: PROMPT_TRANSLATION_TIMEOUT_MS,
   }
 
-  if (!resp.ok) {
-    const errText = await resp.text().catch(() => '')
-    logTaskWarn('PromptTranslation', 'translation-failed', { status: resp.status, error: errText.slice(0, 200) })
-    return userPrompt
+  for (let attempt = 0; attempt <= PROMPT_TRANSLATION_MAX_RETRIES; attempt++) {
+    const startedAt = Date.now()
+    let resp: Response
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0,
+          max_tokens: PROMPT_TRANSLATION_MAX_TOKENS,
+          // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染翻译结果 (与 prompt-sanitizer.ts:296 一致)
+          extra_body: { reasoning: { enabled: false } },
+        }),
+        signal: AbortSignal.timeout(PROMPT_TRANSLATION_TIMEOUT_MS),
+      })
+    } catch (err: any) {
+      const elapsedMs = Date.now() - startedAt
+      logTaskWarn('PromptTranslation', 'http-threw', {
+        ...logMeta,
+        elapsedMs,
+        attempt,
+        willRetry: attempt < PROMPT_TRANSLATION_MAX_RETRIES,
+        error: err?.message || String(err),
+      })
+      // 网络/超时 → 重试
+      if (attempt < PROMPT_TRANSLATION_MAX_RETRIES) {
+        await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
+        continue
+      }
+      return userPrompt
+    }
+
+    const elapsedMs = Date.now() - startedAt
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      // 5xx / 429 是可重试的 (服务端抖 / 限流); 其它 4xx (鉴权/参数) 重试没有意义
+      const retryable = resp.status >= 500 || resp.status === 429
+      logTaskWarn('PromptTranslation', 'translation-failed', {
+        ...logMeta,
+        elapsedMs,
+        attempt,
+        status: resp.status,
+        retryable,
+        willRetry: retryable && attempt < PROMPT_TRANSLATION_MAX_RETRIES,
+        error: errText.slice(0, 200),
+      })
+      if (retryable && attempt < PROMPT_TRANSLATION_MAX_RETRIES) {
+        await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
+        continue
+      }
+      return userPrompt
+    }
+
+    let data: any
+    try {
+      data = await resp.json() as any
+    } catch (err: any) {
+      logTaskWarn('PromptTranslation', 'response-not-json', {
+        ...logMeta,
+        elapsedMs,
+        attempt,
+        willRetry: attempt < PROMPT_TRANSLATION_MAX_RETRIES,
+        error: err?.message || String(err),
+      })
+      if (attempt < PROMPT_TRANSLATION_MAX_RETRIES) {
+        await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
+        continue
+      }
+      return userPrompt
+    }
+
+    const choice = data?.choices?.[0]
+    const raw = choice?.message?.content?.trim() || ''
+    if (!raw) {
+      logTaskWarn('PromptTranslation', 'empty-translation', { ...logMeta, elapsedMs, attempt, reason: 'no content in response' })
+      return userPrompt
+    }
+    // 截断防护: max_tokens 触顶时不要用半截翻译 (后半段可能是中文残留 + 拼回去反而更糟)
+    //   重试没用 (temperature=0 + 同样输入 = 同样输出), 所以不重试
+    if (choice?.finish_reason === 'length') {
+      logTaskWarn('PromptTranslation', 'truncated-fallback', {
+        ...logMeta,
+        elapsedMs,
+        attempt,
+        rawLen: raw.length,
+        hint: 'max_tokens 触顶, 提高 PROMPT_TRANSLATION_MAX_TOKENS 或换更省 token 的模型',
+      })
+      return userPrompt
+    }
+    // 二次防护: 即使模型没被 reasoning 禁用参数拦住 (provider 不支持), 也手动剥 think 块
+    const cleaned = stripReasoningBlocks(raw)
+    if (!cleaned) {
+      logTaskWarn('PromptTranslation', 'all-think-stripped', { ...logMeta, elapsedMs, attempt, reason: 'cleaned output empty' })
+      return userPrompt
+    }
+    logTaskProgress('PromptTranslation', 'translated', { ...logMeta, elapsedMs, attempt, outLen: cleaned.length })
+    return cleaned
   }
 
-  const data = await resp.json() as any
-  const choice = data?.choices?.[0]
-  const raw = choice?.message?.content?.trim() || ''
-  if (!raw) {
-    logTaskWarn('PromptTranslation', 'empty-translation', { reason: 'no content in response' })
-    return userPrompt
-  }
-  // 截断防护: max_tokens 触顶时不要用半截翻译 (后半段可能是中文残留 + 拼回去反而更糟)
-  if (choice?.finish_reason === 'length') {
-    logTaskWarn('PromptTranslation', 'truncated-fallback', {
-      provider: config.provider,
-      model: config.model,
-      rawLen: raw.length,
-    })
-    return userPrompt
-  }
-  // 二次防护: 即使模型没被 reasoning 禁用参数拦住 (provider 不支持), 也手动剥 think 块
-  const cleaned = stripReasoningBlocks(raw)
-  if (!cleaned) {
-    logTaskWarn('PromptTranslation', 'all-think-stripped', { reason: 'cleaned output empty' })
-    return userPrompt
-  }
-  return cleaned
+  // 理论上到不了这里 (循环里每条分支都 return), 兜底保险
+  return userPrompt
 }
 
 /**
