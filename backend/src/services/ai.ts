@@ -299,9 +299,16 @@ export function stripReasoningBlocks(text: string): string {
 const PROMPT_TRANSLATION_TIMEOUT_MS = Number(process.env.PROMPT_TRANSLATION_TIMEOUT_MS || 120_000)
 const PROMPT_TRANSLATION_MAX_RETRIES = Number(process.env.PROMPT_TRANSLATION_MAX_RETRIES || 1)
 const PROMPT_TRANSLATION_RETRY_GAP_MS = Number(process.env.PROMPT_TRANSLATION_RETRY_GAP_MS || 3_000)
-/** 800 在中文角色 prompt + think overhead 下必截。先提到 2000, sprint 16 加了对齐职责
- *  (要按时间轴重写描述) 再提到 2600 留余量 —— 截断会直接毁掉整个 prompt。 */
-const PROMPT_TRANSLATION_MAX_TOKENS = 2600
+/**
+ * max_tokens 预算。
+ *
+ * 2600 → 8192 (sprint-16 QA msg-20261021-074): 实测 M3.1-Flash-Preview 返回
+ *   finish_reason=length + content="" + reasoning_content 塞满 —— 2600 全被 thinking 吃了,
+ *   正文一个字没输出。对齐任务比纯翻译重 (要按时间轴重写描述), thinking 更长。
+ *   同项目其它 MiniMax 调用: prompt-sanitizer 3000 (任务简单得多), scene-intention 131072,
+ *   planner 32768/49152。8192 是个够用又不夸张的档。
+ */
+const PROMPT_TRANSLATION_MAX_TOKENS = 8192
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -324,31 +331,82 @@ function sleepMs(ms: number): Promise<void> {
  *
  * 开关: env PROMPT_TRANSLATION_FAST=0 可以关掉, 强制走 text 配置 (MiniMax-M3)。
  */
-function resolvePromptLLMConfig(preferFast: boolean): { config: AIConfig | null; source: 'sanitizer' | 'text' } {
+function resolvePromptLLMConfigCandidates(
+  preferFast: boolean,
+): Array<{ config: AIConfig; source: 'sanitizer' | 'text' }> {
+  const out: Array<{ config: AIConfig; source: 'sanitizer' | 'text' }> = []
   if (preferFast) {
     const fast = getActiveConfig('sanitizer', { silent: true })
-    if (fast?.apiKey && fast?.model) return { config: fast, source: 'sanitizer' }
+    if (fast?.apiKey && fast?.model) out.push({ config: fast, source: 'sanitizer' })
   }
-  return { config: getActiveConfig('text'), source: 'text' }
+  const text = getActiveConfig('text')
+  if (text?.apiKey && text?.model) {
+    // 别把同一个 config 放两遍
+    if (!out.some(c => c.config.model === text.model && c.config.baseUrl === text.baseUrl)) {
+      out.push({ config: text, source: 'text' })
+    }
+  }
+  return out
 }
 
+/**
+ * 翻译/对齐调用的主入口。
+ *
+ * 候选配置按顺序试, 第一个成功的就用它:
+ *   1) sanitizer 配置 (快模型, MiniMax-M3.1-Flash-Preview) —— 只在 preferFastConfig 时启用
+ *   2) text 配置 (MiniMax-M3) —— 兜底, 永远在候选里
+ *
+ * ⚠️ 为什么要兜底 (QA msg-20261021-074 实测): 快模型在本任务上会返回
+ *   finish_reason=length + content="" (thinking 吃光 token 预算) —— 不是网络问题, 是模型适配问题。
+ *   所以快模型失败【必须】自动回退 text 配置, 而不是直接 fallback 原 prompt。
+ *   实测 id=179 用 text 配置 (MiniMax-M3) 13s 成功, 是本任务的已知good baseline。
+ */
 async function callTextLLMForPrompt(
   userPrompt: string,
   systemPrompt: string,
   opts?: { preferFastConfig?: boolean },
 ): Promise<string> {
-  const { config, source } = resolvePromptLLMConfig(!!opts?.preferFastConfig)
-  if (!config) {
+  const candidates = resolvePromptLLMConfigCandidates(!!opts?.preferFastConfig)
+  if (!candidates.length) {
     logTaskWarn('PromptTranslation', 'text-config-missing', { reason: 'skipping translation, using original prompt' })
     return userPrompt
   }
 
+  let lastReason = 'unknown'
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const { config, source } = candidates[ci]
+    const result = await requestPromptLLM(config, source, userPrompt, systemPrompt, ci, candidates.length)
+    if (result.ok) return result.text
+    lastReason = result.reason
+  }
+
+  logTaskWarn('PromptTranslation', 'all-configs-failed', {
+    reason: lastReason,
+    candidates: candidates.map(c => c.source),
+    hint: '所有候选配置都没产出可用结果, 本次用原 prompt (翻译/对齐没跑成)',
+  })
+  return userPrompt
+}
+
+/**
+ * 用某一个 config 调一次 LLM (含同配置内的 retry)。返回 ok=false 时由调用方换下一个 config。
+ */
+async function requestPromptLLM(
+  config: AIConfig,
+  source: 'sanitizer' | 'text',
+  userPrompt: string,
+  systemPrompt: string,
+  configIndex: number,
+  configCount: number,
+): Promise<{ ok: boolean; text: string; reason: string }> {
   const url = getTextChatCompletionsUrl(config)
   const model = process.env.PROMPT_TRANSLATION_MODEL?.trim() || config.model || 'agnes-2.0-flash'
   // 日志底座: 排查「是慢还是失败」靠这几个数, 不用再去翻 llm-debug-*.log
   const logMeta = {
     provider: config.provider,
     configSource: source,
+    configIndex,
+    configCount,
     model,
     systemLen: systemPrompt.length,
     userLen: userPrompt.length,
@@ -356,6 +414,7 @@ async function callTextLLMForPrompt(
     timeoutMs: PROMPT_TRANSLATION_TIMEOUT_MS,
   }
 
+  let lastReason = 'unknown'
   for (let attempt = 0; attempt <= PROMPT_TRANSLATION_MAX_RETRIES; attempt++) {
     const startedAt = Date.now()
     let resp: Response
@@ -381,6 +440,7 @@ async function callTextLLMForPrompt(
       })
     } catch (err: any) {
       const elapsedMs = Date.now() - startedAt
+      lastReason = `http-threw:${err?.message || String(err)}`
       logTaskWarn('PromptTranslation', 'http-threw', {
         ...logMeta,
         elapsedMs,
@@ -388,12 +448,12 @@ async function callTextLLMForPrompt(
         willRetry: attempt < PROMPT_TRANSLATION_MAX_RETRIES,
         error: err?.message || String(err),
       })
-      // 网络/超时 → 重试
+      // 网络/超时 → 同配置内重试
       if (attempt < PROMPT_TRANSLATION_MAX_RETRIES) {
         await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
         continue
       }
-      return userPrompt
+      return { ok: false, text: '', reason: lastReason }
     }
 
     const elapsedMs = Date.now() - startedAt
@@ -401,6 +461,7 @@ async function callTextLLMForPrompt(
       const errText = await resp.text().catch(() => '')
       // 5xx / 429 是可重试的 (服务端抖 / 限流); 其它 4xx (鉴权/参数) 重试没有意义
       const retryable = resp.status >= 500 || resp.status === 429
+      lastReason = `http-${resp.status}`
       logTaskWarn('PromptTranslation', 'translation-failed', {
         ...logMeta,
         elapsedMs,
@@ -414,13 +475,14 @@ async function callTextLLMForPrompt(
         await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
         continue
       }
-      return userPrompt
+      return { ok: false, text: '', reason: lastReason }
     }
 
     let data: any
     try {
       data = await resp.json() as any
     } catch (err: any) {
+      lastReason = 'response-not-json'
       logTaskWarn('PromptTranslation', 'response-not-json', {
         ...logMeta,
         elapsedMs,
@@ -432,18 +494,35 @@ async function callTextLLMForPrompt(
         await sleepMs(PROMPT_TRANSLATION_RETRY_GAP_MS)
         continue
       }
-      return userPrompt
+      return { ok: false, text: '', reason: lastReason }
     }
 
     const choice = data?.choices?.[0]
     const raw = choice?.message?.content?.trim() || ''
+    const finishReason = choice?.finish_reason
     if (!raw) {
-      logTaskWarn('PromptTranslation', 'empty-translation', { ...logMeta, elapsedMs, attempt, reason: 'no content in response' })
-      return userPrompt
+      // 空正文 —— 多半是 reasoning 模型把 token 预算全花在 thinking 上 (finish_reason=length)。
+      //   同配置重试没用 (temperature=0 + 同样输入 = 同样输出), 直接换下一个 config。
+      lastReason = finishReason === 'length'
+        ? 'empty-content-token-budget-exhausted'
+        : 'empty-content'
+      logTaskWarn('PromptTranslation', 'empty-translation', {
+        ...logMeta,
+        elapsedMs,
+        attempt,
+        finishReason: finishReason || null,
+        hasReasoningContent: !!choice?.message?.reasoning_content,
+        reason: 'no content in response',
+        hint: finishReason === 'length'
+          ? 'thinking 吃光了 max_tokens 预算 (正文为空) —— 换模型或加大 PROMPT_TRANSLATION_MAX_TOKENS'
+          : undefined,
+      })
+      return { ok: false, text: '', reason: lastReason }
     }
     // 截断防护: max_tokens 触顶时不要用半截翻译 (后半段可能是中文残留 + 拼回去反而更糟)
     //   重试没用 (temperature=0 + 同样输入 = 同样输出), 所以不重试
-    if (choice?.finish_reason === 'length') {
+    if (finishReason === 'length') {
+      lastReason = 'truncated'
       logTaskWarn('PromptTranslation', 'truncated-fallback', {
         ...logMeta,
         elapsedMs,
@@ -451,20 +530,20 @@ async function callTextLLMForPrompt(
         rawLen: raw.length,
         hint: 'max_tokens 触顶, 提高 PROMPT_TRANSLATION_MAX_TOKENS 或换更省 token 的模型',
       })
-      return userPrompt
+      return { ok: false, text: '', reason: lastReason }
     }
     // 二次防护: 即使模型没被 reasoning 禁用参数拦住 (provider 不支持), 也手动剥 think 块
     const cleaned = stripReasoningBlocks(raw)
     if (!cleaned) {
+      lastReason = 'all-think-stripped'
       logTaskWarn('PromptTranslation', 'all-think-stripped', { ...logMeta, elapsedMs, attempt, reason: 'cleaned output empty' })
-      return userPrompt
+      return { ok: false, text: '', reason: lastReason }
     }
     logTaskProgress('PromptTranslation', 'translated', { ...logMeta, elapsedMs, attempt, outLen: cleaned.length })
-    return cleaned
+    return { ok: true, text: cleaned, reason: 'ok' }
   }
 
-  // 理论上到不了这里 (循环里每条分支都 return), 兜底保险
-  return userPrompt
+  return { ok: false, text: '', reason: lastReason }
 }
 
 /**
@@ -510,17 +589,19 @@ export async function translateVideoPromptToEnglish(prompt: string): Promise<str
     + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
     + 'Keep XML-style tags intact: <n>0-3s</n> and <n>0-3秒：</n> timecodes, <location>X</location>, '
     + '<role>X</role>, <voice>X</voice>. '
-    + 'CRITICAL: Dialogue inside 开口:\'...\' or <d>...</d> tags MUST stay in the '
-    + 'ORIGINAL language — do NOT translate the spoken words. Translate only the '
-    + 'surrounding action/description. Strip speaker name prefix (e.g. "年轻人:" '
-    + 'before the line should be removed, keep only the spoken words). '
-    + 'SPEAKING SCHEDULE (critical): the user text ends with a schedule of segments like '
-    + '<n>0-4秒：王秀兰开口:\'...\'</n>. That schedule is the AUTHORITATIVE source of who speaks when. '
-    + 'Rewrite the Integrated multimodal description so it AGREES with the schedule: '
-    + 'inside each time range, the speaker named in the schedule must be the one talking / moving their mouth; '
-    + 'never describe a speaking character as still, motionless, silent, or not moving; '
-    + 'and never describe a non-speaking character as talking. '
-    + 'Keep the schedule segments themselves byte-identical (same timecodes, same speaker names, same dialogue text). '
+    + 'CRITICAL: the Chinese words inside 开口:\'...\' or <d>...</d> are the SPOKEN lines. '
+    + 'They MUST stay in the ORIGINAL Chinese language — do NOT translate the spoken words. '
+    + 'They stay Chinese because they must match the Chinese voice audio. '
+    + 'Translate ONLY the surrounding action/description. '
+    + 'Strip speaker name prefix (e.g. "年轻人:" before the line should be removed, keep only the spoken words). '
+    + 'SPEAKING SCHEDULE (critical): the user text ends with schedule lines shaped like '
+    + '<n>0-4秒：王秀兰开口:\'...\'</n>. '
+    + 'IMPORTANT: these schedule lines are ALREADY in their final form — copy them VERBATIM. '
+    + 'Do NOT translate them, do NOT change their speaker names, their timecodes or their dialogue text, '
+    + 'and do NOT add or remove any schedule line. ONLY the surrounding description gets translated into English. '
+    + 'Then make the description agree with the schedule: inside each schedule time range, the listed speaker '
+    + 'is the one talking / moving their mouth; never describe a character who is speaking in the schedule as '
+    + 'still, motionless, silent or not moving; and never describe a non-speaking character as talking. '
     + 'Output ONLY the English translation, no commentary, no thinking blocks.'
   )
   // 视频翻译兼做对齐, 用快模型 (见 resolvePromptLLMConfig 注释)。PROMPT_TRANSLATION_FAST=0 可关。
