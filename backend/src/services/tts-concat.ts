@@ -17,6 +17,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
+import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const NARRATOR_VOICE_FALLBACK = process.env.NARRATOR_VOICE  // 2026-10-12 sprint 43 FIX-5: env 可空, fallback 走 aiVoices 查表
@@ -349,9 +350,31 @@ export async function generateTTSForDialogue(
   dialogue: string | null | undefined,
   atmosphere?: string | null,  // 2026-09-23 问题 3: 用于推断 emotion + speed
 ): Promise<TTSComposeResult> {
-  const parsed = parseDialogueSegments(dialogue)
+  // Sprint 18 (QA msg-20261021-078): 传剧本角色白名单 ——
+  //   LLM 输出的多角色台词经常没分隔符 ('？\"王秀兰：'), 老的 lookbehind 要求角色名前是空白,
+  //   认不出第二个角色 → 整行归给第一个角色 → 两句话用同一个音色念出来 (静默错误)。
+  //   白名单从 episodes.script_content 解析 (跟 autoFillSpeakerFromScript 同源), 历史脏数据也能拆对。
+  const speakerWhitelist = getEpisodeSpeakerWhitelist(episodeId)
+  const parsed = parseDialogueSegments(dialogue, speakerWhitelist)
   if (parsed.ignorable) {
     return { audioPath: '', segments: [], ignored: true, reason: parsed.reason }
+  }
+  // 兜底告警: 只解析出 1 段, 但文本里还有白名单里的角色名 → 说明没拆开 (静默错误的高危信号)
+  if (parsed.segments.length === 1 && speakerWhitelist.size > 0) {
+    const only = parsed.segments[0]
+    const stillHasSpeaker = [...speakerWhitelist].some(
+      (s) => s.length >= 2 && only.text.includes(s),
+    )
+    if (stillHasSpeaker) {
+      logTaskWarn('TTSConcat', 'dialogue-split-fallback', {
+        storyboardId,
+        episodeId,
+        rawSegments: parsed.segments.length,
+        usedWhitelist: true,
+        speaker: only.speaker,
+        hint: '台词里有多个角色但只解析出 1 段 —— 多角色台词没拆开, 后面几句会用第一个角色的音色念 (检查白名单是否覆盖了剧本里的角色名)',
+      })
+    }
   }
 
   const logTask = { storyboardId, episodeId, rawSegments: parsed.segments.length }

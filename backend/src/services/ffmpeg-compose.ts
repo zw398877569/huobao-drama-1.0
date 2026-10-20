@@ -13,6 +13,7 @@ import { now } from '../utils/response.js'
 import { generateTTS } from './tts-generation.js'
 import { generateTTSForDialogue } from './tts-concat.js'
 import { parseDialogueSegments } from '../utils/dialogue-parser.js'
+import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
@@ -108,7 +109,9 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
         }
       }
       if (segments.length === 0) {
-        segments = parseDialogueSegments(sb.dialogue).segments.map(s => ({
+        // Sprint 18 (QA msg-20261021-078): 传剧本角色白名单 —— ttsSegments 缺失时走这条 fallback,
+        //   同样的多角色不拆问题会让字幕退化成一整段
+        segments = parseDialogueSegments(sb.dialogue, getEpisodeSpeakerWhitelist(sb.episodeId)).segments.map(s => ({
           speaker: s.speaker || '',
           text: s.text,
           isNarrator: s.isNarrator,
