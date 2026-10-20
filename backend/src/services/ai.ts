@@ -283,16 +283,17 @@ export function stripReasoningBlocks(text: string): string {
  *   本函数还兼着 sprint-16 的描述/时间轴对齐职责, 比普通翻译更重, 30s 偏紧。
  *
  * 超时值参考同项目其它 LLM 链路: scene-intention.ts 60s, storyboard-planner-service 420s。
- * 这里取 90s —— 正常路径 13s 左右返回, 超时只在真的慢的时候才吃到, 不拖正常流程。
+ * 这里取 120s (用户 2026-10-21 拍板) —— 正常路径 13s 左右返回, 超时只在真的慢的时候才吃到,
+ * 不拖正常流程。
  *
  * 全部可用 env 覆盖 (不设就用默认值):
- *   PROMPT_TRANSLATION_TIMEOUT_MS      默认 90000
+ *   PROMPT_TRANSLATION_TIMEOUT_MS      默认 120000
  *   PROMPT_TRANSLATION_MAX_RETRIES     默认 1
  *   PROMPT_TRANSLATION_RETRY_GAP_MS    默认 3000
  *   PROMPT_TRANSLATION_MODEL           默认不覆盖 (用 active text config 的模型);
  *                                     填了则只用这个模型做翻译/对齐, 不影响拆解/音色等其它链路
  */
-const PROMPT_TRANSLATION_TIMEOUT_MS = Number(process.env.PROMPT_TRANSLATION_TIMEOUT_MS || 90_000)
+const PROMPT_TRANSLATION_TIMEOUT_MS = Number(process.env.PROMPT_TRANSLATION_TIMEOUT_MS || 120_000)
 const PROMPT_TRANSLATION_MAX_RETRIES = Number(process.env.PROMPT_TRANSLATION_MAX_RETRIES || 1)
 const PROMPT_TRANSLATION_RETRY_GAP_MS = Number(process.env.PROMPT_TRANSLATION_RETRY_GAP_MS || 3_000)
 /** 800 在中文角色 prompt + think overhead 下必截。先提到 2000, sprint 16 加了对齐职责
