@@ -3,7 +3,8 @@ import { eq, asc } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
-// Sprint 17 (PM msg-20261021-076) Task E: 代码层清洗 (抽象词 / 切黑转场 / IP 品牌) + 第一镜全景校验
+// Sprint 17 (PM msg-20261021-076) Task B/E: 首帧锚点 (英文固定句, 翻译后注入) + 代码层清洗
+import { OPENING_FRAME_ANCHOR, insertAtIntegratedStart } from '../utils/storyboard-rules.js'
 import { cleanupVideoPrompt, checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
@@ -342,6 +343,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           })
         }
         finalPrompt = cleanup.text
+
         const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
           id: vRecord.id,
           model: vRecord.model,
@@ -357,6 +359,35 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
         })
+        // ── Sprint 17 Task B: 首帧延续锚点 (老路径 四.2) ──
+        //   "opening frame matches [Picture 1]; continues from previous shot's tail composition"
+        //   ⚠️ 必须在【翻译之后】注入 —— 这句是英文固定句, 翻译器会把它改写掉 (Sprint 15 同类坑)。
+        //   ⚠️ [Picture 1] 只在 Ref2V 模式成立 (平台收 ref_image_0); FL2V 走 first_frame 字段,
+        //      没有 Picture 编号 —— 所以必须等 buildGenerateRequest 出来才知道平台实际收的是哪种图。
+        if (body && typeof body.prompt === 'string' && body.prompt) {
+          const hasRefImage0 = typeof body.ref_image_0 === 'string' && !!body.ref_image_0
+          const hasFirstFrameField = typeof body.first_frame === 'string' && !!body.first_frame
+          let anchor = ''
+          let anchorMode = ''
+          if (hasRefImage0) {
+            anchor = OPENING_FRAME_ANCHOR
+            anchorMode = 'ref2v-picture-1'
+          } else if (hasFirstFrameField) {
+            anchor = 'the opening frame continues the composition of the given first frame'
+            anchorMode = 'fl2v-first-frame'
+          }
+          if (anchor) {
+            body.prompt = insertAtIntegratedStart(body.prompt, anchor)
+            finalPrompt = body.prompt
+            logTaskProgress('VideoTask', 'opening-frame-anchor', {
+              id,
+              storyboardId: vRecord.storyboardId,
+              mode: anchorMode,
+              hint: '老路径 四.2 首帧延续 —— 平台收到参考图时, 明确指定它就是开场帧的构图起点',
+            })
+          }
+        }
+
         if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
           logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
             id,
