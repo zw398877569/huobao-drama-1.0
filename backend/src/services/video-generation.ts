@@ -1,8 +1,10 @@
 import { db, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
+import { eq, asc } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
+// Sprint 17 (PM msg-20261021-076) Task E: 代码层清洗 (抽象词 / 切黑转场 / IP 品牌) + 第一镜全景校验
+import { cleanupVideoPrompt, checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -313,16 +315,33 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           }
         }
 
-        if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
-          logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
+        // ── Sprint 17 Task E④: 场景第一镜必须交代地点 (老路径 二 镜头顺序铁律) ──
+        //   只 warn 不强制改 —— 强制改会跟 LLM 的整体设计冲突 (PM Task E 明确要求)。
+        checkSceneOpeningWideShot(vRecord.storyboardId)
+
+        // ── Sprint 17 Task E①②③: 代码层清洗 (抽象形容词 / 后期拼接指令 / IP 品牌) ──
+        //   老路径 agents/index.ts:646-649 的三条硬性约束, V4 重构后没有任何代码兜底。
+        //   必须跑在【所有注入之后】(注入的内容也是 prompt 的一部分);
+        //   台词区 (开口:'...') 内部受保护 —— 台词里出现"切黑"是台词内容, 不是拼接指令。
+        const cleanup = cleanupVideoPrompt(finalPrompt)
+        if (cleanup.removedAbstract.length > 0 || cleanup.removedTransition.length > 0) {
+          logTaskWarn('VideoTask', 'prompt-cleanup', {
             id,
             storyboardId: vRecord.storyboardId,
-            chars: finalPrompt.length,
-            limit: H3_PROMPT_MAX_CHARS,
-            hint: '加了台词后超过 H3 prompt 上限, 平台可能截断; 考虑拆短该镜台词',
+            removedAbstract: cleanup.removedAbstract,
+            removedTransition: cleanup.removedTransition,
+            hint: '老路径硬性约束: 抽象形容词 + 后期拼接指令已从最终 prompt 清掉 (对 H3 没有信息量 / 转场归拼接阶段)',
           })
         }
-
+        if (cleanup.ipHits.length > 0) {
+          logTaskWarn('VideoTask', 'ip-brand-detected', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            ipHits: cleanup.ipHits,
+            hint: 'prompt 里出现 IP/品牌词 —— 只告警不自动改写 (词表永远不全, 乱改会误伤正常内容), 需人工确认',
+          })
+        }
+        finalPrompt = cleanup.text
         const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
           id: vRecord.id,
           model: vRecord.model,
@@ -338,6 +357,16 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
         })
+        if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
+          logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
+            id,
+            storyboardId: vRecord.storyboardId,
+            chars: finalPrompt.length,
+            limit: H3_PROMPT_MAX_CHARS,
+            hint: '加了台词后超过 H3 prompt 上限, 平台可能截断; 考虑拆短该镜台词',
+          })
+        }
+
         // Sprint 14: adapter 换过 workflow 时把原因码落库。
         //   必须落库的原因: video_generations.model 存的是「用户选的」model, 实际跑的 workflowId 只在
         //   adapter 的 url 里, 不记这一笔的话前端/DB 都看不出「我选了 zm_u08 却没做口型同步」。
@@ -618,6 +647,36 @@ async function buildStoryboardDialogueTimeline(
     filteredCount: result.filteredCount,
     truncatedCount: result.truncatedCount,
   }
+}
+
+/**
+ * Sprint 17 Task E④: 场景第一镜必须交代地点 (老路径 二 镜头顺序铁律)。
+ *
+ * ⚠️ 先只 warn 不强制改 (PM Task E 明确要求) —— 强制改会跟 LLM 的整体设计冲突, 得不偿失。
+ *   查 2 次 DB (本镜 + 同场景第一镜), 视频生成本来就要跑几分钟, 多一次主键查询无所谓。
+ */
+function checkSceneOpeningWideShot(storyboardId: number | null | undefined): void {
+  if (!storyboardId) return
+  const [sb] = db.select().from(schema.storyboards)
+    .where(eq(schema.storyboards.id, storyboardId)).all()
+  if (!sb?.sceneId) return
+  const firstInScene = db.select({
+    id: schema.storyboards.id,
+    shotType: schema.storyboards.shotType,
+  })
+    .from(schema.storyboards)
+    .where(eq(schema.storyboards.sceneId, sb.sceneId))
+    .orderBy(asc(schema.storyboards.storyboardNumber))
+    .all()[0]
+  if (!firstInScene || firstInScene.id !== sb.id) return
+  const check = checkSceneOpensWithWideShot(true, firstInScene.shotType)
+  if (!check.shouldWarn) return
+  logTaskWarn('VideoTask', 'scene-opens-not-wide-shot', {
+    storyboardId,
+    sceneId: sb.sceneId,
+    shotType: check.shotType,
+    hint: '所属场景的第一镜不是全景 —— 老路径铁律要求场景开头第一镜交代地点, 建议重拆这一镜',
+  })
 }
 
 async function normalizeVideoReferenceUrls(raw: string | null | undefined): Promise<string[]> {
