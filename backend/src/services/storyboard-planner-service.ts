@@ -32,6 +32,9 @@ import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 import { ensureH3ThreePartPrompt } from '../utils/h3-prompt.js'
 // Sprint 16 Bug-B: 台词嵌入 (V4 planner 路径此前漏了, 跟老全量路径对齐)
 import { embedDialogueInline } from '../utils/dialogue-timeline.js'
+// Sprint 18 (QA msg-20261021-078): 台词角色白名单 + 落库前规范化
+import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
+import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
 import {
   buildAppearanceBlock,
@@ -760,6 +763,12 @@ export async function runStep3(opts: {
     },
   })
 
+  // ── Sprint 18 Task A (QA msg-20261021-078): 台词角色白名单 ──
+  //   来源是【剧本原文】(ctx.script = episodes.script_content || episodes.content),
+  //   跟 autoFillSpeakerFromScript 同源 —— PM 拍板 D2: 不用 characters 表,
+  //   因为 characters 可能被改名/合并, 剧本原文才是真相。
+  const speakerWhitelist = resolveSpeakerWhitelist(ctx.script)
+
   // 准备 INSERT values (含 V3 salvage 清洗 + imagePrompt 拼接), 放进 DB 事务里
   const insertPayloads = validatedDetails.map((det, idx) => {
     const cleaned = salvageImagePromptPermanent(det.image_prompt_permanent, {
@@ -845,6 +854,33 @@ export async function runStep3(opts: {
       })
     }
 
+    // ── Sprint 18 Task A: 落库前规范化 dialogue ──
+    //   LLM 常把多角色台词挤成一行 ('？"王秀兰：'), 老 parser 认不出第二个角色 →
+    //   整行归给第一个角色 → 配音用第一个音色念两句, 时间轴/字幕/口型同步全错
+    //   (Sprint 14 传 ref_audio + Sprint 15 对白时间轴都因此打折)。
+    //   这里按白名单把多角色行拆成"每行一段"再落库, 下游任何消费者都不用再猜角色边界。
+    //   ⚠️ 规范化失败【绝不能】导致整个分镜拆解失败 —— 兜底保持原样落库 + warn。
+    let dialogueText = det.dialogue || ''
+    let dialogueNormalized: { before: string; after: string; splitLines: number } | null = null
+    try {
+      const norm = normalizeDialogueForStorage(det.dialogue, speakerWhitelist)
+      if (norm.changed) {
+        dialogueText = norm.text
+        dialogueNormalized = {
+          before: (det.dialogue || '').slice(0, 60),
+          after: norm.text.slice(0, 120),
+          splitLines: norm.splitLines.length,
+        }
+      }
+    } catch (err: any) {
+      logTaskWarn('StoryboardPlanner', 'dialogue-normalize-failed', {
+        episodeId,
+        shotNumber: det.shot_number,
+        error: err?.message || String(err),
+        hint: 'dialogue 规范化失败, 保持原样落库 (不影响本次分镜拆解)',
+      })
+    }
+
     // ── video_prompt 拼装 (Sprint 17: 补 Integrated header + 3 个注入段) ──
     let videoPromptText = ensureIntegratedHeader(
       ensureH3ThreePartPrompt(
@@ -873,7 +909,7 @@ export async function runStep3(opts: {
         location: det.location || '',
         time: det.time || '',
         action: det.action || '',
-        dialogue: det.dialogue || '',
+        dialogue: dialogueText,
         description: det.description || '',
         result: det.result || '',
         atmosphere: det.atmosphere || '',
@@ -895,7 +931,7 @@ export async function runStep3(opts: {
         //   V4 planner 这条链没有 —— video_prompt 里只有动作没有台词, H3 不知道谁张嘴。
         //   embedDialogueInline 内部带「已有 开口: 就跳过」保护: Step2 prompt (sprint-15-a)
         //   已经要求 LLM 自己把台词写进 video_prompt_plot_state, LLM 照做了就不会重复嵌。
-        videoPrompt: embedDialogueInline(videoPromptText, det.dialogue),
+        videoPrompt: embedDialogueInline(videoPromptText, dialogueText),
         imagePromptPlotState: plotStateText || null,
         videoPromptPlotState: det.video_prompt_plot_state || null,
         // Sprint 11 Task A: H3 声音两列落库 (下游消费路径 — Task F 本期不做真实音频生成,
@@ -911,6 +947,7 @@ export async function runStep3(opts: {
         updatedAt: now(),
       },
       characterIds,
+      dialogueNormalized,
     }
   })
 
@@ -942,6 +979,16 @@ export async function runStep3(opts: {
         createdStoryboardIds.push(storyboardId)
         for (const charId of payload.characterIds) {
           tx.insert(schema.storyboardCharacters).values({ storyboardId, characterId: charId }).run()
+        }
+        if (payload.dialogueNormalized) {
+          logTaskProgress('StoryboardPlanner', 'dialogue-normalized', {
+            episodeId,
+            storyboardId,
+            before: payload.dialogueNormalized.before,
+            after: payload.dialogueNormalized.after,
+            splitLines: payload.dialogueNormalized.splitLines,
+            hint: '多角色台词挤在一行 → 已按剧本角色白名单拆成每行一段 (Sprint 18 Task A)',
+          })
         }
       }
     })
