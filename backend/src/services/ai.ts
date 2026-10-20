@@ -123,7 +123,7 @@ export function getActiveVideoConfigLabel(videoConfigId: number | null | undefin
   return modelName ? `${row.name} · ${modelName} (${row.provider})${suffix}` : `${row.name} (${row.provider})${suffix}`
 }
 
-export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
+export function getActiveConfig(serviceType: ServiceType, opts?: { silent?: boolean }): AIConfig | null {
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, serviceType))
     .all()
@@ -132,7 +132,10 @@ export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
 
   const active = rows[0]
   if (!active) {
-    logTaskWarn('AIConfig', 'active-config-missing', { serviceType })
+    // silent: 供「可选配置」探测用 (比如优先用快模型, 没配就回退), 不该每次调用都刷一条 warn
+    if (!opts?.silent) {
+      logTaskWarn('AIConfig', 'active-config-missing', { serviceType })
+    }
     return null
   }
 
@@ -304,8 +307,37 @@ function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): Promise<string> {
-  const config = getActiveConfig('text')
+/**
+ * 选翻译/对齐这次调用用哪个 config。
+ *
+ * Sprint 16 (用户 2026-10-21 提出): 视频 prompt 翻译这步自 sprint-16 起还要兼做
+ * 「描述/说话时间轴对齐」, 是个改写任务, 但走的是 text 配置的 MiniMax-M3 (推理模型),
+ * 正常 13s, 偶发 30s+ (QA msg-20261021-073 id=180 就是这么超时的)。
+ *
+ * 而 'sanitizer' 这个 serviceType 的定位本来就是「专门放一个给 prompt 改写用的快模型」
+ * (原始设计是 deepseek-chat, 不输出 thinking 块; 用户现在配的是 MiniMax-M3.1-Flash-Preview)。
+ * 视频 prompt 翻译/对齐跟生图 prompt 去敏改写是同一类活 —— 都是「按约束改写 prompt 结构」。
+ *
+ * 所以这里优先用 sanitizer 配置 (快模型), 没有就回退 text 配置。
+ * ⚠️ 两条都指向 api.minimaxi.com (llm-debug 实测: 597 次 minimaxi 请求 = 491 次 M3 + 106 次
+ *    M3.1-Flash), 所以同 host 同 key, 只是模型名不同。
+ *
+ * 开关: env PROMPT_TRANSLATION_FAST=0 可以关掉, 强制走 text 配置 (MiniMax-M3)。
+ */
+function resolvePromptLLMConfig(preferFast: boolean): { config: AIConfig | null; source: 'sanitizer' | 'text' } {
+  if (preferFast) {
+    const fast = getActiveConfig('sanitizer', { silent: true })
+    if (fast?.apiKey && fast?.model) return { config: fast, source: 'sanitizer' }
+  }
+  return { config: getActiveConfig('text'), source: 'text' }
+}
+
+async function callTextLLMForPrompt(
+  userPrompt: string,
+  systemPrompt: string,
+  opts?: { preferFastConfig?: boolean },
+): Promise<string> {
+  const { config, source } = resolvePromptLLMConfig(!!opts?.preferFastConfig)
   if (!config) {
     logTaskWarn('PromptTranslation', 'text-config-missing', { reason: 'skipping translation, using original prompt' })
     return userPrompt
@@ -316,6 +348,7 @@ async function callTextLLMForPrompt(userPrompt: string, systemPrompt: string): P
   // 日志底座: 排查「是慢还是失败」靠这几个数, 不用再去翻 llm-debug-*.log
   const logMeta = {
     provider: config.provider,
+    configSource: source,
     model,
     systemLen: systemPrompt.length,
     userLen: userPrompt.length,
@@ -490,7 +523,9 @@ export async function translateVideoPromptToEnglish(prompt: string): Promise<str
     + 'Keep the schedule segments themselves byte-identical (same timecodes, same speaker names, same dialogue text). '
     + 'Output ONLY the English translation, no commentary, no thinking blocks.'
   )
-  return callTextLLMForPrompt(prompt, systemPrompt)
+  // 视频翻译兼做对齐, 用快模型 (见 resolvePromptLLMConfig 注释)。PROMPT_TRANSLATION_FAST=0 可关。
+  const preferFast = process.env.PROMPT_TRANSLATION_FAST !== '0'
+  return callTextLLMForPrompt(prompt, systemPrompt, { preferFastConfig: preferFast })
 }
 
 /**
