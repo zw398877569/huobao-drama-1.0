@@ -786,7 +786,8 @@ export async function runStep3(opts: {
     const continuityBlock = buildContinuityBlock(prevResult)
     const resultBlock = buildResultBlock(det.result)
     const rhythmFormula = getRhythmFormula(det.intent_function)
-    const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join(' ')
+    // 各块之间用换行分隔 —— 4 个约束各自成行, H3 读起来更清楚 (拼成一大坨容易被当成一句描述)
+    const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join('\n')
 
     // ── Sprint 17 Task F③: character_ids 必填 (老路径 character_ids 必填规则) ──
     //   画面里画了角色 (image_prompt_permanent.character_traits 非空) 却给空数组 → 反查补齐 + warn

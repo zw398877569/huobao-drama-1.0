@@ -183,7 +183,8 @@ export function buildContinuityBlock(previousResult: string | null | undefined):
   const raw = (previousResult || '').trim()
   if (!raw) return ''
   if (hasPlotStatePollution(raw)) return ''
-  return `承接上一镜: 从「${raw}」的收尾状态起幅, 人物位置/视线/道具状态保持连续`
+  // 标签用「前一镜」而不是「上一镜」—— prompt-cleanup 的后期拼接指令词表里含"上一镜", 用同词会被自己删掉
+  return `承接前一镜: 从「${raw}」的收尾状态起幅, 人物位置/视线/道具状态保持连续`
 }
 
 /** 生成期注入用的英文首帧锚点 (老路径原文, 不能被翻译器改写 → 翻译后注入) */

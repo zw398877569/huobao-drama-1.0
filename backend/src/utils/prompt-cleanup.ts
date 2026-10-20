@@ -25,6 +25,7 @@ const ABSTRACT_WORDS_CN = ['电影感', '史诗感', '绝美', '惊艳', '震撼
 
 /** 后期拼接指令 (老路径明令禁止) */
 const TRANSITION_WORDS_CN = ['切黑', '转场', '下一镜', '上一镜', '镜头转场']
+//   ⚠️ 本单自己注入的连续性块标签是「承接前一镜」(不是「上一镜」) —— 词表带"上一镜"才不会误伤自己注入的内容
 const TRANSITION_WORDS_EN = [
   'fade to black', 'fade out to black', 'cut to black',
   'next shot', 'next scene', 'transition to the next',
