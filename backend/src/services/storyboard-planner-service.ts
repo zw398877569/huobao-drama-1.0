@@ -32,6 +32,15 @@ import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 import { ensureH3ThreePartPrompt } from '../utils/h3-prompt.js'
 // Sprint 16 Bug-B: 台词嵌入 (V4 planner 路径此前漏了, 跟老全量路径对齐)
 import { embedDialogueInline } from '../utils/dialogue-timeline.js'
+// Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
+import {
+  buildAppearanceBlock,
+  buildContinuityBlock,
+  buildResultBlock,
+  ensureIntegratedHeader,
+  getRhythmFormula,
+  insertIntoIntegratedSection,
+} from '../utils/storyboard-rules.js'
 import { applyDurationPolicy } from './shot-duration.js'
 import {
   salvageImagePromptPermanent,
@@ -691,6 +700,10 @@ export async function runStep3(opts: {
   }
   const validatedDetails = revalidated.data
 
+  // Sprint 17 (PM msg-20261021-076) Task A/B/C: 注入需要 ctx
+  //   ctx.characters → 角色外貌 (Task A)
+  const ctx = await readStoryboardContextForPlanner(episodeId, dramaId)
+
   // ── Sprint 11 R1/R2/R3 (PM msg-20261016-002): 时长体系接入 V4 新链路 ──
   //   修前: validatedDetails.map 直接用 det.duration (LLM 自由给值) 落库,
   //         19 镜全是 4/5/6s 匀速短镜头 (episode 12 实测 Σ=92s vs 旧链路 episode 3 Σ=327s),
@@ -711,7 +724,7 @@ export async function runStep3(opts: {
   })
 
   // 准备 INSERT values (含 V3 salvage 清洗 + imagePrompt 拼接), 放进 DB 事务里
-  const insertPayloads = validatedDetails.map((det) => {
+  const insertPayloads = validatedDetails.map((det, idx) => {
     const cleaned = salvageImagePromptPermanent(det.image_prompt_permanent, {
       episodeId, shotNumber: det.shot_number,
     })
@@ -719,6 +732,45 @@ export async function runStep3(opts: {
       ? permanentToText(cleaned.imagePromptPermanent)
       : ''
     const plotStateText = `${det.image_prompt_plot_state?.trim() || ''}${cleaned.plotState ? (det.image_prompt_plot_state ? ' | ' : '') + cleaned.plotState : ''}`
+
+    // ── Sprint 17 Task A/B/C: 把 V4 三步重构丢掉的影视规则补回 video_prompt ──
+    //   A 角色外貌: ctx.characters[].appearancePermanent (跟角色立绘同源) + personality (老路径"气质"维)
+    //   B 承接上一镜: 同场景上一镜的 result 作为本镜起始状态 (老路径 四.3)
+    //   C 戏型节奏: 按本镜 intent_function 选老路径 8 戏型公式 (老路径 三)
+    //   注入位置: 三段式的【描述段末尾】—— 台词时间轴是生成期注入的 (会插在更靠后) → 台词排在外观之后 ✓
+    const charEntries = (det.character_ids || [])
+      .map((cid) => ctx.characters.find((c) => c.id === cid))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+      .map((c) => ({
+        name: c.name,
+        appearance: c.appearancePermanent,
+        personality: c.personality,
+        role: c.role,
+      }))
+    const appearanceBlock = buildAppearanceBlock(charEntries)
+    const prevShot = idx > 0 ? validatedDetails[idx - 1] : null
+    const prevResult = prevShot && prevShot.scene_id === det.scene_id ? prevShot.result : ''
+    const continuityBlock = buildContinuityBlock(prevResult)
+    const resultBlock = buildResultBlock(det.result)
+    const rhythmFormula = getRhythmFormula(det.intent_function)
+    const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join(' ')
+
+    // ── video_prompt 拼装 (Sprint 17: 补 Integrated header + 3 个注入段) ──
+    let videoPromptText = ensureIntegratedHeader(
+      ensureH3ThreePartPrompt(
+        [
+          det.video_prompt_permanent || '',
+          det.description || '',
+          det.video_prompt_plot_state || '',
+        ].filter(Boolean).join('。'),
+        det.sound_effect,
+        det.bgm_prompt,
+      ),
+    )
+    if (injectedBlocks) {
+      videoPromptText = insertIntoIntegratedSection(videoPromptText, injectedBlocks)
+    }
+
     return {
       shot_number: det.shot_number,
       insertValues: {
@@ -753,18 +805,7 @@ export async function runStep3(opts: {
         //   V4 planner 这条链没有 —— video_prompt 里只有动作没有台词, H3 不知道谁张嘴。
         //   embedDialogueInline 内部带「已有 开口: 就跳过」保护: Step2 prompt (sprint-15-a)
         //   已经要求 LLM 自己把台词写进 video_prompt_plot_state, LLM 照做了就不会重复嵌。
-        videoPrompt: embedDialogueInline(
-          ensureH3ThreePartPrompt(
-            [
-              det.video_prompt_permanent || '',
-              det.description || '',
-              det.video_prompt_plot_state || '',
-            ].filter(Boolean).join('。'),
-            det.sound_effect,
-            det.bgm_prompt,
-          ),
-          det.dialogue,
-        ),
+        videoPrompt: embedDialogueInline(videoPromptText, det.dialogue),
         imagePromptPlotState: plotStateText || null,
         videoPromptPlotState: det.video_prompt_plot_state || null,
         // Sprint 11 Task A: H3 声音两列落库 (下游消费路径 — Task F 本期不做真实音频生成,
