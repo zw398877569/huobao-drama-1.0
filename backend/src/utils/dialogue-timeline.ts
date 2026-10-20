@@ -192,6 +192,53 @@ export function formatDialogueTimeline(items: DialogueTimelineItem[]): string {
 }
 
 /**
+ * Sprint 16 QA msg-20261021-074: 去掉 prompt 里【未分时间】的旧台词块, 保留【带时间轴】的台词段。
+ *
+ * 背景 (实测 drama 15 sb=11 / storyboardId=829, id=182):
+ *   发给 H3 的 prompt 里同时有两套台词表达 ——
+ *     (1) 未分时间: 开口:'王秀兰：“吃点吧，趁热。” 林达：“不用了，我不饿。”'
+ *         (sprint-16-b 的 embedDialogueInline 写进 storyboards.video_prompt 的)
+ *     (2) 带时间轴: <n>0-2.4秒：王秀兰开口:'“吃点吧，趁热。”' <n>2.4-4.2秒：林达开口:'…'
+ *         (video-generation 注入的)
+ *   带 ref_audio_0 时 H3 已经有真实配音了, prompt 里再出现未分时间那套, 它会当成
+ *   需要朗读的台词文本 → 把角色名前缀「林达：」直接念出来 (QA 实测 id=182 就是这样)。
+ *
+ * 判定规则: `开口:'…'` 前面紧挨着 `<n>…秒：<角色>` 的是【带时间轴】的, 保留;
+ *   其它 (前面没有时间码) 都是【未分时间】的旧块, 删掉。
+ *
+ * ⚠️ 只在【已经注入了时间轴】的时候才调 —— 没有 TTS 的镜头只有这一个台词来源,
+ *   删了就等于把台词整个删掉, H3 更不知道该说什么。
+ */
+export function stripLegacyUntimedDialogueBlock(prompt: string): { text: string; removed: number; kept: number } {
+  const src = String(prompt || '')
+  if (!src) return { text: src, removed: 0, kept: 0 }
+
+  const re = /开口:'([^']*)'/g
+  let out = ''
+  let cursor = 0
+  let removed = 0
+  let kept = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(src)) !== null) {
+    const before = src.slice(0, m.index)
+    // 带时间轴: <n>0-2.4秒：王秀兰  →  保留
+    const isTimed = /<n>[\d.]+\s*[-~]\s*[\d.]+\s*秒[：:]\s*[^<>\n]*$/.test(before)
+    if (isTimed) {
+      kept++
+      continue
+    }
+    out += src.slice(cursor, m.index)
+    cursor = m.index + m[0].length
+    removed++
+  }
+  out += src.slice(cursor)
+
+  // 删完可能留下多余空行, 顺手收一下 (三段式之间保持恰好一个空行)
+  out = out.replace(/[ \t]*\n[ \t]*\n[ \t]*\n+/g, '\n\n').trim()
+  return { text: out, removed, kept }
+}
+
+/**
  * 数 prompt 里还剩几个「开口:」标记。
  *
  * 用途 (Sprint 16): 台词时间轴现在在【翻译之前】注入, 万一翻译器把它整段吃掉,

@@ -2,7 +2,7 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
-import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
+import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -241,6 +241,27 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             }
             timelineText = timeline.text
             promptWithTimeline = injectDialogueTimeline(promptWithTimeline, timelineText)
+
+            // Sprint 16 QA msg-20261021-074: prompt 里可能已经有【未分时间】的旧台词块
+            //   (sprint-16-b 的 embedDialogueInline 写进 storyboards.video_prompt 的,
+            //    形如 开口:'王秀兰：“吃点吧，趁热。” 林达：“不用了，我不饿。”')。
+            //   现在又注入了带时间轴的台词段 → 两套台词并存, 带 ref_audio_0 时 H3 会把
+            //   未分时间那套也当台词念出来, 结果把角色名前缀「林达：」直接念出去 (实测 id=182)。
+            //   这里把旧的未分时间块删掉, 只留带时间轴的 (它是唯一带真实时序的)。
+            //   ⚠️ 只在【刚注入了时间轴】时才删 —— 没有 TTS 的镜头只有那一块台词来源,
+            //      删了就等于台词全没了, H3 更不知道该说什么。
+            const stripped = stripLegacyUntimedDialogueBlock(promptWithTimeline)
+            if (stripped.removed > 0) {
+              logTaskWarn('VideoTask', 'legacy-untimed-dialogue-stripped', {
+                id,
+                storyboardId: vRecord.storyboardId,
+                removed: stripped.removed,
+                kept: stripped.kept,
+                hint: 'prompt 里有未分时间的旧台词块, 已删 (只保留带时间轴的), 否则 H3 会把角色名前缀当台词念出来',
+              })
+              promptWithTimeline = stripped.text
+            }
+
             dialogueMarkersBefore = countDialogueMarkers(promptWithTimeline)
           }
         } catch (err: any) {
