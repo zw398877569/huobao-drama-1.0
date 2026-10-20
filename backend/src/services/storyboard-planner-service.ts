@@ -41,6 +41,7 @@ import {
   findLeakedProps,
   getRhythmFormula,
   insertIntoIntegratedSection,
+  resolveEffectiveCharacterIds,
 } from '../utils/storyboard-rules.js'
 import { applyDurationPolicy } from './shot-duration.js'
 import {
@@ -730,7 +731,10 @@ export async function runStep3(opts: {
     })
     throw new Error(`step3 zod 校验失败: ${revalidated.error.issues[0]?.message || 'unknown'}`)
   }
-  const validatedDetails = revalidated.data
+  // QA msg-20261021-077 Bug-3: 按 shot_number 排序, 后续所有"上一镜/前面几镜"的推导都依赖这个顺序。
+  //   修前: LLM 乱序返回 shot_details 时, 承接上一镜会承接错镜头, 道具时序的 earlierTexts 也不对;
+  //         applyDurationPolicy 的"场景首镜"判定同样按数组位置算, 会一起错。
+  const validatedDetails = revalidated.data.sort((a, b) => a.shot_number - b.shot_number)
 
   // Sprint 17 (PM msg-20261021-076) Task A/B/C/F: 注入 + 校验需要 ctx
   //   ctx.characters → 角色外貌 (Task A) + character_ids 反查 (Task F③)
@@ -771,7 +775,37 @@ export async function runStep3(opts: {
     //   B 承接上一镜: 同场景上一镜的 result 作为本镜起始状态 (老路径 四.3)
     //   C 戏型节奏: 按本镜 intent_function 选老路径 8 戏型公式 (老路径 三)
     //   注入位置: 三段式的【描述段末尾】—— 台词时间轴是生成期注入的 (会插在更靠后) → 台词排在外观之后 ✓
-    const charEntries = (det.character_ids || [])
+    // ── Sprint 17 Task F③: character_ids 必填 (老路径 character_ids 必填规则) ──
+    //   画面里画了角色 (image_prompt_permanent.character_traits 非空) 却给空数组 → 反查补齐 + warn
+    //   ⚠️ 必须排在【角色外貌注入】之前 (QA msg-20261021-077 Bug-1):
+    //      appearanceBlock 靠 character_ids 找角色, 先算外貌后补 character_ids 的话,
+    //      补回来的角色拿不到外貌 → Task A 角色外貌注入对它完全失效 (正好击穿本单核心目标)。
+    const traitCount = cleaned.imagePromptPermanent?.character_traits?.length || 0
+    const charIdResult = resolveEffectiveCharacterIds({
+      declaredIds: det.character_ids,
+      traitCount,
+      mentionText: `${det.description || ''} ${det.action || ''} ${det.dialogue || ''}`,
+      characters: ctx.characters.map((c) => ({ id: c.id, name: c.name })),
+    })
+    const characterIds = charIdResult.effectiveIds
+    if (charIdResult.recovered.length > 0) {
+      logTaskWarn('StoryboardPlanner', 'character-ids-recovered', {
+        episodeId,
+        shotNumber: det.shot_number,
+        recovered: charIdResult.recovered,
+        traitCount,
+        hint: '本镜画了角色但 character_ids 为空, 已按正文里的角色名反查补齐 (老路径 character_ids 必填规则)',
+      })
+    } else if (charIdResult.needsReview) {
+      logTaskWarn('StoryboardPlanner', 'character-ids-empty-but-traits', {
+        episodeId,
+        shotNumber: det.shot_number,
+        traitCount,
+        hint: '本镜 character_traits 非空 (画了角色) 但 character_ids 为空 且正文里找不到角色名 —— 人工确认画面里到底有没有角色',
+      })
+    }
+
+    const charEntries = characterIds
       .map((cid) => ctx.characters.find((c) => c.id === cid))
       .filter((c): c is NonNullable<typeof c> => !!c)
       .map((c) => ({
@@ -788,36 +822,6 @@ export async function runStep3(opts: {
     const rhythmFormula = getRhythmFormula(det.intent_function)
     // 各块之间用换行分隔 —— 4 个约束各自成行, H3 读起来更清楚 (拼成一大坨容易被当成一句描述)
     const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join('\n')
-
-    // ── Sprint 17 Task F③: character_ids 必填 (老路径 character_ids 必填规则) ──
-    //   画面里画了角色 (image_prompt_permanent.character_traits 非空) 却给空数组 → 反查补齐 + warn
-    let characterIds = det.character_ids || []
-    if (characterIds.length === 0) {
-      const traitCount = cleaned.imagePromptPermanent?.character_traits?.length || 0
-      if (traitCount > 0) {
-        const mentionText = `${det.description || ''} ${det.action || ''} ${det.dialogue || ''}`
-        const recovered = ctx.characters
-          .filter((c) => c.name && c.name.length >= 2 && mentionText.includes(c.name))
-          .map((c) => c.id)
-        if (recovered.length > 0) {
-          characterIds = recovered
-          logTaskWarn('StoryboardPlanner', 'character-ids-recovered', {
-            episodeId,
-            shotNumber: det.shot_number,
-            recovered,
-            traitCount,
-            hint: '本镜画了角色但 character_ids 为空, 已按正文里的角色名反查补齐 (老路径 character_ids 必填规则)',
-          })
-        } else {
-          logTaskWarn('StoryboardPlanner', 'character-ids-empty-but-traits', {
-            episodeId,
-            shotNumber: det.shot_number,
-            traitCount,
-            hint: '本镜 character_traits 非空 (画了角色) 但 character_ids 为空 且正文里找不到角色名 —— 人工确认画面里到底有没有角色',
-          })
-        }
-      }
-    }
 
     // ── Sprint 17 Task F①: 道具时序 (老路径 轴5) ──
     //   本镜出现的"情节道具", 如果所属 scene 的 description 没提过、前面同场景镜头也没提过 → 提前泄露 warn

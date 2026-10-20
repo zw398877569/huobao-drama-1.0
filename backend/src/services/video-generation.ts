@@ -1,5 +1,5 @@
 import { db, schema } from '../db/index.js'
-import { eq, asc } from 'drizzle-orm'
+import { eq, and, asc } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
@@ -691,12 +691,18 @@ function checkSceneOpeningWideShot(storyboardId: number | null | undefined): voi
   const [sb] = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.id, storyboardId)).all()
   if (!sb?.sceneId) return
+  // ⚠️ 必须按 episodeId 隔离 (QA msg-20261021-077 Bug-2):
+  //   scene 是 drama 级资源, 同一个 scene 可以被多个 episode 复用 (episode_scenes 关联表),
+  //   不加 episode 过滤的话, 上一集用过的 scene 会把"本集场景第一镜"判定吃掉 → 告警永远不触发。
   const firstInScene = db.select({
     id: schema.storyboards.id,
     shotType: schema.storyboards.shotType,
   })
     .from(schema.storyboards)
-    .where(eq(schema.storyboards.sceneId, sb.sceneId))
+    .where(and(
+      eq(schema.storyboards.sceneId, sb.sceneId),
+      eq(schema.storyboards.episodeId, sb.episodeId),
+    ))
     .orderBy(asc(schema.storyboards.storyboardNumber))
     .all()[0]
   if (!firstInScene || firstInScene.id !== sb.id) return

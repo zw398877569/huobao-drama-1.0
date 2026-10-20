@@ -306,3 +306,36 @@ export function insertAtIntegratedStart(prompt: string, text: string): string {
   }
   return `${block}\n${prompt.trimStart()}`
 }
+/**
+ * 解析本镜实际生效的 character_ids —— 老路径 character_ids 必填规则的代码层兼底。
+ *
+ * 背景 (QA msg-20261021-077 Bug-1): LLM 漏填 character_ids 但 image_prompt_permanent.character_traits
+ * 非空 (说明画面里画了角色) 时, 按正文里的角色名反查补齐。
+ *
+ * ⚠️ 补齐结果必须【同时】用于两个地方:
+ *   1. 角色外貌注入 (Task A) —— 靠 character_ids 找角色, 用 det.character_ids 算的话补回来的角色拿不到外貌
+ *   2. 入库的 storyboard_characters 关联 (Task F③)
+ * 抽成纯函数就是为了能直接跑单测 (runStep3 依赖 DB, 没法单测)。
+ */
+export function resolveEffectiveCharacterIds(opts: {
+  declaredIds: number[] | undefined
+  /** image_prompt_permanent.character_traits 的条数 —— >0 说明画面里画了角色 */
+  traitCount: number
+  /** 本镜的 description + action + dialogue —— 用来按角色名反查 */
+  mentionText: string
+  characters: Array<{ id: number; name: string }>
+}): { effectiveIds: number[]; recovered: number[]; needsReview: boolean } {
+  const declared = opts.declaredIds || []
+  if (declared.length > 0) return { effectiveIds: declared, recovered: [], needsReview: false }
+  // 没填 character_ids —— 只有【画了角色】时才反查 (纯环境空镜用空数组是对的, 不能乱补)
+  if (opts.traitCount <= 0) return { effectiveIds: [], recovered: [], needsReview: false }
+  const recovered = opts.characters
+    // 角色名太短 (1 个字) 容易误命中 (比如名字叫"王"而正文里有"王朝"), 跳过
+    .filter((c) => c.name && c.name.length >= 2 && opts.mentionText.includes(c.name))
+    .map((c) => c.id)
+  if (recovered.length === 0) {
+    // 画了角色却一个名字都对不上 → 人工确认画面里到底有没有角色
+    return { effectiveIds: [], recovered: [], needsReview: true }
+  }
+  return { effectiveIds: recovered, recovered, needsReview: false }
+}
