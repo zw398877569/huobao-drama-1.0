@@ -12,4 +12,4 @@ services:
       - PORT=5679
       - TZ=Asia/Shanghai
     restart: unless-stopped
-# deploy-trigger: 2026-10-20T14:05:41Z
+# deploy-trigger: 2026-10-24T12:10:37Z
