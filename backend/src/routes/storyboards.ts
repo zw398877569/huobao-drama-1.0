@@ -140,6 +140,15 @@ app.put('/:id', async (c) => {
   if ('dialogue' in body) {
     updates.ttsAudioUrl = null
     updates.subtitleUrl = null
+    // Sprint 18 (QA msg-20261021-078) Task C 补: ttsSegments 也要一起清。
+    //   改台词后音频虽然被清了, 但分段还是【旧台词】的 —— 三处会用到旧数据:
+    //     ① 前端 dub-card 显示「N 段对白」= 旧 segments
+    //     ② ffmpeg-compose 建字幕优先用 sb.ttsSegments (旧) → 字幕跟新声音对不上
+    //     ③ video-generation 的 dialogue-timeline 读 sb.ttsSegments (旧)
+    //        → 视频 prompt 里的台词时间轴还是旧台词, 口型同步直接错
+    //   清掉之后: 配音页会重新生成 (compose 里 ttsAudioUrl 为空会重跑 generateTTSForDialogue),
+    //   字幕回退到解析新 dialogue, 视频时间轴等重新生成配音后自然是对的。
+    updates.ttsSegments = null
     // 兜底补 speaker 前缀,避免无前缀纯文本被 parseDialogueSegments 当旁白处理
     if (storyboard.episodeId) {
       const [ep] = db.select({ scriptContent: schema.episodes.scriptContent })
