@@ -50,6 +50,11 @@ export const episodes = sqliteTable('episodes', {
   //   JSON 序列化: { step1_done_at, step1_plan, step2_done_at, step2_details, step3_done_at, step3_storyboard_ids }
   //   失败可从中间态恢复, 不需要重跑 LLM. 老 drama 不写 (NULL), 0 兼容成本.
   planningData: text('planning_data'),
+  // Sprint 19 (PM msg-20261025-082) Task C: 分镜拆解 prompt 模板选择持久化
+  //   'general' = 现有通用模板 (默认, 行为跟重构前一致); Sprint 20 在此基础上加 H3 官方模板。
+  //   迁移走 db/index.ts 的 ensureColumn 幂等加列 (TEXT NOT NULL DEFAULT 'general'),
+  //   SQLite 加列时用 DEFAULT 填已有行, 老 episode 不会失败。
+  promptTemplate: text('prompt_template').notNull().default('general'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

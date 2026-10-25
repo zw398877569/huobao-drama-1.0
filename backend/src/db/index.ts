@@ -411,6 +411,10 @@ ensureColumn('episodes', 'audio_config_id', 'INTEGER')
 ensureColumn('episodes', 'target_duration', 'INTEGER')
 // Sprint 6 PM msg-20260930-001 Task A — episodes.text_config_id (分镜拆解模型持久化)
 ensureColumn('episodes', 'text_config_id', 'INTEGER')
+// Sprint 19 (PM msg-20261025-082) Task C — episodes.prompt_template (分镜拆解 prompt 模板)
+//   TEXT NOT NULL DEFAULT 'general' —— SQLite 的 ALTER TABLE ADD COLUMN 带 NOT NULL 时必须有
+//   DEFAULT, 已有行会被 DEFAULT 填上, 不会失败 (PM 工单要求 dev 实测确认, 已在 win host 验证)。
+ensureColumn('episodes', 'prompt_template', "TEXT NOT NULL DEFAULT 'general'")
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 // P0 Scene Intention: derived from scene_intention agent
