@@ -61,7 +61,7 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       // 这是 deterministic 函数 (tool 不调 LLM), 但仍把 few-shot 作为'风格参考'附在 prompt 末尾
       // 后续若有真正的 character generation LLM 调用, 可直接复用 selectForLLMFewshot
       // V2 治本 (msg-20261010-001): appearance 列已 DROP, 不再传给 CharacterContext
-      const fewshotEntries = selectForLLMFewshot({ id: c.dramaId, style: null, characterAesthetic: null }, { id: c.id, name: c.name, personality: c.personality, dramaId: c.dramaId, appearancePermanent: c.appearancePermanent }, 8)
+      const fewshotEntries = selectForLLMFewshot({ id: c.dramaId, style: null, characterAesthetic: null }, { id: c.id, name: c.name, personality: c.personality, dramaId: c.dramaId, appearancePermanent: c.appearancePermanent, permanentTraits: c.permanentTraits }, 8)
       if (fewshotEntries.length) logFewshotSelection({ scope: 'llm-fewshot', dramaId: c.dramaId, characterId: c.id, entries: fewshotEntries })
       const fewshotList = formatFewShotList(fewshotEntries)
       const fewshotNote = fewshotList ? '\n\n## 风格参考 (参考不复制, 必须原创):\n' + fewshotList + '\n注: 不要直接复用以上任何具体人物的脸型/发型/组合, 原创角色, 风格对齐但不复制。' : ''

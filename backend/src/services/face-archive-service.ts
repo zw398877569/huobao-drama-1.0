@@ -17,9 +17,10 @@
  *   D3_order_by_strategy:    ORDER BY RANDOM() + logTaskProgress 钩子 + 用户人工抽检
  *   D4_negative_fewshot:     反例 few-shot 不做, 走正向 5-8 条 cross-style reference
  */
-import { eq, desc, sql, and } from 'drizzle-orm'
+import { eq, desc, sql, and, or, isNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { logTaskProgress } from '../utils/task-logger.js'
+import { extractGenderTrait } from '../utils/gender-guard.js'
 
 export interface FaceEntry {
   id: number
@@ -45,6 +46,31 @@ export interface CharacterContext {
   dramaId: number
   appearancePermanent?: string | null
   appearance?: string | null
+  /** characters.permanent_traits (Sprint 12 gender guard 用同一个字段取性别) */
+  permanentTraits?: string | null
+}
+
+/**
+ * 角色性别 → 档案库的 gender 取值。
+ * 档案库 gender: 'male' | 'female' | 'neutral' | ''(空)
+ * 角色 permanent_traits 里 gender 的 value: '男' / '女' (也兼容英文写法)
+ *
+ * 角色性别查不到 → 返回 null (不按性别过滤, 维持修前行为)
+ */
+export function resolveCharacterGenderFilter(character: CharacterContext | null | undefined): 'male' | 'female' | null {
+  if (!character) return null
+  let raw = ''
+  // 优先 permanent_traits (结构化)
+  raw = (extractGenderTrait(character.permanentTraits) || '').trim()
+  if (!raw && character.appearancePermanent) {
+    // 兜底: appearance_permanent 里的 "gender: 男 | age: ..." 段
+    const m = character.appearancePermanent.match(/(?:^|\|)\s*gender\s*[:：]\s*([^|]+)/i)
+    if (m) raw = m[1].trim()
+  }
+  if (!raw) return null
+  if (/^(男|male|m|man|boy|男性)$/i.test(raw)) return 'male'
+  if (/^(女|female|f|woman|girl|女性)$/i.test(raw)) return 'female'
+  return null
 }
 
 /**
@@ -52,7 +78,16 @@ export interface CharacterContext {
  * 用途: 跟 aestheticTokens 并列硬拼进 imagePrompt (characters.ts)
  * 策略: ORDER BY archived_at DESC LIMIT n (最新采集优先)
  */
-export function selectForCodeSide(_drama: DramaContext, _character: CharacterContext, n = 2): FaceEntry[] {
+export function selectForCodeSide(_drama: DramaContext, character: CharacterContext, n = 2): FaceEntry[] {
+  // Sprint 20 (QA msg-20261025-082) P1: 选档过滤。
+  //   修前: 纯 ORDER BY archived_at DESC LIMIT n —— 跟角色/风格【完全无关】,
+  //         实测 drama 15 林达 (28岁现代男性) 选到 entry 122/123 (entryNames 鹅蛋脸/窄长菱形脸,
+  //         gender=female, prompt_tokens 带 danfeng phoenix eyes / bean-paste / silver hairpin)
+  //         → 古风女性向脸型硬拼进男性角色的生图 prompt, 画风整个跑偏。
+  //   修后: ① 只取 factor='Face' (脸型档案; 比基尼/晚宴露背裙装这类不该进脸型参考)
+  //         ② 性别匹配 (或 gender='neutral' 的中性条目)
+  //         ③ 角色性别查不到 → 不筛 (维持修前行为)
+  const genderFilter = resolveCharacterGenderFilter(character)
   const rows = db.select({
     id: schema.faceTypeEntries.id,
     factor: schema.faceTypeEntries.factor,
@@ -64,6 +99,12 @@ export function selectForCodeSide(_drama: DramaContext, _character: CharacterCon
     data: schema.faceTypeEntries.data,
   })
     .from(schema.faceTypeEntries)
+    .where(and(
+      eq(schema.faceTypeEntries.factor, 'Face'),
+      genderFilter
+        ? or(eq(schema.faceTypeEntries.gender, genderFilter), eq(schema.faceTypeEntries.gender, 'neutral'))
+        : undefined,
+    ))
     .orderBy(desc(schema.faceTypeEntries.archivedAt))
     .limit(n)
     .all()
@@ -77,7 +118,11 @@ export function selectForCodeSide(_drama: DramaContext, _character: CharacterCon
  * 策略: ORDER BY RANDOM() (用户拍板 D3), n 默认 8
  * 注意: SQLite better-sqlite3 不支持 RANDOM() seed, 每次随机
  */
-export function selectForLLMFewshot(_drama: DramaContext, _character: CharacterContext, n = 8): FaceEntry[] {
+export function selectForLLMFewshot(_drama: DramaContext, character: CharacterContext, n = 8): FaceEntry[] {
+  // Sprint 20 (QA msg-20261025-082) P1: 同样按性别过滤 (不筛 factor ——
+  //   跨风格参考含服装类条目是 D2 diversity 的设计意图)。
+  //   角色性别查不到 → 不筛 (维持修前行为)。
+  const genderFilter = resolveCharacterGenderFilter(character)
   const rows = db.select({
     id: schema.faceTypeEntries.id,
     factor: schema.faceTypeEntries.factor,
@@ -89,6 +134,14 @@ export function selectForLLMFewshot(_drama: DramaContext, _character: CharacterC
     data: schema.faceTypeEntries.data,
   })
     .from(schema.faceTypeEntries)
+    .where(genderFilter
+      ? or(
+        eq(schema.faceTypeEntries.gender, genderFilter),
+        eq(schema.faceTypeEntries.gender, 'neutral'),
+        eq(schema.faceTypeEntries.gender, ''),
+        isNull(schema.faceTypeEntries.gender),
+      )
+      : undefined)
     .orderBy(sql`RANDOM()`)
     .limit(n)
     .all()

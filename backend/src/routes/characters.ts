@@ -115,7 +115,7 @@ app.post('/:id/generate-image', async (c) => {
   const aestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
   // Sprint 5 Task D: face-archive code-side 1-2 条精选 (latest archivedAt DESC)
   // V2 治本 (msg-20261010-001): appearance 列已被 RENAME → DROP, 不再传给 CharacterContext
-  const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent }, 2)
+  const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, permanentTraits: char.permanentTraits }, 2)
   const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
   if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
   // Sprint 5 Task G: AGE ANCHOR 独立模块 (跟 face-archive 解耦, 三段并列硬拼)
@@ -192,7 +192,7 @@ app.post('/batch-generate-images', async (c) => {
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''
     // Sprint 5 Task D: face-archive code-side 1-2 条精选 (batch 路径)
-    const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent }, 2)
+    const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, permanentTraits: char.permanentTraits }, 2)
     const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
     if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
     // Sprint 5 Task G: AGE ANCHOR 独立模块 (batch 路径)
