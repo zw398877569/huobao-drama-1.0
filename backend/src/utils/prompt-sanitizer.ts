@@ -438,54 +438,118 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
   }
 }
 
-async function sanitizeImagePromptLLM(rawPrompt) {
-  // task_B: 优先 'sanitizer' 专用配置 (deepseek-chat 不输出 thinking), 没配才回退 'text'
-  let config = getActiveConfig('sanitizer')
-  let configSource = 'sanitizer'
-  if (!config) {
-    config = getActiveConfig('text')
-    configSource = 'text-fallback'
+/**
+ * Sprint 20 (QA msg-20261025-082) P0: 生图去敏的【请求级候选配置链】。
+ *
+ * 修前只有【配置级】回退 (没配 'sanitizer' 才用 'text'), 同一个配置失败就直接
+ * fallback-to-local —— 跟翻译链路 (services/ai.ts resolvePromptLLMConfigCandidates,
+ * sprint-16 f413db0 改的) 不一样, 那边快模型失败会自动换 text 配置。
+ *
+ * 事故 (drama 15 林达 characterId=44, 2026-10-25 id=286): sanitizer 配置 id=18 是
+ * MiniMax-M3.1-Flash-Preview, inputLen≈2042 时 thinking 吃光预算返回空正文 →
+ * empty×2 → fallback-to-local → 本地 prompt 原样带着 face-archive 的古风脸型词
+ * (danfeng phoenix eyes / bean-paste shade / silver hairpin) → 画风从写实概念设计稿
+ * 变成动画线稿设定稿。
+ *
+ * ⚠️ 向后兼容: 没配 sanitizer 配置的老环境, 候选链 = 只有 text, 行为跟修前一致。
+ */
+export function resolveSanitizerConfigCandidates(): Array<{ config: any; source: 'sanitizer' | 'text' }> {
+  const out: Array<{ config: any; source: 'sanitizer' | 'text' }> = []
+  // ⚠️ 这里【不用 silent】: 保留原来"没配 sanitizer 配置"的 warn 行为
+  const fast = getActiveConfig('sanitizer')
+  if (fast?.apiKey && fast?.model) out.push({ config: fast, source: 'sanitizer' })
+  const text = getActiveConfig('text')
+  if (text?.apiKey && text?.model) {
+    // 同一个配置别放两遍 (sanitizer 和 text 可能配了同一个)
+    if (!out.some(c => c.config.model === text.model && c.config.baseUrl === text.baseUrl)) {
+      out.push({ config: text, source: 'text' })
+    }
   }
-  if (!config) {
-    logTaskWarn('PromptSanitizer', 'no-text-config', { reason: 'no active sanitizer/text AI config' })
-    return null
-  }
-  if (!config.apiKey || !config.model) {
-    logTaskWarn('PromptSanitizer', 'text-config-incomplete', { provider: config.provider })
-    return null
-  }
+  return out
+}
 
-  const url = getTextChatCompletionsUrl(config)
-  logTaskProgress('PromptSanitizer', 'llm-rewrite-start', {
-    configSource,
-    provider: config.provider,
-    model: config.model,
-    inputLen: rawPrompt.length,
-  })
+export interface SanitizerCandidateFailure {
+  source: string
+  provider?: string
+  model?: string
+  attempt?: number
+  reason: string
+}
 
-  // task_C: retry 1 次 (MAX_ATTEMPTS=2), 第 2 次仍失败 → 标 sanitizer-llm-failed-twice warn
-  const MAX_ATTEMPTS = 2
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const result = await attemptSanitizerLLM(url, config, rawPrompt, configSource, attempt)
-    if (result.outcome === 'success') return result.polished
-    if (result.outcome === 'hard-fail') return null
-    if (attempt < MAX_ATTEMPTS) {
-      // 2026-10-12 sprint 43 FIX-1 (QA msg-20261012-043): M3 同步限速, retry 之间加 5-10s 随机延迟
-      const retryDelayMs = 5000 + Math.floor(Math.random() * 5000)
-      logTaskProgress('PromptSanitizer', 'llm-rewrite-retry', { attempt, configSource, retryDelayMs })
-      await new Promise(r => setTimeout(r, retryDelayMs))
+/**
+ * 跑候选链 —— 第一个成功的候选就用它; 全失败才返回 ok=false (由调用方 fallback-to-local)。
+ *
+ * 抽成独立函数 + 注入 attempt, 是为了让 QA 要求的 3 组用例
+ * (快模型成功 / 快模型空→text 兜底 / 全失败) 能直接跑单测 (不用真的调 LLM)。
+ */
+export async function runSanitizerCandidates(
+  rawPrompt: string,
+  candidates: Array<{ config: any; source: string }>,
+  attempt: (url: string, config: any, prompt: string, source: string, attemptNo: number) => Promise<{ outcome: string; polished?: string }>,
+  opts?: { maxAttempts?: number; sleep?: (ms: number) => Promise<void> },
+): Promise<{ ok: boolean; text?: string; failures: SanitizerCandidateFailure[] }> {
+  const MAX_ATTEMPTS = opts?.maxAttempts ?? 2
+  const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+  const failures: SanitizerCandidateFailure[] = []
+
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const { config, source } = candidates[ci]
+    if (!config?.apiKey || !config?.model) {
+      failures.push({ source, reason: 'config-incomplete' })
       continue
     }
-    logTaskWarn('PromptSanitizer', 'sanitizer-llm-failed-twice', {
-      configSource,
+    const url = getTextChatCompletionsUrl(config)
+    logTaskProgress('PromptSanitizer', 'llm-rewrite-start', {
+      configSource: source,
       provider: config.provider,
       model: config.model,
       inputLen: rawPrompt.length,
-      hint: 'sanitizer LLM 连续失败, 走本地 sanitize 兜底. 检查: (1) sanitizer config (2) API key (3) max_tokens (4) 中转站 thinking block',
+      candidateIndex: ci + 1,
+      candidateCount: candidates.length,
     })
+
+    for (let attemptNo = 1; attemptNo <= MAX_ATTEMPTS; attemptNo++) {
+      const result = await attempt(url, config, rawPrompt, source, attemptNo)
+      if (result.outcome === 'success') return { ok: true, text: result.polished, failures }
+      if (result.outcome === 'hard-fail') {
+        failures.push({ source, provider: config.provider, model: config.model, attempt: attemptNo, reason: 'hard-fail' })
+        break  // 硬错换下一个候选 (auth / 4xx 之类, 同配置重试也没用)
+      }
+      if (attemptNo < MAX_ATTEMPTS) {
+        // 2026-10-12 sprint 43 FIX-1 (QA msg-20261012-043): M3 同步限速, retry 之间加 5-10s 随机延迟
+        const retryDelayMs = 5000 + Math.floor(Math.random() * 5000)
+        logTaskProgress('PromptSanitizer', 'llm-rewrite-retry', { attempt: attemptNo, configSource: source, retryDelayMs })
+        await sleep(retryDelayMs)
+        continue
+      }
+      failures.push({ source, provider: config.provider, model: config.model, attempt: attemptNo, reason: 'empty-after-retries' })
+    }
+
+    logTaskWarn('PromptSanitizer', 'sanitizer-llm-failed-twice', {
+      configSource: source,
+      provider: config.provider,
+      model: config.model,
+      inputLen: rawPrompt.length,
+      hint: '该候选配置连续失败, 换下一个候选 (sanitizer → text); 全失败才走本地兜底',
+    })
+  }
+
+  logTaskWarn('PromptSanitizer', 'all-configs-failed', {
+    failures,
+    candidates: candidates.map(c => c.source),
+    hint: '所有候选配置的 LLM 改写都没成功, 本次走本地 sanitize 兜底 (prompt 原样保留) —— 注意: 原样保留会把 face-archive 词带进 prompt',
+  })
+  return { ok: false, failures }
+}
+
+async function sanitizeImagePromptLLM(rawPrompt) {
+  const candidates = resolveSanitizerConfigCandidates()
+  if (!candidates.length) {
+    logTaskWarn('PromptSanitizer', 'no-text-config', { reason: 'no active sanitizer/text AI config' })
     return null
   }
-  return null
+  const result = await runSanitizerCandidates(rawPrompt, candidates, attemptSanitizerLLM)
+  return result.ok ? (result.text as string) : null
 }
 /**
  * 图片生成 prompt 无害化改写主入口。
@@ -495,6 +559,31 @@ async function sanitizeImagePromptLLM(rawPrompt) {
  * - 末尾追加艺术化 suffix(若已含则不重复)
  * - 任何异常都被吞掉,保证生图链路不被打断
  */
+/**
+ * face-archive 参考块 —— 【风格参考: 鹅蛋脸 (Oval Face): oval face, danfeng phoenix eyes...】
+ *
+ * Sprint 20 (QA msg-20261025-082) P1: 本地兜底路径必须把它去掉。
+ *
+ * 背景: LLM 改写成功时, 它会把脸型【融进角色描述】("square face, warm eyes, wet black hair"),
+ *   档案里的古风描述 (丹凤眼/豆沙唇/银簪) 会被洗掉 —— 实测 2026-10-19 id=262 就是这样,
+ *   出来的是写实概念设计稿。
+ *   但 LLM 改写失败走本地兜底时, 这段【原样透传】进生图 prompt —— 生图模型会字面执行它,
+ *   于是 "danfeng phoenix eyes / bean-paste shade / silver hairpin" 真的画成了古风脸型,
+ *   画风也从写实概念设计稿跑成古风线稿 (实测 2026-10-25 id=286)。
+ *
+ * 角色自己的 5 维外貌 (age/face/hair/body/outfit) 本来就在 prompt 里 (characters.ts 拼的),
+ *   去掉档案块不会丢角色一致性 —— 丢的只是"额外的一份脸型参考"。
+ */
+const FACE_ARCHIVE_BLOCK_RE = /【风格参考:[^】]*】/g
+
+export function stripFaceArchiveTokens(prompt: string): { text: string; removed: number } {
+  const src = String(prompt || '')
+  if (!src) return { text: src, removed: 0 }
+  let removed = 0
+  const text = src.replace(FACE_ARCHIVE_BLOCK_RE, () => { removed++; return '' })
+  return { text: text.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]*,\s*,\s*/g, ', ').trim(), removed }
+}
+
 export async function sanitizeImagePrompt(rawPrompt) {
   try {
     const llmResult = await sanitizeImagePromptLLM(rawPrompt)
@@ -505,8 +594,15 @@ export async function sanitizeImagePrompt(rawPrompt) {
   } catch (err) {
     logTaskError('PromptSanitizer', 'llm-threw', { error: err?.message || String(err) })
   }
-  const local = sanitizeImagePromptLocal(rawPrompt)
-  return applySafetySuffix(local)
+  // Sprint 20 P1: 本地兜底时去掉 face-archive 参考块 (见 stripFaceArchiveTokens 的注释)
+  const stripped = stripFaceArchiveTokens(sanitizeImagePromptLocal(rawPrompt))
+  if (stripped.removed > 0) {
+    logTaskWarn('PromptSanitizer', 'face-archive-tokens-stripped-on-fallback', {
+      removed: stripped.removed,
+      hint: 'LLM 改写失败走本地兜底, face-archive 参考块已去掉 —— 原样透传会让生图模型字面执行档案里的古风脸型词 (丹凤眼/豆沙唇/银簪), 画风跑偏',
+    })
+  }
+  return applySafetySuffix(stripped.text)
 }
 
 /**
