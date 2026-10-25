@@ -356,7 +356,16 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
       body: JSON.stringify({
         model: config.model,
         temperature: 0.4,
-        max_tokens: 3000, // 2026-09-25 PM msg-20260924-006 (Q5 task_A): M3 thinking block 占 token, 400 不够 → 1500. 2026-10-12 sprint 43 FIX-1 (QA msg-20261012-043): M3 thinking block 偶发 1500 不够 → 3000
+        // 2026-10-25 Sprint 20 (QA msg-20261025-083) fix_1: 3000 → 8192 (跟 services/ai.ts
+        //   翻译链路 PROMPT_TRANSLATION_MAX_TOKENS 对齐)。
+        //   实测 (llm-debug-resp.log, 同一个 endpoint 同一个 system prompt):
+        //     2026-10-19T08:01:22  finish_reason=stop  completion=2439 reasoning=2383 content=252  ✅
+        //     2026-10-19T08:02:52  finish_reason=stop  completion=2870 reasoning=2819 content=??  ✅
+        //     2026-10-25T07:46:50  finish_reason=length completion=3000 reasoning=2999 content=0    ❌
+        //     2026-10-25T07:47:28  finish_reason=length completion=3000 reasoning=2999 content=9569 (全是 <think>, 剥完仍空) ❌
+        //   M3 的 thinking 常态 2400-3000 token, 3000 一点正文余量都没有 → content 恒空 → 一直 fallback-to-local。
+        //   历史: 400 → 1500 (2026-09-25) → 3000 (2026-10-12 sprint 43) → 8192 (本次)
+        max_tokens: 8192,
         messages: [
           { role: 'system', content: SYSTEM_INSTRUCTION },
           { role: 'user', content: `原文 prompt:\n<<<${rawPrompt}>>>` },
@@ -376,7 +385,10 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
       return { outcome: 'hard-fail' }
     }
     const data = await resp.json()
-    const llmContent = data?.choices?.[0]?.message?.content
+    const choice0 = data?.choices?.[0] || {}
+    const llmContent = choice0?.message?.content
+    const reasoningContent = typeof choice0?.message?.reasoning_content === 'string'
+      ? choice0.message.reasoning_content : ''
     const extractedRaw = typeof llmContent === 'string' ? llmContent : ''
     const rewritten = hasNonEnglishChars(rawPrompt)
       ? extractPromptFromLLM(extractedRaw)
@@ -386,6 +398,15 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
         attempt,
         configSource,
         provider: config.provider,
+        // Sprint 20 fix_3: 把"为什么空"直接写进日志 —— 之前只有 rawPreview='' 看不出是被
+        //   max_tokens 截断 (finish_reason=length) 还是真的空。
+        //   这次定位靠的就是 llm-debug-resp.log 里的 usage/reasoning_tokens, flow log 里没有。
+        finishReason: choice0?.finish_reason || '',
+        hasReasoningContent: reasoningContent.length > 0,
+        reasoningLen: reasoningContent.length,
+        completionTokens: data?.usage?.completion_tokens ?? null,
+        reasoningTokens: data?.usage?.reasoning_tokens ?? null,
+        maxTokens: 8192,
         rawPreview: extractedRaw.slice(0, 400),
       })
       return { outcome: 'retryable-empty' }
@@ -576,6 +597,43 @@ async function sanitizeImagePromptLLM(rawPrompt) {
  */
 const FACE_ARCHIVE_BLOCK_RE = /【风格参考:[^】]*】/g
 
+/**
+ * 角色形象模板尾部的画风词 —— 'detailed illustration, professional character art'
+ *
+ * Sprint 20 (QA msg-20261025-083) fix_2: LLM 改写失败走本地兜底时, 这句会把生图模型
+ * 往【插画/设定稿】方向带 (实测 2026-10-25 id=287 出的是 FLAT VECTOR / 纯白背景平涂的
+ * 动画线稿设定稿, 不是写实概念设计稿)。
+ *
+ * ⚠️ 只剥这两个【具体短语】, 不剥裸的 'illustration' —— 场景图/道具图的 prompt 里
+ *   'illustration' 可能是用户明确要的插画风格, 剥了会改错意图。
+ * ⚠️ 只在【本地兜底路径】剥: LLM 改写成功时, 画风词本来就该由 LLM 按上下文决定。
+ */
+const ILLUSTRATED_STYLE_PHRASES = [
+  'detailed illustration',
+  'professional character art',
+  'illustration, professional',
+]
+
+export function stripIllustratedStyleTokens(prompt: string): { text: string; removed: string[] } {
+  const src = String(prompt || '')
+  if (!src) return { text: src, removed: [] }
+  const removed: string[] = []
+  let text = src
+  for (const phrase of ILLUSTRATED_STYLE_PHRASES) {
+    const re = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+    if (!re.test(text)) continue
+    removed.push(phrase)
+    text = text.replace(re, '');
+  }
+  // 剥完留下的悬挂逗号/空格
+  text = text
+    .replace(/[ \t]*,\s*(?=,)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]*,\s*$/g, '')
+    .trim()
+  return { text, removed }
+}
+
 export function stripFaceArchiveTokens(prompt: string): { text: string; removed: number } {
   const src = String(prompt || '')
   if (!src) return { text: src, removed: 0 }
@@ -602,7 +660,15 @@ export async function sanitizeImagePrompt(rawPrompt) {
       hint: 'LLM 改写失败走本地兜底, face-archive 参考块已去掉 —— 原样透传会让生图模型字面执行档案里的古风脸型词 (丹凤眼/豆沙唇/银簪), 画风跑偏',
     })
   }
-  return applySafetySuffix(stripped.text)
+  // Sprint 20 fix_2: 再剥掉模板尾部的插画风词 (fallback 路径专用)
+  const deIllustrated = stripIllustratedStyleTokens(stripped.text)
+  if (deIllustrated.removed.length > 0) {
+    logTaskWarn('PromptSanitizer', 'illustrated-style-tokens-stripped-on-fallback', {
+      removed: deIllustrated.removed,
+      hint: 'LLM 改写失败走本地兜底, 模板尾部的 detailed illustration / professional character art 已去掉 —— 这两句会把画风带成插画/设定稿',
+    })
+  }
+  return applySafetySuffix(deIllustrated.text)
 }
 
 /**
