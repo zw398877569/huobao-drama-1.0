@@ -29,31 +29,22 @@ import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 //   V4 三步新链路接入共享模块 — 旧 agent 路径 (storyboard-tools.ts) 已改用同一份实现。
 //   - ensureH3ThreePartPrompt: 补 H3 三段式 header (背景音少的根因)
 //   - applyDurationPolicy: 时长体系 (因子估算 → 钩子/过渡 → Σ 收敛)
-import { ensureH3ThreePartPrompt } from '../utils/h3-prompt.js'
 // Sprint 16 Bug-B: 台词嵌入 (V4 planner 路径此前漏了, 跟老全量路径对齐)
-import { embedDialogueInline } from '../utils/dialogue-timeline.js'
+// Sprint 19 (PM msg-20261025-082): prompt 模板抽象层
+//   step1/step2 的 prompt 文本 + schema + Step3 的组装规则 + 生成期注入, 全部由模板提供;
+//   通用逻辑 (时长体系 / dialogue 规范化 / character_ids 恢复 / DB 落库) 留在这里不动。
+import { getEpisodeTemplateId, getTemplate, resolveTemplateId } from '../prompt-templates/index.js'
+import { Step1Schema, Step2Schema, ShotDetailsItemSchema } from '../prompt-templates/schemas.js'
+import type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js'
+export { Step1Schema, Step2Schema, ShotDetailsItemSchema } from '../prompt-templates/schemas.js'
+export type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js'
 // Sprint 18 (QA msg-20261021-078): 台词角色白名单 + 落库前规范化
 import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
 import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
-import {
-  buildAppearanceBlock,
-  buildContinuityBlock,
-  buildResultBlock,
-  ensureIntegratedHeader,
-  findLeakedProps,
-  getRhythmFormula,
-  insertIntoIntegratedSection,
-  resolveEffectiveCharacterIds,
-} from '../utils/storyboard-rules.js'
+import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
 import { applyDurationPolicy } from './shot-duration.js'
-import {
-  salvageImagePromptPermanent,
-  salvageShotPlanArray,
-  permanentToText,
-  V3ImagePromptPermanentSchema,
-  INTENT_FUNCTIONS,
-} from './llm-schema-validator.js'
+import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
 import { stripReasoningBlocks } from './ai.js'
 
 // Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
@@ -77,40 +68,6 @@ export interface PlanningData {
   step2_details?: ShotDetailsItem[]
   step3_done_at?: string
   step3_storyboard_ids?: number[]
-}
-
-export interface ShotPlanItem {
-  shot_number: number
-  scene_id: number
-  duration: number
-  intent_function: string
-  action: string
-  character_ids?: number[]
-}
-
-export interface ShotDetailsItem {
-  shot_number: number
-  scene_id?: number
-  character_ids?: number[]
-  shot_type?: string
-  angle?: string
-  movement?: string
-  location?: string
-  time?: string
-  duration?: number
-  action?: string
-  dialogue?: string
-  description?: string
-  result?: string
-  atmosphere?: string
-  intent_function?: string
-  sound_effect?: string
-  bgm_prompt?: string
-  /** V3 zod enum 5 维结构化对象 (替代 V2 free-text permanent) */
-  image_prompt_permanent?: z.infer<typeof V3ImagePromptPermanentSchema>
-  image_prompt_plot_state?: string
-  video_prompt_permanent?: string
-  video_prompt_plot_state?: string
 }
 
 export async function getPlanningData(episodeId: number): Promise<PlanningData> {
@@ -410,39 +367,17 @@ async function callLLMJson<T>(
 
 // ─── Step 1: shot_plan ────────────────────────────────────────────────
 
-const ShotPlanItemSchema = z.object({
-  shot_number: z.number().int().positive(),
-  scene_id: z.number().int().positive(),
-  duration: z.number().min(2).max(15),
-  intent_function: z.enum(INTENT_FUNCTIONS),
-  action: z.string().min(5).max(500),
-  character_ids: z.array(z.number().int()).optional(),
-})
-
-const Step1Schema = z.object({
-  // Sprint 11 QA msg-20261016-067 Bug-C: 上限 30 → 50
-  //   修前: drama 13「雨夜」step1 第一次跑 zod-validation-failed code='too_big' maximum=30
-  //         (LLM 生成 >30 镜), 用户手动重跑第二次 12 秒才成功 — UX 差且白烧一次 LLM。
-  //   修后: 上限放宽到 50, 配合下面 prompt 强化 (明确写 ≤50 + 精简合并指引)。
-  //   下限 5 不变 (少于 5 镜的剧本信息量不足, 仍应拦)。
-  //   注意: VIDEO_MAX_DURATION=15 是 H3 单镜硬上限 (跟本项无关, 那是单镜时长不是镜数)。
-  shot_plan: z.array(ShotPlanItemSchema).min(5).max(50),
-  // Sprint 11 QA msg-20261016-067 Bug-C: 300 → 750
-  //   镜数上限放到 50 后, 50 镜 × VIDEO_MAX_DURATION 15s = 750s 是理论上限。
-  //   修前 total_duration max 300 会先于 shot_plan max 30 撞墙 (30×15=450 > 300),
-  //   导致"镜数没超但总时长超"也被 zod fail, 且错误信息指向 total_duration 让人误判。
-  total_duration: z.number().min(10).max(750),
-  scene_distribution: z.record(z.string(), z.number()),
-})
-
 export async function runStep1(opts: {
   dramaId: number
   episodeId: number
   textConfigId?: number
   modelOverride?: string
+  /** Sprint 19: prompt 模板 id (默认 general); 未知 id 直接抛错, 不静默 fallback */
+  templateId?: string
 }): Promise<z.infer<typeof Step1Schema>> {
-  const { dramaId, episodeId, textConfigId, modelOverride } = opts
-  logTaskProgress('StoryboardPlanner', 'step1-begin', { dramaId, episodeId })
+  const { dramaId, episodeId, textConfigId, modelOverride, templateId } = opts
+  const tpl = getTemplate(resolveTemplateId(templateId))
+  logTaskProgress('StoryboardPlanner', 'step1-begin', { dramaId, episodeId, templateId: tpl.id })
 
   const ctx = await readStoryboardContextForPlanner(episodeId, dramaId)
   const config = textConfigId
@@ -450,20 +385,7 @@ export async function runStep1(opts: {
     : getTextConfig()
   const finalConfig: AIConfig = modelOverride ? { ...config, model: modelOverride } : config
 
-  const systemPrompt = `你是资深影视分镜师 + 短剧节奏导演。
-任务: 基于 ctx (script / scenes / characters / existingStoryboards / targetDuration), 规划本集所有镜头的 shot_plan。
-约束:
-  - scene_id 必须从 ctx.scenes 中选
-  - character_ids 必须从 ctx.characters 中选
-  - duration 2-15s
-  - intent_function 必须是 enum: 铺垫 / 揭露 / 反转 / 高潮 / 余韵 / 悬念 / 情感爆发
-  - shot_number 1..N 连续递增
-  - 同一 scene 的所有镜头相邻排列 (单调性, P3 约束)
-  - Σ duration 接近 targetDuration (允许 ±10%)
-  - shot_plan 数组长度 5-50 个镜头 (硬上限 50)。⚠️ 严禁超过 50 个 — 会被 zod 拒绝整轮重跑。
-    剧情复杂/场景多时, 优先【合并同类镜头】(同场景同功能的连续动作合并成一镜) 而不是无脑加镜数。
-    短剧单集 15-30 镜是正常密度, 超过 40 镜通常说明拆分粒度过细。
-输出: 严格 JSON { shot_plan: [{shot_number, scene_id, duration, intent_function, action, character_ids}], total_duration: number, scene_distribution: {scene_id_str: count} }`
+  const systemPrompt = tpl.step1.systemPrompt
 
   const userPrompt = JSON.stringify({
     targetDuration: ctx.targetDuration ?? 100,
@@ -478,7 +400,7 @@ export async function runStep1(opts: {
     },
   }, null, 2)
 
-  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step1Schema, {
+  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, tpl.step1.schema as z.ZodType<z.infer<typeof Step1Schema>>, {
     ctx: { dramaId, episodeId, step: 'step1' },
     salvage: (parsed) => {
       if (!parsed || typeof parsed !== 'object') return parsed
@@ -503,49 +425,18 @@ export async function runStep1(opts: {
 
 // ─── Step 2: shot_details (V3 zod enum 强约束) ──────────────────────
 
-const ShotDetailsItemSchema = z.object({
-  shot_number: z.number().int().positive(),
-  scene_id: z.number().int().optional(),
-  character_ids: z.array(z.number().int()).optional(),
-  shot_type: z.string().optional(),
-  angle: z.string().optional(),
-  movement: z.string().optional(),
-  location: z.string().optional(),
-  time: z.string().optional(),
-  duration: z.number().optional(),
-  action: z.string().optional(),
-  dialogue: z.string().optional(),
-  description: z.string().optional(),
-  result: z.string().optional(),
-  atmosphere: z.string().optional(),
-  intent_function: z.string().optional(),
-  /** V3 zod enum 5 维结构化对象 — V2 free-text permanent 已废弃 */
-  image_prompt_permanent: V3ImagePromptPermanentSchema.optional(),
-  image_prompt_plot_state: z.string().optional(),
-  video_prompt_permanent: z.string().optional(),
-  video_prompt_plot_state: z.string().optional(),
-  // Sprint 11 Task A (PM msg-20261016-001): H3 声音两列 — V4 重构时遗落, 导致 19/19 video_prompt
-  //   缺三段式 header, H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)。
-  //   旧路径 agents/index.ts:580-588 已有既有措辞, 这里沿用同口径。
-  /** 环境底噪 + diegetic 音效 (画面内可听的声音)。无则写 'N/A' */
-  sound_effect: z.string().optional(),
-  /** 该镜配乐描述: 配器 + 速度 + 节奏 + 动态变化。禁止抽象情绪词。无则写 'N/A' */
-  bgm_prompt: z.string().optional(),
-})
-
-const Step2Schema = z.object({
-  shot_details: z.array(ShotDetailsItemSchema),
-})
-
 export async function runStep2(opts: {
   dramaId: number
   episodeId: number
   shotPlanOverride?: ShotPlanItem[]
   textConfigId?: number
   modelOverride?: string
+  /** Sprint 19: prompt 模板 id (默认 general); 未知 id 直接抛错, 不静默 fallback */
+  templateId?: string
 }): Promise<z.infer<typeof Step2Schema>> {
-  const { dramaId, episodeId, shotPlanOverride, textConfigId, modelOverride } = opts
-  logTaskProgress('StoryboardPlanner', 'step2-begin', { dramaId, episodeId })
+  const { dramaId, episodeId, shotPlanOverride, textConfigId, modelOverride, templateId } = opts
+  const tpl = getTemplate(resolveTemplateId(templateId))
+  logTaskProgress('StoryboardPlanner', 'step2-begin', { dramaId, episodeId, templateId: tpl.id })
 
   const planningData = await getPlanningData(episodeId)
   const plan = shotPlanOverride || planningData.step1_plan
@@ -557,86 +448,7 @@ export async function runStep2(opts: {
     : getTextConfig()
   const finalConfig: AIConfig = modelOverride ? { ...config, model: modelOverride } : config
 
-  const systemPrompt = `你是资深影视分镜师。
-任务: 基于 step1_plan + ctx.scenes + ctx.characters, 输出 shot_details JSON 数组 (每个 shot 一个对象)。
-V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 enum 结构化对象, 严禁塞 plot_state:
-  {
-    "character_traits": [
-      {"category": "age" | "face" | "hair" | "body" | "outfit", "value": "具体描述 ≤ 50 字"}
-    ],
-    -- ⚠️ character_traits[].category 必须是 age/face/hair/body/outfit 这 5 个值之一,
-    --   严禁 clothing/accessory/eyebrows/skin_tone 等扩展维度
-    --   (非法值会被挪到 plot_state, 该描述不会出现在 permanent 段),
-    "scene_aesthetic": ["氛围1", "氛围2"],
-    "shot_type_ref": "全景" | "中景" | "近景" | "特写",
-      -- ⚠️ shot_type_ref 必须是这 4 个值之一, 严禁 "中近景"/"中全景" 等复合值 (非法值会触发 salvage fallback 到 "中景", 但会增加 retry 风险)
-    "angle": "机位",
-    "movement": "运镜"
-  }
-  - 2026-10-13 sprint 44 FIX-057 C 方案 (c) prompt 强化: character_traits 至少 1 项 (推荐 2-5 项, 至少 2 个不同维度: age/face/hair/body/outfit 选 ≥ 2 个), 严禁输出空数组, 严禁 0 项
-  - character_traits 2-10 项 (推荐 2-5), category 必须严格在 5 维 enum 内 (age/face/hair/body/outfit)
-  - 严禁 category 写 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 (会被 zod reject, 自动 salvage 到 plot_state)
-  - 严禁 character_traits[i].value 含情感/剧情描述 (例如 '深爱豆豆胜过自己' → 错误, 应该是 age/face/hair/body/outfit 永久外貌)
-  - 严禁 character_traits[i].value 含摄影指令 (如 '中景平视'/'固定机位' → 错误, 这些在 shot_type_ref/angle/movement 字段)
-  - 字段分工: 瞬时动作/表情/对话 写 action + image_prompt_plot_state; 物理外貌(年龄/脸/发型/身材/服装) 写 character_traits; 场景氛围 写 scene_aesthetic; 摄影指令 写 shot_type_ref/angle/movement — 三块内容 vs 一块摄影, 不要混
-- 2026-10-13 sprint 44 FIX-056-VIDEO-PROMPT-FUSION: video_prompt 字段分工 (跟 image_prompt 完全对称)
-  - video_prompt_permanent 写运镜+机位+环境(运镜词汇/景别/光线, 不要塞剧情动作/对话/表情) — 这部分是摄影指令
-  - video_prompt_plot_state 写本镜剧情瞬时动作/表情/对话/物件状态 (跟 image_prompt_plot_state 字段分工一致)
-  - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 跟 imagePrompt 拼接方式一致
-  - 严禁把剧情动作塞到 video_prompt_permanent (后端拼不出剧情, 视频提示词没剧情); 严禁把摄影指令塞到 video_prompt_plot_state (冗余, 跟 permanent 重复)
-- Sprint 15 (PM msg-20261020-075): 对白嵌入 video_prompt (口型同步的文字侧前提)
-  - dialogue 字段里的每一句【角色台词】都必须按时间顺序写进 video_prompt_plot_state, 不能省略
-  - 格式: <角色动作>，开口:'<对白原文>' — 台词原文照抄 dialogue 字段, 不要改写/概括/翻译
-  - ⚠️ 旁白 (isNarrator 的段) 【不要】写进 video_prompt —— 旁白是画外音, 画面里没人张嘴;
-    写进去会让视频模型误以为要动嘴, 反而破坏口型同步
-  - 多角色多轮对白按 dialogue 字段里的出现顺序
-  - ⚠️ 台词念完的时长不要超过本镜 duration, 说不完的镜头把台词写短一点
-    (超时会在 flow-log 的 VideoTask/dialogue-exceeds-duration 里报出来)
-  - 说明: 后端还有一层代码兜底 (按 tts_segments 实测每段音频时长自动拼时间轴),
-    本条是让 LLM 输出的动作描述跟台词时序更契合, 两者互补。
-    即使本条没完全生效, 口型同步也不会彻底失效 —— 代码兜底仍然会把台词+时间轴拼进去。
-- Sprint 11 Task A (PM msg-20261016-001): sound_effect / bgm_prompt 必填 (无内容写 'N/A')
-  - sound_effect: 该镜【画面内可听的声音】= 环境底噪 (雨声/风声/室内嗡鸣/街道车流) + diegetic 音效 (脚步声/门响/器物碰撞/角色喘息)
-  - bgm_prompt: 该镜【配乐】= 配器 (钢琴/弦乐/电子/鼓组) + 速度 (缓慢/中速/急促) + 节奏 (稳定/渐进/骤变) + 动态变化 (渐强/渐弱/静默后爆发)
-  - ⚠️ 严禁用抽象情绪词 (如 "悲伤的感觉"/"紧张氛围") — H3 拿到抽象词会自由发挥, 产生不可控音频
-  - ⚠️ sound_effect 与 bgm_prompt 是两类不同声音, 不要混写 (前者画内, 后者画外配乐)
-  - 后端拼接: videoPrompt = permanent + description + plot_state 三段, 再由 ensureH3ThreePartPrompt
-    补 "Overall soundscape:" (取 sound_effect) + "Non-diegetic music:" (取 bgm_prompt) 两段 header
-  - 背景: V4 重构时这两字段遗落, episode 12 的 19/19 video_prompt 缺三段式 header,
-    H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)
-- Sprint 17 (PM msg-20261021-076) Task D: V4 重构时丢失的 5 条影视规则 —— 补回, 违反 = 镜头作废
-  ① 镜头顺序铁律 (老路径 二): 场景切换的开头第一镜必须是全景(交代地点), 不要一上来就切特写;
-     同一场景内的镜头顺序遵循"建立关系 → 进入情绪"; 避免"全景→特写→中景"这种无逻辑跳切
-  ② 单镜头硬约束 (老路径 四.1): 每个 video_prompt 必须描述"仅限一个不间断的单镜头",
-     不要在单个 storyboard 内跨场景/跨机位切换 (转场交给拼接阶段)
-  ③ 场景一致性 6 维 (老路径 六): 空间(室内外/前后景) + 核心元素(桌/椅/灯/窗) + 光线方向(侧逆光/顶光)
-     + 色调(主+辅色) + 时间/天气 + 风格统一; 同一 scene_id 下所有镜头的 atmosphere 关键词
-     必须从这 6 维派生, 禁止每镜随意发挥
-  ④ 时间戳分段 (老路径 四.4): 本镜【无 dialogue】时, video_prompt_plot_state 按动作顺序分段写,
-     每段用 <n>起-止秒：内容</n> 形式 (不闭合, 项目规范), 每段约 3 秒, 连续不间断, 总时长对齐本镜 duration
-     ⚠️ 本镜【有 dialogue】时严禁自己写带时间码的段落 —— 台词时间轴由后端按配音音频自动生成,
-     你只按动作顺序写动作, 否则两套时间码会重叠打架
-  ⑤ 禁止混写 (老路径 十): 禁止把 action + result + dialogue 混在一句话 (分开填三个字段)
-  ⑥ 5D 摄影参数 (老路径 七): video_prompt_permanent 必须写全 5 维, 每维各选一项, 用英文术语:
-     景别 ECU/CU/MS/MLS/WS + 焦距 24mm/35mm/50mm/85mm + 运镜 static/slow dolly in/dolly out/
-     pan left/pan right/handheld/tilt up/tilt down + 景深 shallow f/1.8/standard f/4/deep f/8 +
-     视角 eye-level/low angle/high angle/dutch tilt/over-shoulder/POV
-     例: "MS 50mm, eye-level, slow dolly in, shallow f/1.8" —— 缺维度 H3 会自己补, 画面失控
-- Sprint 17 (PM msg-20261021-076) Task F: 补回老 storyboard_planner 的规则 (V4 重构时丢失)
-  ★ 道具时序 (轴5): 角色身上的"情节道具"只能在所属 scene 的 description 里被显式提到时, 才能在本镜出现;
-    character.description 里描述的情节瞬间 (例如"前爪按红色按钮"这种特定剧情动作/物体) 不算"角色固有道具",
-    首镜 frame/正文严禁默认带入; 违反 = 剧情时序错乱, 观众看不懂为什么某镜有某物
-  ★ 本镜窗口 (轴5.5): shot.action / description / result / atmosphere / dialogue 必须严格只描述本镜
-    [start_time, end_time] 时间窗口内的瞬时状态; 禁止包含 (a) 后续剧情高潮时刻的动作/表情/眼神
-    (例: 开场镜严禁写"复活后眼睛放光、嘴角咧开露出诡异笑意" —— 那是后续高潮镜的状态)
-    (b) 后续剧情才出现的道具 (例: 开场镜严禁写"爪子飞快按动按钮" —— 按钮是后续高潮镜才出现的)
-    (c) 角色 appearance 里夹杂的"剧情态瞬间"; 强制: 想象本镜只占 X 秒, 只写这 X 秒内的瞬时状态
-  ★ character_ids 必填: 画面里出现任何角色 (包括背景人影、远处轮廓), character_ids 必须用数字 ID 列出;
-    仅"纯环境空镜"(画面无任何角色/肢体/身影, 仅建筑/风景) 才能用空数组, 不允许用空数组偷懒
-  ★ 情绪景别 (轴2): 情绪越强 → 景别越近 + 运镜越慢 (ECU > CU > MS > MLS > WS)
-  ★ 节奏控制 (轴3): 动静结合, 关键处制造停顿 —— 不要"全程加速", 用停顿/慢推替代连切
-plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
-输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state, sound_effect, bgm_prompt}] }`
+  const systemPrompt = tpl.step2.systemPrompt
 
   const userPrompt = JSON.stringify({
     step1_plan: plan,
@@ -649,7 +461,7 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
     },
   }, null, 2)
 
-  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, Step2Schema, {
+  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, tpl.step2.schema as z.ZodType<z.infer<typeof Step2Schema>>, {
     ctx: { dramaId, episodeId, step: 'step2' },
     // Sprint 44 FIX-061 follow-up: step 2 同样接 salvage hook, 跟 step 1 套路复用
     //   zod fail 多是 character_traits 空数组 → 复用 salvageImagePromptPermanent 补 placeholder
@@ -715,9 +527,12 @@ export async function runStep3(opts: {
   dramaId: number
   episodeId: number
   shotDetailsOverride?: ShotDetailsItem[]
+  /** Sprint 19: prompt 模板 id (默认 general); 未知 id 直接抛错, 不静默 fallback */
+  templateId?: string
 }): Promise<{ createdStoryboardIds: number[] }> {
-  const { dramaId, episodeId, shotDetailsOverride } = opts
-  logTaskProgress('StoryboardPlanner', 'step3-begin', { dramaId, episodeId })
+  const { dramaId, episodeId, shotDetailsOverride, templateId } = opts
+  const tpl = getTemplate(resolveTemplateId(templateId))
+  logTaskProgress('StoryboardPlanner', 'step3-begin', { dramaId, episodeId, templateId: tpl.id })
 
   const planningData = await getPlanningData(episodeId)
   const details = shotDetailsOverride || planningData.step2_details
@@ -774,10 +589,6 @@ export async function runStep3(opts: {
     const cleaned = salvageImagePromptPermanent(det.image_prompt_permanent, {
       episodeId, shotNumber: det.shot_number,
     })
-    const permanentText = cleaned.imagePromptPermanent
-      ? permanentToText(cleaned.imagePromptPermanent)
-      : ''
-    const plotStateText = `${det.image_prompt_plot_state?.trim() || ''}${cleaned.plotState ? (det.image_prompt_plot_state ? ' | ' : '') + cleaned.plotState : ''}`
 
     // ── Sprint 17 Task A/B/C: 把 V4 三步重构丢掉的影视规则补回 video_prompt ──
     //   A 角色外貌: ctx.characters[].appearancePermanent (跟角色立绘同源) + personality (老路径"气质"维)
@@ -813,24 +624,6 @@ export async function runStep3(opts: {
         hint: '本镜 character_traits 非空 (画了角色) 但 character_ids 为空 且正文里找不到角色名 —— 人工确认画面里到底有没有角色',
       })
     }
-
-    const charEntries = characterIds
-      .map((cid) => ctx.characters.find((c) => c.id === cid))
-      .filter((c): c is NonNullable<typeof c> => !!c)
-      .map((c) => ({
-        name: c.name,
-        appearance: c.appearancePermanent,
-        personality: c.personality,
-        role: c.role,
-      }))
-    const appearanceBlock = buildAppearanceBlock(charEntries)
-    const prevShot = idx > 0 ? validatedDetails[idx - 1] : null
-    const prevResult = prevShot && prevShot.scene_id === det.scene_id ? prevShot.result : ''
-    const continuityBlock = buildContinuityBlock(prevResult)
-    const resultBlock = buildResultBlock(det.result)
-    const rhythmFormula = getRhythmFormula(det.intent_function)
-    // 各块之间用换行分隔 —— 4 个约束各自成行, H3 读起来更清楚 (拼成一大坨容易被当成一句描述)
-    const injectedBlocks = [appearanceBlock, continuityBlock, resultBlock, rhythmFormula?.zh || ''].filter(Boolean).join('\n')
 
     // ── Sprint 17 Task F①: 道具时序 (老路径 轴5) ──
     //   本镜出现的"情节道具", 如果所属 scene 的 description 没提过、前面同场景镜头也没提过 → 提前泄露 warn
@@ -881,21 +674,25 @@ export async function runStep3(opts: {
       })
     }
 
-    // ── video_prompt 拼装 (Sprint 17: 补 Integrated header + 3 个注入段) ──
-    let videoPromptText = ensureIntegratedHeader(
-      ensureH3ThreePartPrompt(
-        [
-          det.video_prompt_permanent || '',
-          det.description || '',
-          det.video_prompt_plot_state || '',
-        ].filter(Boolean).join('。'),
-        det.sound_effect,
-        det.bgm_prompt,
-      ),
-    )
-    if (injectedBlocks) {
-      videoPromptText = insertIntoIntegratedSection(videoPromptText, injectedBlocks)
-    }
+    // ── Sprint 19: prompt 组装交给模板 (general 模板 = 重构前的逐字搬家) ──
+    //   通用层 (character_ids 恢复 / dialogue 规范化 / 道具时序校验) 在上面算完, 这里只传数据。
+    //   Sprint 20 的 H3 模板会在这里换成自己的组装方式, 通用逻辑不用动。
+    const assembled = tpl.assemble({
+      shot: det,
+      prevShot: idx > 0 ? validatedDetails[idx - 1] : null,
+      dialogue: dialogueText,
+      characters: characterIds
+        .map((cid) => ctx.characters.find((c) => c.id === cid))
+        .filter((c): c is NonNullable<typeof c> => !!c)
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          appearance: c.appearancePermanent,
+          personality: c.personality,
+          role: c.role,
+        })),
+      cleanedPermanent: cleaned,
+    })
 
     return {
       shot_number: det.shot_number,
@@ -913,11 +710,7 @@ export async function runStep3(opts: {
         description: det.description || '',
         result: det.result || '',
         atmosphere: det.atmosphere || '',
-        imagePrompt: [
-          permanentText,
-          det.description || '',
-          plotStateText,
-        ].filter(Boolean).join('。'),
+        imagePrompt: assembled.imagePrompt,
         // 2026-10-13 sprint 44 FIX-056-VIDEO-PROMPT-FUSION (QA msg-20261013-056 P0):
         //   跟 imagePrompt 拼接方式一致 (permanent + description + plot_state 三段拼接),
         //   041 派单只改了 image_prompt_permanent 内部字段排序 (permanentToText), 没覆盖 video_prompt 拼接.
@@ -931,9 +724,9 @@ export async function runStep3(opts: {
         //   V4 planner 这条链没有 —— video_prompt 里只有动作没有台词, H3 不知道谁张嘴。
         //   embedDialogueInline 内部带「已有 开口: 就跳过」保护: Step2 prompt (sprint-15-a)
         //   已经要求 LLM 自己把台词写进 video_prompt_plot_state, LLM 照做了就不会重复嵌。
-        videoPrompt: embedDialogueInline(videoPromptText, dialogueText),
-        imagePromptPlotState: plotStateText || null,
-        videoPromptPlotState: det.video_prompt_plot_state || null,
+        videoPrompt: assembled.videoPrompt,
+        imagePromptPlotState: assembled.imagePromptPlotState,
+        videoPromptPlotState: assembled.videoPromptPlotState,
         // Sprint 11 Task A: H3 声音两列落库 (下游消费路径 — Task F 本期不做真实音频生成,
         //   这两列进 video_prompt 由 H3 生成音频本身就是消费路径)
         soundEffect: det.sound_effect?.trim() || null,
@@ -1022,12 +815,14 @@ export async function runAllStepsLegacy(opts: {
   episodeId: number
   textConfigId?: number
   modelOverride?: string
+  /** Sprint 19: prompt 模板 id (默认 general); 未知 id 直接抛错, 不静默 fallback */
+  templateId?: string
   onProgress?: (progress: { phase: string; status: string; tip?: string; [key: string]: unknown }) => void | Promise<void>
 }): Promise<{ shot_plan: ShotPlanItem[]; shot_details: ShotDetailsItem[]; createdStoryboardIds: number[] }> {
-  const { dramaId, episodeId, textConfigId, modelOverride, onProgress } = opts
+  const { dramaId, episodeId, textConfigId, modelOverride, templateId, onProgress } = opts
 
   await onProgress?.({ phase: 'step1', status: 'running', tip: 'step1: 正在读取剧本和场景数据...' })
-  const step1Result = await runStep1({ dramaId, episodeId, textConfigId, modelOverride })
+  const step1Result = await runStep1({ dramaId, episodeId, textConfigId, modelOverride, templateId })
   await onProgress?.({
     phase: 'step1', status: 'done',
     shotCount: step1Result.shot_plan.length,
@@ -1038,7 +833,7 @@ export async function runAllStepsLegacy(opts: {
   const step2Result = await runStep2({
     dramaId, episodeId,
     shotPlanOverride: step1Result.shot_plan,
-    textConfigId, modelOverride,
+    textConfigId, modelOverride, templateId,
   })
   await onProgress?.({ phase: 'step2', status: 'done', shotCount: step2Result.shot_details.length })
 
@@ -1046,6 +841,7 @@ export async function runAllStepsLegacy(opts: {
   const step3Result = await runStep3({
     dramaId, episodeId,
     shotDetailsOverride: step2Result.shot_details,
+    templateId,
   })
   await onProgress?.({ phase: 'step3', status: 'done', createdStoryboardIds: step3Result.createdStoryboardIds })
 
@@ -1067,6 +863,8 @@ export async function getPlanningState(opts: {
   step2_details: ShotDetailsItem[] | null
   step3_storyboard_ids: number[] | null
   current_step: 0 | 1 | 2 | 3
+  /** Sprint 19 (PM msg-20261025-082) Task C: 本集当前用的 prompt 模板 (前端 Sprint 20 选择器用) */
+  templateId: string
 }> {
   logTaskProgress('StoryboardPlanner', 'state-fetch-begin', { dramaId: opts.dramaId, episodeId: opts.episodeId })
   const pd = await getPlanningData(opts.episodeId)
@@ -1085,5 +883,6 @@ export async function getPlanningState(opts: {
     step2_details: pd.step2_details ?? null,
     step3_storyboard_ids: pd.step3_storyboard_ids ?? null,
     current_step: currentStep,
+    templateId: getEpisodeTemplateId(opts.episodeId),
   }
 }

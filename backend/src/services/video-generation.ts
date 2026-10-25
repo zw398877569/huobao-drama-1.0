@@ -4,8 +4,11 @@ import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEn
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 // Sprint 17 (PM msg-20261021-076) Task B/E: 首帧锚点 (英文固定句, 翻译后注入) + 代码层清洗
-import { OPENING_FRAME_ANCHOR, insertAtIntegratedStart } from '../utils/storyboard-rules.js'
-import { cleanupVideoPrompt, checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
+import { insertAtIntegratedStart } from '../utils/storyboard-rules.js'
+import { checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
+// Sprint 19 (PM msg-20261025-082): 生成期的注入/清洗走模板 —— Sprint 20 的 H3 模板要在这里
+//   关掉 general 的注入 (台词时间轴 + 首帧锚点 + 清洗), 通用逻辑不用动
+import { getEpisodeTemplate } from '../prompt-templates/index.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -198,6 +201,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
         // Sprint 14: 配音音频 (口型同步)。自由创作 (source='free') 没 storyboard, 天然拿不到。
         const resolvedAudioUrls = await resolveStoryboardAudioUrls(vRecord.id, vRecord.storyboardId)
+        // Sprint 19: 本镜用哪个 prompt 模板 (按 episodes.prompt_template)
+        const storyboardEpisodeId = vRecord.storyboardId
+          ? (db.select({ episodeId: schema.storyboards.episodeId })
+            .from(schema.storyboards).where(eq(schema.storyboards.id, vRecord.storyboardId)).all()[0]?.episodeId ?? null)
+          : null
+        const tpl = getEpisodeTemplate(storyboardEpisodeId)
 
         // 翻译决策仍然只看【原始】prompt —— 台词时间轴是中文的, 如果拿注入后的文本去判断,
         // 会把「本来是纯英文的 prompt」也拖进翻译, 属于本单不该引入的行为变化。
@@ -215,8 +224,21 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         let promptWithTimeline = vRecord.prompt || ''
         let timelineText = ''
         let dialogueMarkersBefore = 0
+        // Sprint 19: 台词时间轴由模板控制 (general = 开, 行为不变)。
+        //   Sprint 20 的 H3 模板必须关掉 —— 官方用 <d>[Chinese]…</d>, 两套对白标记同时给 H3 会冲突。
+        const useDialogueTimeline = tpl.generation.useDialogueTimeline
         try {
-          const timeline = await buildStoryboardDialogueTimeline(vRecord.id, vRecord.storyboardId, vRecord.duration)
+          if (!useDialogueTimeline) {
+            logTaskProgress('VideoTask', 'dialogue-timeline-skipped-by-template', {
+              id,
+              storyboardId: vRecord.storyboardId,
+              templateId: tpl.id,
+              hint: '该模板不使用台词时间轴 (generation.useDialogueTimeline=false)',
+            })
+          }
+          const timeline = useDialogueTimeline
+            ? await buildStoryboardDialogueTimeline(vRecord.id, vRecord.storyboardId, vRecord.duration)
+            : { text: '', count: 0, totalSec: 0, skippedCount: 0, filteredCount: 0, truncatedCount: 0 }
           logTaskProgress('VideoTask', 'dialogue-timeline', {
             id,
             storyboardId: vRecord.storyboardId,
@@ -324,7 +346,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         //   老路径 agents/index.ts:646-649 的三条硬性约束, V4 重构后没有任何代码兜底。
         //   必须跑在【所有注入之后】(注入的内容也是 prompt 的一部分);
         //   台词区 (开口:'...') 内部受保护 —— 台词里出现"切黑"是台词内容, 不是拼接指令。
-        const cleanup = cleanupVideoPrompt(finalPrompt)
+        const cleanup = tpl.generation.cleanup({ prompt: finalPrompt })
         if (cleanup.removedAbstract.length > 0 || cleanup.removedTransition.length > 0) {
           logTaskWarn('VideoTask', 'prompt-cleanup', {
             id,
@@ -342,7 +364,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             hint: 'prompt 里出现 IP/品牌词 —— 只告警不自动改写 (词表永远不全, 乱改会误伤正常内容), 需人工确认',
           })
         }
-        finalPrompt = cleanup.text
+        finalPrompt = cleanup.prompt
 
         const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
           id: vRecord.id,
@@ -367,15 +389,11 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         if (body && typeof body.prompt === 'string' && body.prompt) {
           const hasRefImage0 = typeof body.ref_image_0 === 'string' && !!body.ref_image_0
           const hasFirstFrameField = typeof body.first_frame === 'string' && !!body.first_frame
-          let anchor = ''
-          let anchorMode = ''
-          if (hasRefImage0) {
-            anchor = OPENING_FRAME_ANCHOR
-            anchorMode = 'ref2v-picture-1'
-          } else if (hasFirstFrameField) {
-            anchor = 'the opening frame continues the composition of the given first frame'
-            anchorMode = 'fl2v-first-frame'
-          }
+          const referenceImageMode = hasRefImage0
+            ? 'ref2v-picture-1'
+            : (hasFirstFrameField ? 'fl2v-first-frame' : 'none')
+          const anchor = tpl.generation.inject({ prompt: body.prompt, referenceImageMode })
+          const anchorMode = referenceImageMode
           if (anchor) {
             body.prompt = insertAtIntegratedStart(body.prompt, anchor)
             finalPrompt = body.prompt
