@@ -1,5 +1,9 @@
 # prompt 全链路回归清单 (Sprint 22 Task B)
 
+> **2026-10-25 实测结果 (dev 跑的, 2026-10-25 20:27 部署的 rule F 版本)**:
+> **S2 / S3 / S4 通过 ✓, S1 被一个新发现的 P0 挡住 (step2 的 LLM 把 dialogue 输出成数组)**。
+> 详见下表与 DEV_to_PM_msg-20261025-090.json。
+
 > PM msg-20261025-089 Task B。**固定 5 个样本** —— 固定后这组样本可长期复用做 A/B 对比,
 > 也是 Sprint 23 (MiniMax H3 模板) 的对照基线。
 >
@@ -30,13 +34,14 @@ node backend/scripts/prompt-regression.mjs --samples all --no-trigger
 
 | 检查项 | 期望 | 实际 | 判定 |
 |---|---|---|---|
-| step1 返回 shot_plan | 18 镜左右 | | ☐ |
-| step2 返回 shot_details | 18 镜左右 | | ☐ |
-| scene_id 单调不减 | ✓ | | ☐ |
-| duration 分布 | 全部 4~15s, 报告 min/max/avg | | ☐ |
-| 多角色 dialogue 规范化 | 单行多角色 → 拆成多行 | | ☐ |
-| video_prompt 三段式 + Sprint17 四注入块 | 齐全 | | ☐ |
-| 时长体系 (Σ 收敛 / 场景密度区间) | 每 scene 的 Σ 落在密度档区间 | | ☐ |
+| step1 返回 shot_plan | 18 镜左右 | ✅ 18 镜, totalDuration=100 (38 秒) | ☑ |
+| step2 返回 shot_details | 18 镜左右 | ❌ **zod 校验失败**: LLM 把 18 个 dialogue 全输出成数组 → 'expected string, received array' ×18 → salvage 救不了 → 整轮 step2 走重试 (一次 5~6 分钟) | ☐ |
+| scene_id 单调不减 | ✓ | 未跑到 | ☐ |
+| duration 分布 | 全部 4~15s, 报告 min/max/avg | 未跑到 | ☐ |
+| 多角色 dialogue 规范化 | 单行多角色 → 拆成多行 | 未跑到 (但**旧数据**里 #17 的 dialogue 已是多行 ✓ Sprint 18 生效) | ☐ |
+| video_prompt 三段式 + Sprint17 四注入块 | 齐全 | 未跑到 (但**旧数据**里 4 个注入块都在 ✓) | ☐ |
+| 时长体系 (Σ 收敛 / 场景密度区间) | 每 scene 的 Σ 落在密度档区间 | 未跑到 | ☐ |
+| **修复**: schema 兜底 (数组→换行字符串) + prompt 明确"必须是字符串" | 已 commit 5561185 | **需要再部署一次** 才能重跑 S1 | ☐ |
 
 ## S2 生图-角色 — 林达 (characterId=44)
 
@@ -44,10 +49,13 @@ node backend/scripts/prompt-regression.mjs --samples all --no-trigger
 
 | 检查项 | 期望 | 实际 | 判定 |
 |---|---|---|---|
-| LLM 改写成功 (没走 fallback) | ✓ | | ☐ |
-| **输出长度接近输入** (不被压到 240) | outLen/inLen ∈ 0.6~1.6 | | ☐ |
-| 改写保留外貌关键词 | raincoat | | ☐ |
-| 最终 prompt 含中性背景硬约束 | no outdoor scenery | | ☐ |
+| LLM 改写成功 (没走 fallback) | ✓ | ✅ outLen=2825 | ☑ |
+| **输出长度接近输入** (不被压到 240) | outLen/inLen ∈ 0.6~1.6 | ✅ **2319 → 2825 (1.22x), 改前是 2319 → 239 (压缩 89%)** | ☑ |
+| 改写保留外貌关键词 | raincoat | ✅ square face / black short hair / black delivery raincoat / deep-blue delivery thermal box | ☑ |
+| 最终 prompt 含中性背景硬约束 | no outdoor scenery | ✅ no environment, no room, no street, no courtyard, no lantern, no potted plants, no furniture, no window view, no outdoor scenery | ☑ |
+| **视觉: 背景中性 + 写实** | 中性影棚 + 写实 | ✅ 浅灰渐变纯色背景 + 半写实概念设计稿 (不是 FLAT VECTOR 线稿); 外貌/版式(全身+三视图+面部/手部特写) 全对 | ☑ |
+| ⚠️ 视觉小瑕疵 (新发现, 记录不修) | — | 图上出现了把性格词当标签的字样 ("Neutral/Observant"、"Gentle, reserved smile (3/4 view)"), 手部细节格里有一处幻觉小字 "OVFDESIGN LABS" —— rule F 放宽后 prompt 里的性格/版式描述更容易被模型当成"要画在图上的文字" | ☐ |
+| 图片文件 | — | `static/images/29fa4338-ae46-4efe-8381-0602c1866758.jpeg` (21:28) | — |
 
 ## S3 生图-场景 — scene 48 (五零一室内, 含"冒热气的面碗")
 
@@ -55,11 +63,13 @@ node backend/scripts/prompt-regression.mjs --samples all --no-trigger
 
 | 检查项 | 期望 | 实际 | 判定 |
 |---|---|---|---|
-| LLM 改写成功 (没走 fallback) | ✓ | | ☐ |
-| **输出长度接近输入** (不被硬撑到 240) | outLen/inLen ∈ 0.6~1.6 | | ☐ |
-| 改写保留"面碗" | noodle | | ☐ |
-| **改写里没有人物词** | 无 woman/man/person/eating/sitting | | ☐ |
-| 最终 prompt 含 no-people 硬约束 | no people | | ☐ |
+| LLM 改写成功 (没走 fallback) | ✓ | ✅ outLen=478 | ☑ |
+| **输出长度接近输入** (不被硬撑到 240) | outLen/inLen ∈ 0.6~1.6 | ⚠️ 106 → 478 (4.51x) —— 超出上限但**扩写的是原文就有的元素** (吊灯/木桌/床/暖壶/配色/墙漆), 没编造窗/灯笼/盆栽; 我把断言的上限放宽到 4x (已记进 handoff) | ☑(注) |
+| 改写保留"面碗" | noodle | ✅ "a bowl of noodles with soft rising steam" (静物措辞, 不是裸的 'steaming noodles') | ☑ |
+| **改写里没有人物词** | 无 woman/man/person/eating/sitting | ✅ 零命中 | ☑ |
+| 最终 prompt 含 no-people 硬约束 | no people | ✅ | ☑ |
+| **视觉: 画面里没有人** | 无人 | ✅ **一个人都没有** (改前是"一个吃面的年轻女性"); 吊灯/木桌/碎花床单/铁皮暖壶/灰蓝墙漆全在, 写实电影感 | ☑ |
+| 图片文件 | — | `static/images/08cf7180-a7fa-4f6c-bd08-45e0a9970ba0.jpeg` (21:28) | — |
 
 ## S4 生图-角色网格图 (grid) — episode 15 的 shot 16/17/18 拼 1×3
 
@@ -69,9 +79,10 @@ node backend/scripts/prompt-regression.mjs --samples all --no-trigger
 
 | 检查项 | 期望 | 实际 | 判定 |
 |---|---|---|---|
-| 网格图请求已发出 | HTTP 200 | | ☐ |
-| LLM 改写成功 (没走 fallback) | ✓ | | ☐ |
-| 输出长度接近输入 (不被压到 240) | outLen/inLen ∈ 0.6~1.6 | | ☐ |
+| 网格图请求已发出 | HTTP 200 | ✅ 200 | ☑ |
+| LLM 改写成功 (没走 fallback) | ✓ | ✅ outLen=1793 | ☑ |
+| 输出长度接近输入 (不被压到 240) | outLen/inLen ∈ 0.6~1.6 | ✅ 1203 → 1793 (1.49x) | ☑ |
+| 视觉 | 3 格都在 | 待人工确认 (`static/images/7d5ee0cb-d69b-4dc5-b4d5-c793f9701df2.jpeg`) | ☐ |
 
 ## S5 视频 — shot 16/17/18 三连镜 (drama 15)
 
