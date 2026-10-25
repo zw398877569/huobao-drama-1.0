@@ -277,9 +277,20 @@ export function applyKindConstraint(prompt: string, kind: ImagePromptKind): stri
   const constraint = KIND_CONSTRAINTS[kind]
   if (!constraint) return prompt
   const trimmed = String(prompt || '').replace(/[,\s]+$/, '')
-  // 幂等判据: 约束里的特征词已经在 → 认为加过了
-  const marker = constraint.split(',')[1]?.trim() || ''
-  if (marker && trimmed.includes(marker)) return trimmed
+  // 幂等判据 (Sprint 21 follow-up, QA msg-20261025-087): 用【完整约束串】判重。
+  //
+  // ⚠️ 修前用的是 constraint.split(',')[1] (第一个内容短语):
+  //   scene     → 'empty environment'
+  //   character → 'plain neutral seamless studio backdrop'
+  //   这两个都是 LLM 很可能自己写出来的词 —— 一旦命中, 整条硬约束被误判成"已加过"而跳过,
+  //   丢掉的正好是 fix_1/fix_2 的核心 (no people 全家桶 / no street / no outdoor scenery /
+  //   no furniture in background / character sheet presentation) → fix_1/fix_2 静默失效,
+  //   表现为"这次好了下次又跑偏", 不报错不 fallback, 极难查。
+  //
+  // 为什么不用"特征短语"判据 (QA 的 fix_A): 特征短语仍有可能被 LLM 写出来 → 还是同一类假跳过。
+  //   重复几个词无害, 整条约束消失有害 → 宁可重复, 不能漏。
+  //   (QA 的 fix_C = 完整串 + 特征短语两条一起上, 特征短语那半仍留着假跳过风险, 故未采用)
+  if (trimmed.includes(constraint.trim())) return trimmed
   return trimmed + constraint
 }
 
