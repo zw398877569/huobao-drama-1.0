@@ -36,7 +36,13 @@ app.post('/', async (c) => {
     })
     logTaskPayload('ImageAPI', 'request body', body)
     // 所有 image 生成路径都过 sanitize(角色/场景/分镜/grid 共用)
-    const safePrompt = await sanitizeImagePrompt(body.prompt)
+    // Sprint 21 (QA msg-20261025-085): 按 body 里的 id 推断 kind ——
+    //   storyboard_id → 镜头图 (本路由当前唯一的调用方就是镜头图; 优先判断, 免得将来
+    //                    镜头图请求里带了 scene_id 被误判成"空场景" → 镜头里的人被剥掉)
+    //   character_id  → 角色设定稿 (中性背景约束) / scene_id → 场景 (空场景约束)
+    const imageKind = body.storyboard_id ? 'shot'
+      : (body.character_id ? 'character' : (body.scene_id ? 'scene' : 'shot'))
+    const safePrompt = await sanitizeImagePrompt(body.prompt, { kind: imageKind })
     const id = await generateImage({
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,

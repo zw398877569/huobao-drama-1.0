@@ -21,7 +21,8 @@ app.post('/:id/generate-image', async (c) => {
 
   // prompt 优先级：生成的 image_prompt > description fallback
   const rawPrompt = prop.prompt || prop.description || `${prop.name}, product shot, high quality`
-  const prompt = await sanitizeImagePrompt(rawPrompt)
+  // Sprint 21: 接上 kind 机制 (prop 暂不改行为 —— QA fix_3 要求先调查影响面)
+  const prompt = await sanitizeImagePrompt(rawPrompt, { kind: 'prop' })
   try {
     logTaskStart('PropImage', 'generate', { propId: id, episodeId: ep.id, dramaId: prop.dramaId, name: prop.name })
     // config_id 兼容 "<configId>:<modelName>" 复合格式（多模型选择器）与纯数字 ID；model 用于覆盖 config.model

@@ -222,7 +222,68 @@ function sanitizeImagePromptLocal(rawPrompt) {
   return out.trim()
 }
 
-const SYSTEM_INSTRUCTION = [
+/**
+ * 生图 prompt 的用途类型 —— Sprint 21 (QA msg-20261025-085)
+ *
+ * 为什么需要: sanitizer 原来对【所有】生图 prompt 一视同仁 ——
+ *   ① SYSTEM_INSTRUCTION 规则 E 无差别让 LLM 追加 'cinematic still, dramatic tension, artistic composition'
+ *   ② 规则 F 卡 240 字符 → 长模板被压缩, 短描述被【扩写】凑数
+ *   结果: 场景图被编出人物 (LLM 把场景陈设"冒热气的面碗"翻成 'steaming noodles',
+ *   生图模型读成"有人在吃面"), 角色设定稿的背景约束被挤掉 → 模型自由发挥成户外院子。
+ *
+ * 按 kind 分支之后, LLM 知道自己在写什么类型的画面, 约束也能落到正确的语义上。
+ */
+export type ImagePromptKind = 'character' | 'scene' | 'prop' | 'shot' | 'grid'
+
+/**
+ * 各 kind 的 LLM 分支规则 (拼在 SYSTEM_INSTRUCTION 末尾)。
+ *
+ * ⚠️ prop / shot / grid 暂不加规则 —— QA msg-20261025-085 fix_3 说"先调查不要直接改",
+ *   等 dev 给影响面结论再决定是否升级为单。character / scene 是 fix_1 / fix_2 的 P0/P1 范围。
+ */
+const KIND_INSTRUCTIONS: Record<ImagePromptKind, string[]> = {
+  scene: [
+    'H. 这是一条【纯场景/环境】描述: 输出里【绝对不能出现人物、角色、人影、剪影、面孔、手脚、身体部位】.',
+    '   只描述空间结构/光线/材质/陈设. 陈设用【静物】措辞 (例: a bowl of noodles on the old wooden table),',
+    '   不要用暗示"有人正在使用/正在吃/刚坐过"的措辞 (热气腾腾刚出锅、吃了一半、椅子被拉开 等) ——',
+    '   生图模型会把这些读成"画面里有人". 也不要为了凑字数编造人物活动.',
+  ],
+  character: [
+    'H. 这是一条【角色设定稿】描述: 背景必须是【中性纯色/渐变影棚背景】,',
+    '   不得出现任何环境元素 (房间/街道/院子/灯笼/盆栽/家具/窗景).',
+    '   元素优先级: 角色本人外貌/年龄/体态/服装 > 中性背景 > 版式说明;',
+    '   长度不够时先砍版式说明, 背景约束和角色外貌不能砍.',
+  ],
+  prop: [],
+  shot: [],
+  grid: [],
+}
+
+/**
+ * 各 kind 在【LLM 之后】追加的硬约束 (不会被 LLM 洗掉)。
+ *
+ * ⚠️ prop / shot / grid 暂不加 —— 同上, fix_3 先调查。
+ */
+const KIND_CONSTRAINTS: Record<ImagePromptKind, string> = {
+  scene: ', empty environment, no people, no characters, no human figures, no silhouettes, no human body parts, no one sitting or standing, architecture and furnishings only, no human activity',
+  character: ', plain neutral seamless studio backdrop, even soft lighting, no environment, no room, no street, no outdoor scenery, no furniture in background, character sheet presentation',
+  prop: '',
+  shot: '',
+  grid: '',
+}
+
+/** 追加 kind 硬约束 (幂等 —— 已有就不重复追加) */
+export function applyKindConstraint(prompt: string, kind: ImagePromptKind): string {
+  const constraint = KIND_CONSTRAINTS[kind]
+  if (!constraint) return prompt
+  const trimmed = String(prompt || '').replace(/[,\s]+$/, '')
+  // 幂等判据: 约束里的特征词已经在 → 认为加过了
+  const marker = constraint.split(',')[1]?.trim() || ''
+  if (marker && trimmed.includes(marker)) return trimmed
+  return trimmed + constraint
+}
+
+const SYSTEM_INSTRUCTION_BASE = [
   '你是一名视觉概念设计师,任务是把"可能触发图像生成 API 内容审核"的描述',
   '改写成"中性、电影感、更容易被图像 API 接受"的视觉画面。',
   '',
@@ -240,7 +301,13 @@ const SYSTEM_INSTRUCTION = [
   'G. Do NOT output explanations, prefixes, quotes, or markdown code blocks. Do NOT output <think> thinking blocks. Output only the rewritten prompt string.',
   // 2026-09-25 PM msg-20260924-006 (Q5 task_A): 加显式指令, 防 MiniMax-M3 中转站禁不掉 thinking block 时输出空
   'IMPORTANT: Output ONLY the rewritten prompt string. NO thinking, NO explanation, NO analysis. Even if thinking block is forced, the FINAL ANSWER must be a complete rewritten prompt.',
-].join('\n')
+]
+
+/** 按 kind 拼 system prompt —— 基础安全规则 + 该 kind 的语义分支规则 */
+function buildSystemInstruction(kind: ImagePromptKind): string {
+  const extra = KIND_INSTRUCTIONS[kind] || []
+  return [...SYSTEM_INSTRUCTION_BASE, ...extra].join('\n')
+}
 
 function extractPromptFromLLM(raw) {
   if (!raw) return null
@@ -345,7 +412,7 @@ function containsResidualPolicyRisk(text) {
 //   - 2026-10-12 sprint 43 FIX-1: retry 之间加 5-10s 随机 sleep, 避免 M3 同步限速 (之前是立刻 retry 必失败)
 //
 // 重构成 attemptSanitizerLLM helper + 外层 retry loop — 避免原 try-catch 内部 return null 中断 retry
-async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, configSource: string, attempt: number) {
+async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, configSource: string, attempt: number, systemPrompt?: string) {
   try {
     const resp = await fetch(url, {
       method: 'POST',
@@ -367,7 +434,7 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
         //   历史: 400 → 1500 (2026-09-25) → 3000 (2026-10-12 sprint 43) → 8192 (本次)
         max_tokens: 8192,
         messages: [
-          { role: 'system', content: SYSTEM_INSTRUCTION },
+          { role: 'system', content: systemPrompt || buildSystemInstruction('shot') },
           { role: 'user', content: `原文 prompt:\n<<<${rawPrompt}>>>` },
         ],
         // MiniMax-M3 等推理模型默认输出 thinking 块, 禁用以避免污染改写结果
@@ -506,8 +573,8 @@ export interface SanitizerCandidateFailure {
 export async function runSanitizerCandidates(
   rawPrompt: string,
   candidates: Array<{ config: any; source: string }>,
-  attempt: (url: string, config: any, prompt: string, source: string, attemptNo: number) => Promise<{ outcome: string; polished?: string }>,
-  opts?: { maxAttempts?: number; sleep?: (ms: number) => Promise<void> },
+  attempt: (url: string, config: any, prompt: string, source: string, attemptNo: number, systemPrompt?: string) => Promise<{ outcome: string; polished?: string }>,
+  opts?: { maxAttempts?: number; sleep?: (ms: number) => Promise<void>; systemPrompt?: string },
 ): Promise<{ ok: boolean; text?: string; failures: SanitizerCandidateFailure[] }> {
   const MAX_ATTEMPTS = opts?.maxAttempts ?? 2
   const sleep = opts?.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
@@ -530,7 +597,7 @@ export async function runSanitizerCandidates(
     })
 
     for (let attemptNo = 1; attemptNo <= MAX_ATTEMPTS; attemptNo++) {
-      const result = await attempt(url, config, rawPrompt, source, attemptNo)
+      const result = await attempt(url, config, rawPrompt, source, attemptNo, opts?.systemPrompt)
       if (result.outcome === 'success') return { ok: true, text: result.polished, failures }
       if (result.outcome === 'hard-fail') {
         failures.push({ source, provider: config.provider, model: config.model, attempt: attemptNo, reason: 'hard-fail' })
@@ -563,13 +630,15 @@ export async function runSanitizerCandidates(
   return { ok: false, failures }
 }
 
-async function sanitizeImagePromptLLM(rawPrompt) {
+async function sanitizeImagePromptLLM(rawPrompt, kind: ImagePromptKind = 'shot') {
   const candidates = resolveSanitizerConfigCandidates()
   if (!candidates.length) {
     logTaskWarn('PromptSanitizer', 'no-text-config', { reason: 'no active sanitizer/text AI config' })
     return null
   }
-  const result = await runSanitizerCandidates(rawPrompt, candidates, attemptSanitizerLLM)
+  const result = await runSanitizerCandidates(rawPrompt, candidates, attemptSanitizerLLM, {
+    systemPrompt: buildSystemInstruction(kind),
+  })
   return result.ok ? (result.text as string) : null
 }
 /**
@@ -642,11 +711,13 @@ export function stripFaceArchiveTokens(prompt: string): { text: string; removed:
   return { text: text.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]*,\s*,\s*/g, ', ').trim(), removed }
 }
 
-export async function sanitizeImagePrompt(rawPrompt) {
+export async function sanitizeImagePrompt(rawPrompt, opts?: { kind?: ImagePromptKind }) {
+  const kind = opts?.kind || 'shot'
   try {
-    const llmResult = await sanitizeImagePromptLLM(rawPrompt)
+    const llmResult = await sanitizeImagePromptLLM(rawPrompt, kind)
     if (llmResult) {
-      return applySafetySuffix(llmResult)
+      // Sprint 21: LLM 之后追加 kind 硬约束 (场景空场景 / 角色中性背景) —— 放 LLM 后面不会被洗掉
+      return applySafetySuffix(applyKindConstraint(llmResult, kind))
     }
     logTaskWarn('PromptSanitizer', 'fallback-to-local', { reason: 'LLM rewrite unavailable' })
   } catch (err) {
@@ -668,7 +739,7 @@ export async function sanitizeImagePrompt(rawPrompt) {
       hint: 'LLM 改写失败走本地兜底, 模板尾部的 detailed illustration / professional character art 已去掉 —— 这两句会把画风带成插画/设定稿',
     })
   }
-  return applySafetySuffix(deIllustrated.text)
+  return applySafetySuffix(applyKindConstraint(deIllustrated.text, kind))
 }
 
 /**

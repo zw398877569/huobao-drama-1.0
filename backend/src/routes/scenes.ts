@@ -50,7 +50,10 @@ app.post('/:id/generate-image', async (c) => {
   if (!ep) return badRequest(c, 'Episode not found')
 
   const rawPrompt = scene.prompt || (scene.location + ', ' + (scene.time || '') + ', 高质量场景, 电影感')
-  const prompt = await sanitizeImagePrompt(rawPrompt)
+  // Sprint 21 (QA msg-20261025-085) fix_1: 场景图必须是【空场景】——
+  //   场景图会作为镜头图的参考图, 里面多一个人 → 镜头里也多一个人 (而且经常跟角色设定冲突)。
+  //   kind='scene' 让 LLM 知道只写环境, 并在 LLM 之后追加 no-people 硬约束 (不被洗掉)。
+  const prompt = await sanitizeImagePrompt(rawPrompt, { kind: 'scene' })
   try {
     logTaskStart('SceneImage', 'generate', { sceneId: id, episodeId: ep.id, dramaId: scene.dramaId, location: scene.location })
     db.update(schema.scenes).set({ status: 'processing', updatedAt: now() }).where(eq(schema.scenes.id, id)).run()

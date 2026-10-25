@@ -124,6 +124,11 @@ app.post('/:id/generate-image', async (c) => {
   const rawPrompt = [
     char.name,
     charDetail,
+    // Sprint 21 fix_2: 背景约束提前 + 写得更硬。
+    //   LLM 改写被规则 F 卡在 240 字符 (inLen 2236 → outLen 240, 模板被压缩 89%),
+    //   原来的 'clean light gradient background' 排在最后 → 被挤掉 → 背景语义丢失 →
+    //   生图模型自由发挥成户外院子。放前面 + 写死"中性影棚背景 + 不得出现环境元素"。
+    'neutral plain seamless studio backdrop, even soft lighting, no environment, no room, no street, no outdoor scenery',
     personality ? 'personality: ' + personality : '',
     stylePreset.positiveCharacterTokens,
     aestheticTokens,
@@ -136,10 +141,13 @@ app.post('/:id/generate-image', async (c) => {
     'AGE ANCHOR: if a numeric age is mentioned (e.g. "25 years old", "around 30"), pin the character to that exact integer; if vague ("young", "middle-aged"), default to 25-30 for protagonist or elderly for aged roles; do NOT free-render into 50+ when "around 30" is given,',
     'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
     'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
-    'consistent character design across all views, clean light gradient background',
+    'consistent character design across all views',
     'high quality, detailed illustration, professional character art',
   ].filter(Boolean).join(', ')
-  const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt)
+  // Sprint 21 (QA msg-20261025-085) fix_2: 角色形象图的背景必须中性, 不能由模型自由发挥
+  //   (实测王秀兰 82104a51 被放到户外院子+灯笼+盆栽, 剧本写的是'约20平米一室一厅室内')。
+  //   kind='character' → LLM 分支规则 + LLM 之后追加中性影棚背景硬约束。
+  const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt, { kind: 'character' })
   // Sprint 12 Task B: 后置保险 — sanitizeImagePrompt 是 LLM 改写环节, 可能把 gender 丢掉
   //   (实际事故: drama 14 林达剧本明确"男" 被改写成 'Linda East Asian woman')。
   //   纯正则校验, 不调 LLM 不增加耗时; 老数据无 gender trait (PM D2 锁定不回填) → 自动跳过。
@@ -201,6 +209,8 @@ app.post('/batch-generate-images', async (c) => {
     const rawPrompt = [
       char.name,
       charDetail,
+      // Sprint 21 fix_2: 同单个路径 (背景约束提前)
+      'neutral plain seamless studio backdrop, even soft lighting, no environment, no room, no street, no outdoor scenery',
       personality ? 'personality: ' + personality : '',
       stylePreset.positiveCharacterTokens,
       aestheticTokens,
@@ -210,10 +220,11 @@ app.post('/batch-generate-images', async (c) => {
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
       'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
       'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
-      'consistent character design across all views, clean light gradient background',
+      'consistent character design across all views',
       'high quality, detailed illustration, professional character art',
     ].filter(Boolean).join(', ')
-    const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt)
+    // Sprint 21 fix_2: 同单个路径 (kind='character')
+    const sanitizedPrompt = await sanitizeImagePrompt(rawPrompt, { kind: 'character' })
     // Sprint 12 Task B: 同 B1, 每个角色独立校验各自的 gender (批量不能共用一个判断)
     const prompt = ensureGenderInPrompt(sanitizedPrompt, extractGenderTrait(char.permanentTraits), {
       characterId: cid,

@@ -512,7 +512,8 @@ app.post('/generate', async (c) => {
   const referenceAssets = collectGridReferenceAssets(storyboards)
   const rawPrompt = custom_prompt || buildGridPrompt(mode, storyboards, rows, cols, dramaStyle, referenceAssets)
   // grid prompt 也走安全改写(grid_prompt 由 LLM 拼出来,可能含残留敏感词)
-  const prompt = await sanitizeImagePrompt(rawPrompt)
+  // Sprint 21: 接上 kind 机制 (grid 暂不改行为 —— QA fix_3 要求先调查影响面)
+  const prompt = await sanitizeImagePrompt(rawPrompt, { kind: 'grid' })
   const referenceImages = referenceAssets.map((asset) => asset.path)
 
   // Size: 保持 16:9 单格比例,总尺寸按比例缩放到 ≤ 1920x1080(agnes 最大支持),
