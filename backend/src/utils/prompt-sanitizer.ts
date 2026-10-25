@@ -203,6 +203,37 @@ const FALLBACK_REPLACEMENTS = [
 
 const SUFFIX_MARKERS = ['cinematic still', 'artistic composition', 'dramatic tension']
 
+/**
+ * LLM 改写输出的【长度失控兜底】(Sprint 22 Task A)
+ *
+ * ⚠️ 跟 rule F 原来的 'max 240 chars' 语义完全不同, 别混淆:
+ *   · rule F 的 240 是【强制压缩】—— 把 2236 字符的模板砍到 239, 丢 89% → 必须去掉
+ *   · 这里是【防失控】—— 正常输出长度 ≈ 输入长度 (rule F 明确要求 "comparable to the input"),
+ *     只有 LLM 跑飞 (重复/发散) 才会撞到
+ *
+ * 规则: 上限 = clamp(输入长度 × 1.5, 1500, 6000)
+ *   · 角色模板 2236 → 上限 3354, 正常输出 ~2236 撞不到 ✓
+ *   · 场景 110 → 上限 1500 (下限兜底, 不会反过来逼 LLM 写长) ✓
+ *   · 网格图 3000+ → 上限 4500~6000 ✓
+ */
+const REWRITE_LEN_RATIO = 1.5
+const REWRITE_LEN_MIN_CAP = 1500
+const REWRITE_LEN_MAX_CAP = 6000
+
+export function capRewrittenLength(text: string, inputLen: number): { text: string; capped: boolean; cap: number } {
+  const cap = Math.min(
+    Math.max(Math.ceil(inputLen * REWRITE_LEN_RATIO), REWRITE_LEN_MIN_CAP),
+    REWRITE_LEN_MAX_CAP,
+  )
+  const src = String(text || '')
+  if (src.length <= cap) return { text: src, capped: false, cap }
+  // 输出是逗号分隔的短语句 → 在上限附近找逗号切, 比硬截在字符中间干净
+  const slice = src.slice(0, cap)
+  const lastComma = slice.lastIndexOf(',')
+  const cut = lastComma > cap * 0.6 ? slice.slice(0, lastComma) : slice
+  return { text: cut.trim().replace(/[,\s]+$/, ''), capped: true, cap }
+}
+
 function hasSafetySuffix(prompt) {
   return SUFFIX_MARKERS.every(marker => prompt.includes(marker))
 }
@@ -308,7 +339,17 @@ const SYSTEM_INSTRUCTION_BASE = [
   'D. 中毒 / 受伤 / 武器 / 血腥 / 死亡 / 师徒暧昧 / 昏迷 / 濒死 / 窒息 / 自尽 全部要中性化,',
   '   例如:昏迷不醒→安静地闭目养神;毒气攻心、肤色滚烫→面部泛着柔和的红润光晕;刀光剑影→光影交错。',
   'E. 末尾追加 ", cinematic still, dramatic tension, artistic composition"。',
-  'F. Output IN ENGLISH, comma-separated short phrases, max 240 chars.',
+  // Sprint 22 (PM msg-20261025-089) Task A: 去掉 240 字符上限, 换成【不压缩不编造】。
+  //   修前 'max 240 chars' 在两个方向都不可靠 (实测):
+  //     角色模板 2236 → 239  压缩 89% → 'clean light gradient background' /
+  //                     'character reference sheet' / layout 三视图全被挤掉 → 背景语义丢失
+  //                     → 生图模型自由发挥成户外院子 (用户 2026-10-25 实测)
+  //     场景 106   → 238  硬撑到顶格 → 把场景陈设"冒热气的面碗"忠实翻成 'steaming noodles'
+  //                     → 生图模型读成"有人在吃面" → 场景图里坐着一个吃面的年轻女性
+  //                     (这就是用户 2026-10-09 报的"场景图里有个不存在的人物"的真正根因)
+  //     141 → 391 / 165 → 429  模型【不守规矩】, 超限 2.6~2.8 倍
+  //   kind 分支 (applyKindConstraint) 只能堵症状 (LLM 输出后追加约束), 被砍掉的信息【补不回来】。
+  'F. Output IN ENGLISH, comma-separated short phrases. Keep every concrete detail of the original description. Do NOT invent elements that are not in the original (no extra people, no extra props, no extra scenery). Output length should be comparable to the input, not capped.',
   'G. Do NOT output explanations, prefixes, quotes, or markdown code blocks. Do NOT output <think> thinking blocks. Output only the rewritten prompt string.',
   // 2026-09-25 PM msg-20260924-006 (Q5 task_A): 加显式指令, 防 MiniMax-M3 中转站禁不掉 thinking block 时输出空
   'IMPORTANT: Output ONLY the rewritten prompt string. NO thinking, NO explanation, NO analysis. Even if thinking block is forced, the FINAL ANSWER must be a complete rewritten prompt.',
@@ -468,9 +509,22 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
     const reasoningContent = typeof choice0?.message?.reasoning_content === 'string'
       ? choice0.message.reasoning_content : ''
     const extractedRaw = typeof llmContent === 'string' ? llmContent : ''
-    const rewritten = hasNonEnglishChars(rawPrompt)
+    const rawRewritten = hasNonEnglishChars(rawPrompt)
       ? extractPromptFromLLM(extractedRaw)
       : extractPromptFromLLMEnglish(extractedRaw)
+    // 长度失控兜底 (Sprint 22 Task A) —— 正常输出不会被截, 只有 LLM 跑飞才撞到
+    const capped = capRewrittenLength(rawRewritten || '', rawPrompt.length)
+    const rewritten = capped.text
+    if (capped.capped) {
+      logTaskWarn('PromptSanitizer', 'llm-rewrite-capped', {
+        attempt,
+        configSource,
+        inLen: rawPrompt.length,
+        outLen: (rawRewritten || '').length,
+        cap: capped.cap,
+        hint: 'LLM 改写输出超过失控兜底上限, 已按逗号边界截断 (正常输出长度应≈输入长度)',
+      })
+    }
     if (!rewritten) {
       logTaskWarn('PromptSanitizer', 'llm-rewrite-empty', {
         attempt,
