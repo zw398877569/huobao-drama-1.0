@@ -34,34 +34,49 @@ export const Step1Schema = z.object({
   scene_distribution: z.record(z.string(), z.number()),
 })
 
+/**
+ * 文本字段: 接受 string, 也接受 string[] (LLM 偶尔把多角色台词/多段描述输出成数组)。
+ *
+ * Sprint 22 回归实测 (2026-10-25 drama 15 ep15 step2):
+ *   LLM 把 18 个 shot_details 的 dialogue 全输出成了数组 → zod 报
+ *   'expected string, received array' ×18 → salvage 救不回来 → 整个 step2 走重试 (一次 5~6 分钟)。
+ *
+ * ⚠️ 这个 schema 只用于【校验】, 不会作为 response_format 发给 LLM —— 所以放宽它
+ *   不会改变 LLM 看到的要求, 只是让偶发的数组输出不再把整轮拆解打挂。
+ *   transform 把数组 join('\n') 成字符串 → 下游 (落库/时间轴/注入块) 拿到的永远是 string。
+ */
+const textOrLines = z.union([z.string(), z.array(z.string())]).transform((v) =>
+  Array.isArray(v) ? v.filter((x) => typeof x === 'string').join('\n') : v,
+)
+
 export const ShotDetailsItemSchema = z.object({
   shot_number: z.number().int().positive(),
   scene_id: z.number().int().optional(),
   character_ids: z.array(z.number().int()).optional(),
-  shot_type: z.string().optional(),
-  angle: z.string().optional(),
-  movement: z.string().optional(),
-  location: z.string().optional(),
-  time: z.string().optional(),
+  shot_type: textOrLines.optional(),
+  angle: textOrLines.optional(),
+  movement: textOrLines.optional(),
+  location: textOrLines.optional(),
+  time: textOrLines.optional(),
   duration: z.number().optional(),
-  action: z.string().optional(),
-  dialogue: z.string().optional(),
-  description: z.string().optional(),
-  result: z.string().optional(),
-  atmosphere: z.string().optional(),
-  intent_function: z.string().optional(),
+  action: textOrLines.optional(),
+  dialogue: textOrLines.optional(),
+  description: textOrLines.optional(),
+  result: textOrLines.optional(),
+  atmosphere: textOrLines.optional(),
+  intent_function: textOrLines.optional(),
   /** V3 zod enum 5 维结构化对象 — V2 free-text permanent 已废弃 */
   image_prompt_permanent: V3ImagePromptPermanentSchema.optional(),
-  image_prompt_plot_state: z.string().optional(),
-  video_prompt_permanent: z.string().optional(),
-  video_prompt_plot_state: z.string().optional(),
+  image_prompt_plot_state: textOrLines.optional(),
+  video_prompt_permanent: textOrLines.optional(),
+  video_prompt_plot_state: textOrLines.optional(),
   // Sprint 11 Task A (PM msg-20261016-001): H3 声音两列 — V4 重构时遗落, 导致 19/19 video_prompt
   //   缺三段式 header, H3 拿不到声音指令自由发挥 → 13/19 镜接近静音 (-45~-52dB)。
   //   旧路径 agents/index.ts:580-588 已有既有措辞, 这里沿用同口径。
   /** 环境底噪 + diegetic 音效 (画面内可听的声音)。无则写 'N/A' */
-  sound_effect: z.string().optional(),
+  sound_effect: textOrLines.optional(),
   /** 该镜配乐描述: 配器 + 速度 + 节奏 + 动态变化。禁止抽象情绪词。无则写 'N/A' */
-  bgm_prompt: z.string().optional(),
+  bgm_prompt: textOrLines.optional(),
 })
 
 export const Step2Schema = z.object({

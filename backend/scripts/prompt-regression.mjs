@@ -134,7 +134,7 @@ async function sampleImage(sample, kind, id, label, extra) {
   if (!NO_TRIGGER) {
     const r = await api('POST', `/api/v1/${kind}/${id}/generate-image`, { episode_id: EPISODE })
     traceId = r.traceId
-    record(sample, `${label} 生图请求已发出`, r.status === 200, `HTTP ${r.status} trace=${traceId || 'n/a'}`)
+    record(sample, `${label} 生图请求已发出`, r.status >= 200 && r.status < 300, `HTTP ${r.status} trace=${traceId || 'n/a'}`)
     if (r.status !== 200) return
   }
   // 生成是异步的, 日志可能要等一会儿
@@ -163,8 +163,10 @@ async function sampleImage(sample, kind, id, label, extra) {
       empty ? `empty (finishReason=${empty.finishReason} reasoningLen=${empty.reasoningLen})` : (allFail ? 'all-configs-failed' : '没找到改写日志'))
   }
   // 最终发给平台的 prompt
-  const enq = meta(logs, 'ImageTask', 'enqueue') || meta(logs, 'ImageTask', 'enqueue params') || meta(logs, 'ImageTask', 'request')
-  const finalPrompt = enq?.prompt || enq?.params?.prompt || ''
+  // 生图的 prompt 在 meta.payload 里 (不是 meta.prompt) —— 'ImageTask/enqueue params' 的 meta 只有 payload
+  const enq = meta(logs, 'ImageTask', 'enqueue params') || meta(logs, 'ImageTask', 'enqueue')
+    || meta(logs, 'ImageTask', 'request') || meta(logs, 'ImageTask', 'request payload')
+  const finalPrompt = enq?.payload?.prompt || enq?.prompt || enq?.params?.prompt || ''
   if (finalPrompt) {
     record(sample, '最终 prompt 长度未超上限', finalPrompt.length < 10000, `${finalPrompt.length} 字符`)
     if (extra?.finalMustHave) record(sample, `最终 prompt 含 ${JSON.stringify(extra.finalMustHave)}`, hasAll(finalPrompt, extra.finalMustHave),
@@ -185,23 +187,46 @@ async function sampleS5(shotNumbers) {
   record(S, '找到目标镜头', true, targets.map((t) => t.id).join(','))
 
   for (const sb of targets) {
-    const prompt = sb.video_prompt || sb.videoPrompt || ''
+    const num = sb.storyboard_number || sb.storyboardNumber
+    // ★ 注入块断言对【存储的中文 video_prompt】做 —— 翻译后的英文措辞每次不一样
+    //   (实测见过 'Continuity from the previous shot' 和 'Continuation from the previous shot' 两种),
+    //   对中文标记断言才稳定。
+    const stored = sb.video_prompt || sb.videoPrompt || ''
+    const prevSb = list.find((x) => (x.storyboard_number || x.storyboardNumber) === num - 1)
+    const sameScene = prevSb && prevSb.scene_id === sb.scene_id
+    const hasDialogue = (sb.dialogue || '').trim().length > 0
+    const hasResult = (sb.result || '').trim().length > 0
+    record(S, `镜头#${num} 存储prompt 有角色外观块`, stored.includes('角色外观'), '')
+    record(S, `镜头#${num} 有戏型节奏块`, /节奏:/.test(stored), '')
+    if (sameScene) record(S, `镜头#${num} 同场景 → 有承接前一镜块`, stored.includes('承接前一镜'), `上一镜 #${num-1} scene=${sb.scene_id}`)
+    else record(S, `镜头#${num} 场景首镜 → 无承接前一镜块(预期)`, !stored.includes('承接前一镜'), `scene=${sb.scene_id}`)
+    if (hasResult) record(S, `镜头#${num} 有本镜收尾块`, stored.includes('本镜收尾'), '')
+    else record(S, `镜头#${num} 无 result → 无本镜收尾块(预期)`, !stored.includes('本镜收尾'), '')
+
     const r = await api('POST', '/api/v1/videos', {
-      storyboard_id: sb.id, drama_id: DRAMA, prompt,
+      storyboard_id: sb.id, drama_id: DRAMA, prompt: stored,
       reference_mode: 'first_frame', aspect_ratio: '9:16',
     })
-    record(S, `镜头#${sb.storyboard_number} 视频请求已发出`, r.status === 200, `HTTP ${r.status}`)
-    const logs = readFlowLog(r.traceId)
+    record(S, `镜头#${num} 视频请求已发出`, r.status >= 200 && r.status < 300, `HTTP ${r.status}`)
+    // 视频生成是异步的, flow-log 要等一会儿才有
+    let logs = []
+    for (let i = 0; i < 30; i++) {
+      logs = readFlowLog(r.traceId)
+      if (logs.length) break
+      await new Promise((x) => setTimeout(x, 2000))
+    }
     const req = meta(logs, 'VideoTask', 'request')
-    if (!req) { record(S, `镜头#${sb.storyboard_number} 拿到 VideoTask/request`, false, '没找到 (视频生成可能还没到发请求那步)'); continue }
+    if (!req) { record(S, `镜头#${num} 拿到 VideoTask/request`, false, '没找到 (可能还在排队)'); continue }
     const p = req.prompt || ''
-    record(S, `镜头#${sb.storyboard_number} 三段式 header 齐全`,
-      hasAll(p, ['Integrated multimodal description', 'Overall soundscape', 'Non-diegetic music']), '')
-    record(S, `镜头#${sb.storyboard_number} Sprint17 四注入块齐全`,
-      hasAll(p, ['Character appearance', 'Continuity from the previous shot', 'End of this shot', 'Pacing:']), '')
-    record(S, `镜头#${sb.storyboard_number} 台词时间轴在`, /开口:'/.test(p), '')
-    record(S, `镜头#${sb.storyboard_number} prompt 长度 < 10000`, p.length < 10000, `${p.length} 字符`)
-  }
+    record(S, `镜头#${num} 三段式 header 齐全`, hasAll(p, ['Integrated multimodal description', 'Overall soundscape', 'Non-diegetic music']), '')
+    if (hasDialogue) record(S, `镜头#${num} 台词时间轴在`, /开口:'/.test(p), '')
+    else record(S, `镜头#${num} 无台词 → 无时间轴(预期)`, !/开口:'/.test(p), '')
+    record(S, `镜头#${num} prompt 长度 < 10000`, p.length < 10000, `${p.length} 字符`)
+    // 翻译器偶发加 markdown 前缀 (### Overall soundscape:) —— H3 的 header 规范不带 ##
+    if (/^#{1,6}\s*(Integrated|Overall|Non-diegetic)/m.test(p)) {
+      record(S, `镜头#${num} 三段式 header 没被翻译器加 markdown 前缀`, false, '出现了 "### header" —— 翻译器偶发加的, 建议加代码层归一化')
+    }
+}
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────

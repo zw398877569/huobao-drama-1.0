@@ -104,6 +104,9 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
      ⚠️ 本镜【有 dialogue】时严禁自己写带时间码的段落 —— 台词时间轴由后端按配音音频自动生成,
      你只按动作顺序写动作, 否则两套时间码会重叠打架
   ⑤ 禁止混写 (老路径 十): 禁止把 action + result + dialogue 混在一句话 (分开填三个字段)
+     ⚠️ 所有文本字段 (action / dialogue / description / result / atmosphere / sound_effect / bgm_prompt)
+        必须是【字符串】, 一个字段一个字符串. dialogue 有多个角色时, 把每个角色写成一行,
+        全部放在同一个字符串里 (用换行分隔), 【不要输出数组】.
   ⑥ 5D 摄影参数 (老路径 七): video_prompt_permanent 必须写全 5 维, 每维各选一项, 用英文术语:
      景别 ECU/CU/MS/MLS/WS + 焦距 24mm/35mm/50mm/85mm + 运镜 static/slow dolly in/dolly out/
      pan left/pan right/handheld/tilt up/tilt down + 景深 shallow f/1.8/standard f/4/deep f/8 +
