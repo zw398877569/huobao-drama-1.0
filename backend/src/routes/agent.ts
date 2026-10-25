@@ -11,6 +11,36 @@ import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
+// Sprint 19 (PM msg-20261025-082) Task C: prompt 模板选择
+import {
+  getEpisodeTemplateId,
+  invalidateEpisodeTemplateCache,
+  resolveTemplateId,
+} from '../prompt-templates/index.js'
+import { now } from '../utils/response.js'
+
+/**
+ * 解析本次拆解用的 prompt 模板 id。
+ *
+ * - 传了 template_id → 以传入值为准 (本轮覆盖) 并落库到 episodes.prompt_template
+ *   (这样下次进 wizard 能恢复这个选择);
+ * - 没传 → 用 episode 已存的值 (老 episode 没这列 → 默认 general)。
+ *
+ * ⚠️ 未知 template_id 直接抛错 (由路由转成 400) —— 不能静默 fallback 到 general,
+ *   否则前端传错 id 会"看起来选了新模板, 实际跑的是老模板", 极难查。
+ */
+function resolveTemplateForEpisode(episodeId: number, templateId?: string | null): string {
+  const raw = templateId === undefined || templateId === null ? '' : String(templateId).trim()
+  if (!raw) return getEpisodeTemplateId(episodeId)
+  const tid = resolveTemplateId(raw)
+  db.update(schema.episodes)
+    .set({ promptTemplate: tid, updatedAt: now() })
+    .where(eq(schema.episodes.id, episodeId))
+    .run()
+  invalidateEpisodeTemplateCache(episodeId)
+  logTaskProgress('Agent', 'prompt-template-selected', { episodeId, templateId: tid })
+  return tid
+}
 
 const app = new Hono()
 
@@ -203,14 +233,23 @@ app.post('/storyboard_breaker/planning', async (c) => {
   // Sprint 6 PM msg-20260930-001 Task B — text_config_id 可选 (用户测 DeepSeek 分镜)
   // 复合格式 "configId:modelName" 或纯数字 configId; null 时走 getActiveConfig('text') fallback
   const parsed = parseConfigIdWithModel(body.text_config_id)
-  const opts: { textConfigId?: number; modelOverride?: string } = {}
+  const opts: { textConfigId?: number; modelOverride?: string; templateId?: string } = {}
   if (parsed.configId) opts.textConfigId = parsed.configId
   if (parsed.model) opts.modelOverride = parsed.model
+  // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
+  let templateId: string
+  try {
+    templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '未知的 prompt 模板')
+  }
+  opts.templateId = templateId
 
   logTaskStart('Agent', 'storyboard_breaker-planning-v4', {
     dramaId: drama_id, episodeId: episode_id,
     textConfigId: opts.textConfigId ?? null,
     modelOverride: opts.modelOverride ?? null,
+    templateId,
     note: 'V4 老 endpoint redirect to 3-step service (auto mode)',
   })
 
@@ -222,6 +261,7 @@ app.post('/storyboard_breaker/planning', async (c) => {
       const result = await runAllStepsLegacy({
         dramaId: drama_id, episodeId: episode_id,
         textConfigId: opts.textConfigId, modelOverride: opts.modelOverride,
+        templateId: opts.templateId,
         onProgress: async (p) => {
           // 把 p 字段放在前面, 显式 phase/status/tip 后覆盖 (避免 TS2783 'phase specified more than once')
           await stream.writeSSE({
@@ -288,9 +328,15 @@ app.post('/storyboard_breaker/planning/step1', async (c) => {
     return badRequest(c, 'drama_id and episode_id are required')
   }
   const parsed = parseConfigIdWithModel(body.text_config_id)
-  const opts: { textConfigId?: number; modelOverride?: string } = {}
+  const opts: { textConfigId?: number; modelOverride?: string; templateId?: string } = {}
   if (parsed.configId) opts.textConfigId = parsed.configId
   if (parsed.model) opts.modelOverride = parsed.model
+  // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
+  try {
+    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '未知的 prompt 模板')
+  }
 
   try {
     const result = await runStep1({
@@ -317,10 +363,16 @@ app.post('/storyboard_breaker/planning/step2', async (c) => {
     return badRequest(c, 'drama_id and episode_id are required')
   }
   const parsed = parseConfigIdWithModel(body.text_config_id)
-  const opts: { textConfigId?: number; modelOverride?: string; shotPlanOverride?: any[] } = {}
+  const opts: { textConfigId?: number; modelOverride?: string; shotPlanOverride?: any[]; templateId?: string } = {}
   if (parsed.configId) opts.textConfigId = parsed.configId
   if (parsed.model) opts.modelOverride = parsed.model
   if (Array.isArray(shot_plan)) opts.shotPlanOverride = shot_plan
+  // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
+  try {
+    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '未知的 prompt 模板')
+  }
 
   try {
     const result = await runStep2({
@@ -342,8 +394,14 @@ app.post('/storyboard_breaker/planning/step3', async (c) => {
   if (!episode_id || !drama_id) {
     return badRequest(c, 'drama_id and episode_id are required')
   }
-  const opts: { shotDetailsOverride?: any[] } = {}
+  const opts: { shotDetailsOverride?: any[]; templateId?: string } = {}
   if (Array.isArray(shot_details)) opts.shotDetailsOverride = shot_details
+  // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
+  try {
+    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '未知的 prompt 模板')
+  }
 
   try {
     const result = await runStep3({
