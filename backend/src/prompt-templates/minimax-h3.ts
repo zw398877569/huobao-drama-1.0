@@ -253,9 +253,24 @@ function validateH3Assembled(input: AssembleInput, output: AssembleOutput): stri
 
 // ─── H3 的生成期注入: Subject 绑定 / Speaker ID / 对白 / 限制项 ───────────────
 
-/** 官方限制项 (工单 B 照抄官方原版) */
+/**
+ * 官方限制项 —— 【有台词的镜】用这套 (Ref2VA 官方原版写法)。
+ * 出处: 来源说明.txt:41-42 "官方原版提示词的限制项标准写法: No text, subtitles, logos or watermarks of any kind"
+ */
 const H3_CONSTRAINTS =
   'No text, subtitles, logos or watermarks of any kind, single continuous shot without cuts, ' +
+  'maintain spatial continuity, avoid character deformation and identity drift.'
+
+/**
+ * 官方限制项 —— 【无台词的镜】用这套 (T2V 官方原版写法, 多一句 'no dialogue')。
+ * 出处: 04-API版-文生视频T2V-极地飞行.txt:8 结尾 "No text, no logos, no dialogue."
+ *
+ * ★ Sprint 24 fix_2 (PM msg-20261026-109): 官方要靠【一整句 'no dialogue'】才压得住自发声
+ *   (说明问题在"有没有明确禁止发声", 不在引号)。
+ *   无台词的镜 H3 没有 <d> 块可依据, 最容易自己补话 (107 里 'moves his lips to answer' 就是这种症状)。
+ */
+const H3_CONSTRAINTS_NO_DIALOGUE =
+  'No text, subtitles, logos or watermarks of any kind, no dialogue, single continuous shot without cuts, ' +
   'maintain spatial continuity, avoid character deformation and identity drift.'
 
 /** 首帧锚点 —— 沿用 Sprint 17 的同一句, 但放进 detailed_description 内部 */
@@ -402,23 +417,36 @@ function injectH3(input: GenerationInjectInput): string | null {
     //   官方规范里也没有"用引号包叙述文字"的写法 → 引号是我们自创的、H3 会误读的信号。
     //   防呆: normalizeDialogueForH3 已经剥掉中英文引号, 这里再兜一层 (残留引号一律不能进 prompt)。
     const prevText = normalizeDialogueForH3(prev).replace(/[“”‘’「」『』"]/g, '').trim()
-    // 结尾标点只补一次 (prev 自带句号时别叠成 "..")
-    const prevTail = /[.。!?！？…]$/.test(prevText) ? prevText : `${prevText}.`
-    out = appendToSection(out, 'detailed_description',
-      `Continues from the closing state of the previous shot: ${prevTail}`)
-    // ★ Sprint 24 fix_5: 承接句不是英文 → warn (fix_1 只是 prompt 约束, 不是 100% 保证)。
-    //   不 warn 的话, 这个问题只能靠逐字比对最终 prompt 才能发现 (这次就是这样)。
+    // ★ Sprint 24 fix_1 (PM msg-20261026-109): 处理后仍含非 ASCII → 【不注入承接句】(降级)。
+    //   理由: 107 拆掉了【引号】这个信号, 但"一段没有 <d> 包裹、没有引号的中文叙述"
+    //   本身就是 H3 的发声信号 —— 官方 T2V 结尾要靠整句 "No text, no logos, no dialogue."
+    //   才压得住自发声, 说明关键在【有没有明确禁止发声】, 不在引号。
+    //   承接句是【锦上添花】的画面连续性提示, 不注入只少一条上下文;
+    //   被当台词念出来是实打实的成片污染 (要重生成 + 配音重做, 用户白等一轮)。
+    //   ⚠️ 不改成"把中文翻译成英文再注入": injectH3 是同步纯函数, 那里没有翻译器;
+    //      硬塞一次 LLM 调用会给每镜加延迟和成本, 收益只是"多一条可选上下文"。
+    //   ★ fix_1 (step2 prompt 要求 result 写英文) 生效时走不到这个分支 → 纯兜底, 不影响正常路径。
     if (/[^\x00-\x7F]/.test(prevText)) {
+      // ★ Sprint 24 fix_5 (保留): warn —— fix_1 只是 prompt 约束, 不是 100% 保证。
+      //   不 warn 的话, 这个问题只能靠逐字比对最终 prompt 才能发现 (上次就是这样)。
       logTaskWarn('PromptTemplate', 'h3-continuity-not-english', {
         storyboardId: input.storyboardId,
         prevPreview: prevText.slice(0, 120),
-        hint: '承接上一镜的内容不是英文 —— H3 可能把它当台词念出来; 检查 step2 的 result 字段 (要求写英文)',
+        hint: '承接上一镜的内容不是英文 —— 已跳过注入承接句 (降级), 避免 H3 把画面状态当台词念出来; 检查 step2 的 result 字段 (要求写英文)',
       })
+    } else {
+      // 结尾标点只补一次 (prev 自带句号时别叠成 "..")
+      const prevTail = /[.。!?！？…]$/.test(prevText) ? prevText : `${prevText}.`
+      out = appendToSection(out, 'detailed_description',
+        `Continues from the closing state of the previous shot: ${prevTail}`)
     }
   }
 
   // ④ 限制项 (独立末段)
-  out = `${out.trimEnd()}\n\n${H3_CONSTRAINTS}`
+  //   ★ Sprint 24 fix_2 (PM msg-20261026-109): 按【本镜有没有台词】动态选官方两套写法。
+  //   ⚠️ 有台词的镜【绝对不能】加 'no dialogue' —— 会把真台词也压掉, 比现在更糟。
+  const constraints = dialogueLines.length ? H3_CONSTRAINTS : H3_CONSTRAINTS_NO_DIALOGUE
+  out = `${out.trimEnd()}\n\n${constraints}`
   return out
 }
 
