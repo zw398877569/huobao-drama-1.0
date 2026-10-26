@@ -51,7 +51,7 @@ export interface ShotDetailsItem {
   sound_effect?: string
   bgm_prompt?: string
   /** V3 zod enum 5 维结构化对象 (替代 V2 free-text permanent) */
-  image_prompt_permanent?: z.infer<typeof V3ImagePromptPermanentSchema>
+  image_prompt_permanent?: z.infer<typeof V3ImagePromptPermanentSchema> | null
   image_prompt_plot_state?: string
   video_prompt_permanent?: string
   video_prompt_plot_state?: string
@@ -159,9 +159,29 @@ export interface PromptTemplate {
   step2: {
     systemPrompt: string
     schema: z.ZodTypeAny
+    /**
+     * 单个 shot_details 的 item schema (即 step2.schema 里 shot_details 数组的元素类型)。
+     *
+     * ★ Sprint 23 fix_1 (PM msg-20261026-100): step3 的 revalidate 必须用【模板自己的】item schema,
+     *   不能硬编码 general 的 ShotDetailsItemSchema ——
+     *   z.object() 默认 strip 未声明的 key, general 的 schema 没声明 H3 的 4 个专有字段
+     *   (subject_definitions / detailed_description / overall_soundscape / non_diegetic_music)
+     *   → revalidate 时被剥掉 → assembleH3 拿到 undefined → 18 镜的 video_prompt 全是空壳 (95 字符)。
+     *   暴露这个出口后, 加新模板不用改 service 层 (保持 sprint-19 的抽象层设计)。
+     */
+    //   类型定成 z.ZodType<ShotDetailsItem> (不是 ZodTypeAny) —— 否则 z.array() 的输出是 unknown[],
+    //   step3 下游 (det.xxx) 全变成 unknown, 一片类型错误。
+    itemSchema: z.ZodType<ShotDetailsItem, unknown>
   }
   /** Step3: 从 shot_details 组装 image_prompt / video_prompt */
   assemble(input: AssembleInput): AssembleOutput
+  /**
+   * 组装后的产物自检 (可选; 不实现 = 不校验, 保持 general 行为不变)。
+   *
+   * 返回一段错误说明 = 这一镜的产物有问题 (例如 H3 四段全空) → step3 应该直接失败,
+   * 而不是静默落库一份空 prompt 等到出片阶段才发现。
+   */
+  validateAssembled?(input: AssembleInput, output: AssembleOutput): string | null
   /** 生成期 (翻译之后、发平台之前) 的行为 —— Sprint 20 的 H3 模板要在这里关掉 general 的注入 */
   generation: {
     /**

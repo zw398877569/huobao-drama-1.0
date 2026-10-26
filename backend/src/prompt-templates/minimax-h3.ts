@@ -80,10 +80,14 @@ export const H3ShotDetailsItemSchema = z.object({
   //   这 4 段【必填】(工单 verify: 缺 subject_definitions / detailed_description 要被 zod 拒绝) ——
   //   它们是 H3 模板存在的意义, 缺了就不该放行。
   //   overall_soundscape / non_diegetic_music 没有内容时写 "N/A" (官方示例就有这个用法)。
-  subject_definitions: z.string(),
-  detailed_description: z.string(),
-  overall_soundscape: z.string(),
-  non_diegetic_music: z.string(),
+  //   ★ Sprint 23 fix_2 (PM msg-20261026-100): 这 4 段也走 textOrLines 兜底 (必填版, 不加 .optional())。
+  //   实测 (drama 16 ep16): LLM 把 non_diegetic_music 输出成数组 → zod hard reject →
+  //   整轮 step2 重试 2 次 (4分13秒 + 2分37秒 + 2分09秒 = 9 分钟) → 前端 420s 超时误报失败。
+  //   通用字段当时带了兜底, 这 4 个专有字段漏了 (95daef2 的 commit message 里写过这个风险)。
+  subject_definitions: textOrLines,
+  detailed_description: textOrLines,
+  overall_soundscape: textOrLines,
+  non_diegetic_music: textOrLines,
 })
 
 export const H3Step2Schema = z.object({
@@ -207,6 +211,30 @@ function assembleH3(input: AssembleInput): AssembleOutput {
     imagePromptPlotState: plotStateText || null,
     videoPromptPlotState: shot.video_prompt_plot_state || null,
   }
+}
+
+/**
+ * ★ Sprint 23 fix_4 (PM msg-20261026-100): 组装后自检 —— 四段全空就直接失败, 别静默落库一份空 prompt。
+ *
+ * 背景: 这次 H3 四段全空 (18 镜 video_prompt 长度全是 95) 整个过程【没有任何一条日志告警】,
+ *   排查只能靠 QA 逐镜比对长度才发现。step3 一旦产出空壳 prompt, 要等到出片阶段才暴露。
+ *
+ * overall_soundscape / non_diegetic_music 允许写 "N/A" (官方示例的用法), 但不允许是空字符串。
+ */
+function validateH3Assembled(input: AssembleInput, output: AssembleOutput): string | null {
+  const missing: string[] = []
+  for (const name of H3_SECTION_NAMES) {
+    // 产物侧检查 (video_prompt 是真正要落库的那份): 段标题后面必须有正文
+    const m = new RegExp(`^${name}:\\n(.+)$`, 'm').exec(output.videoPrompt || '')
+    if (!m || !m[1].trim()) missing.push(name)
+  }
+  if (!missing.length) return null
+  // 再回溯到源字段, 给出更准确的报错 (是 LLM 没产出, 还是组装时丢了)
+  const shot = input.shot as unknown as Record<string, unknown>
+  const sourceMissing = H3_SECTION_NAMES.filter((n) => !String(shot[n] || '').trim())
+  return sourceMissing.length
+    ? `H3 四段缺失: ${sourceMissing.join(', ')} —— 这一镜的 video_prompt 是空壳, 不该落库`
+    : `H3 产物自检失败: video_prompt 的 ${missing.join(', ')} 段没有正文 (组装结果异常)`
 }
 
 // ─── H3 的生成期注入: Subject 绑定 / Speaker ID / 对白 / 限制项 ───────────────
@@ -352,8 +380,12 @@ export const minimaxH3Template: PromptTemplate = {
   step2: {
     systemPrompt: H3_STEP2_SYSTEM_PROMPT,
     schema: H3Step2Schema,
+    // ★ Sprint 23 fix_1: step3 revalidate 用这个 —— 否则 zod 会把 H3 的 4 个专有字段 strip 掉。
+    itemSchema: H3ShotDetailsItemSchema,
   },
   assemble: assembleH3,
+  // ★ Sprint 23 fix_4: 四段全空 → step3 直接失败 (别静默落库空 prompt)
+  validateAssembled: validateH3Assembled,
   generation: {
     // 官方用 <d>[Chinese]…</d>, 不能跟 general 的 <n>0-3.9秒：开口:'…'</n> 同时给 H3 (语义冲突)
     useDialogueTimeline: false,

@@ -25,7 +25,7 @@ import {
   insertIntoIntegratedSection,
 } from '../utils/storyboard-rules.js'
 import { permanentToText } from '../services/llm-schema-validator.js'
-import { Step1Schema, Step2Schema } from './schemas.js'
+import { Step1Schema, Step2Schema, ShotDetailsItemSchema } from './schemas.js'
 import type { AssembleInput, AssembleOutput, PromptTemplate } from './types.js'
 
 // ─── Step1 prompt (原 storyboard-planner-service.ts runStep1, 逐字符搬过来) ────
@@ -194,6 +194,8 @@ export const generalTemplate: PromptTemplate = {
   step2: {
     systemPrompt: GENERAL_STEP2_SYSTEM_PROMPT,
     schema: Step2Schema,
+    // ★ Sprint 23 fix_1: step3 revalidate 用这个 —— 跟重构前逐字等价 (就是同一个 schema 对象), general 零回归。
+    itemSchema: ShotDetailsItemSchema,
   },
   assemble: assembleGeneral,
   generation: {

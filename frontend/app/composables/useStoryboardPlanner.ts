@@ -198,7 +198,8 @@ export function useStoryboardPlanner(opts: {
       //   跟 backend callLLMJson 180s 一致 + retry: 0 (callLLMJson 内部已 retry 1 次, 前端不重复 retry 防双倍请求)
       const resp = await $fetch<{ shot_plan: ShotPlanItem[]; total_duration: number; scene_distribution: Record<string, number> }>(
         '/api/v1/agent/storyboard_breaker/planning/step1',
-        { method: 'POST', body, timeout: 420_000, retry: 0 },
+        // ★ Sprint 23 fix_3: 420s → 600s (后端 maxRetries=2, 重试路径最坏 ~540s, 420s 会误报超时)
+        { method: 'POST', body, timeout: 600_000, retry: 0 },
       )
       step1Plan.value = resp.data?.shot_plan ?? []
       currentStep.value = 1
@@ -233,7 +234,9 @@ export function useStoryboardPlanner(opts: {
 
       const resp = await $fetch<{ shot_details: ShotDetailsItem[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step2',
-        { method: 'POST', body, timeout: 420_000, retry: 0 },
+        // ★ Sprint 23 fix_3: 420s → 600s。H3 模板单次 attempt 实测 253s, 一旦触发重试 (zod 校验失败)
+        //   后端最坏 ~540s → 前端 420s 会在后端还在跑的时候先报超时 (用户看到失败, 后端其实成功了)。
+        { method: 'POST', body, timeout: 600_000, retry: 0 },
       )
       step2Details.value = resp.data?.shot_details ?? []
       currentStep.value = 2
@@ -265,7 +268,8 @@ export function useStoryboardPlanner(opts: {
       body.template_id = templateId.value
       const resp = await $fetch<{ createdStoryboardIds: number[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step3',
-        { method: 'POST', body, timeout: 420_000, retry: 0 },
+        // ★ Sprint 23 fix_3: 420s → 600s (跟 step1/step2 对齐)
+        { method: 'POST', body, timeout: 600_000, retry: 0 },
       )
       currentStep.value = 3
       stepStatus.value[3] = 'done'

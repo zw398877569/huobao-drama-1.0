@@ -34,7 +34,7 @@ import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
 //   step1/step2 的 prompt 文本 + schema + Step3 的组装规则 + 生成期注入, 全部由模板提供;
 //   通用逻辑 (时长体系 / dialogue 规范化 / character_ids 恢复 / DB 落库) 留在这里不动。
 import { getEpisodeTemplateId, getTemplate, resolveTemplateId } from '../prompt-templates/index.js'
-import { Step1Schema, Step2Schema, ShotDetailsItemSchema } from '../prompt-templates/schemas.js'
+import { Step1Schema, Step2Schema } from '../prompt-templates/schemas.js'
 import type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js'
 export { Step1Schema, Step2Schema, ShotDetailsItemSchema } from '../prompt-templates/schemas.js'
 export type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js'
@@ -578,14 +578,27 @@ export async function runStep3(opts: {
 
   // Task B (PM msg-20261010-003 task_B): 用 V3 zod 再次校验 (防 step2→step3 之间数据被改 / wizard 模式下用户编辑过的 details override)
   //   失败 throw 出去, 不进 DB 事务, 主流程返回 4xx
-  const revalidated = z.array(ShotDetailsItemSchema).safeParse(details)
+  //
+  // ★ Sprint 23 fix_1 (PM msg-20261026-100): schema 必须取【模板自己的】item schema,
+  //   不能再硬编码 general 的 ShotDetailsItemSchema ——
+  //   z.object() 默认 strip 未声明的 key, general 的 schema 没声明 H3 的 4 个专有字段
+  //   → 那 4 段在 revalidate 时被剥掉 → assembleH3 拿到 undefined → 18 镜 video_prompt 全是 95 字符空壳,
+  //     而且全程没有任何日志告警 (静默产出)。
+  //   general 模板的 itemSchema 就是同一个 ShotDetailsItemSchema 对象 → general 行为逐字不变。
+  const revalidated = z.array(tpl.step2.itemSchema).safeParse(details)
   if (!revalidated.success) {
+    const firstIssue = revalidated.error.issues[0]
+    // zod v4 缺字段的 message 就是 "Invalid input" —— 不带字段名, 用户看不懂是哪缺了。
+    //   把 issue.path 拼进去 (例: "step3 zod 校验失败 [shot_details.0.subject_definitions]: ...")。
+    const issuePath = firstIssue?.path?.length ? firstIssue.path.join('.') : ''
     logTaskWarn('StoryboardPlanner', 'step3-zod-revalidation-failed', {
       episodeId,
+      templateId: tpl.id,
       issueCount: revalidated.error.issues.length,
-      firstIssue: revalidated.error.issues[0],
+      issuePath,
+      firstIssue,
     })
-    throw new Error(`step3 zod 校验失败: ${revalidated.error.issues[0]?.message || 'unknown'}`)
+    throw new Error(`step3 zod 校验失败${issuePath ? ` [${issuePath}]` : ''}: ${firstIssue?.message || 'unknown'}`)
   }
   // QA msg-20261021-077 Bug-3: 按 shot_number 排序, 后续所有"上一镜/前面几镜"的推导都依赖这个顺序。
   //   修前: LLM 乱序返回 shot_details 时, 承接上一镜会承接错镜头, 道具时序的 earlierTexts 也不对;
@@ -715,7 +728,7 @@ export async function runStep3(opts: {
     // ── Sprint 19: prompt 组装交给模板 (general 模板 = 重构前的逐字搬家) ──
     //   通用层 (character_ids 恢复 / dialogue 规范化 / 道具时序校验) 在上面算完, 这里只传数据。
     //   Sprint 20 的 H3 模板会在这里换成自己的组装方式, 通用逻辑不用动。
-    const assembled = tpl.assemble({
+    const assembleInput = {
       shot: det,
       prevShot: idx > 0 ? validatedDetails[idx - 1] : null,
       dialogue: dialogueText,
@@ -730,7 +743,23 @@ export async function runStep3(opts: {
           role: c.role,
         })),
       cleanedPermanent: cleaned,
-    })
+    }
+    const assembled = tpl.assemble(assembleInput)
+
+    // ★ Sprint 23 fix_4 (PM msg-20261026-100): 模板级产物自检 —— 产物有问题就 fail fast,
+    //   别静默落库一份空 prompt (上次 H3 四段全空, 全程零告警, 要到出片阶段才暴露)。
+    //   general 没实现这个钩子 → 不校验 → 行为不变。
+    const assembleError = tpl.validateAssembled?.(assembleInput, assembled)
+    if (assembleError) {
+      logTaskWarn('StoryboardPlanner', 'step3-assemble-validation-failed', {
+        episodeId,
+        shotNumber: det.shot_number,
+        templateId: tpl.id,
+        error: assembleError,
+        hint: '模板组装出的 prompt 有空段 —— 已中止 step3, 避免落库空 prompt',
+      })
+      throw new Error(`step3 组装自检失败: ${assembleError}`)
+    }
 
     return {
       shot_number: det.shot_number,
