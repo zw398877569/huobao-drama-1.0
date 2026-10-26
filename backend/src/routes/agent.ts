@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { createAgent, validAgentTypes } from '../agents/index.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
-import { runStep1, runStep2, runStep3, runAllStepsLegacy, getPlanningState } from '../services/storyboard-planner-service.js'
+import { runStep1, runStep2, runStep3, runAllStepsLegacy, getPlanningState, clearPlanningSteps } from '../services/storyboard-planner-service.js'
 import { success, badRequest } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { db, schema } from '../db/index.js'
@@ -29,15 +29,31 @@ import { now } from '../utils/response.js'
  * ⚠️ 未知 template_id 直接抛错 (由路由转成 400) —— 不能静默 fallback 到 general,
  *   否则前端传错 id 会"看起来选了新模板, 实际跑的是老模板", 极难查。
  */
-function resolveTemplateForEpisode(episodeId: number, templateId?: string | null): string {
+/**
+ * 解析本次拆解用的 prompt 模板, 并落库到 episodes.prompt_template。
+ *
+ * ★ Sprint 23 决策 3: 【切换模板时清掉 step2/step3】(step1 产物两种模板通用, 保留)。
+ *   必须清的原因: step2 的输出格式跟模板绑定 —— general 的 step2 输出是
+ *   permanent/description/plot_state 三段, H3 的是四段; 拿旧格式去 assemble 会拼出空 prompt。
+ *   前端也会弹确认 ('切换提示词模板需要重新拆解…已有分镜会被替换')。
+ */
+async function resolveTemplateForEpisode(episodeId: number, templateId?: string | null): Promise<string> {
   const raw = templateId === undefined || templateId === null ? '' : String(templateId).trim()
   if (!raw) return getEpisodeTemplateId(episodeId)
   const tid = resolveTemplateId(raw)
+  const prevTid = getEpisodeTemplateId(episodeId)   // ★ 旧值 (清缓存前读)
   db.update(schema.episodes)
     .set({ promptTemplate: tid, updatedAt: now() })
     .where(eq(schema.episodes.id, episodeId))
     .run()
   invalidateEpisodeTemplateCache(episodeId)
+  if (prevTid && prevTid !== tid) {
+    const cleared = await clearPlanningSteps(episodeId, ['step2', 'step3'])
+    logTaskProgress('Agent', 'prompt-template-switched', {
+      episodeId, from: prevTid, to: tid, cleared,
+      hint: '切换模板 → 清掉 step2/step3 (step1 产物通用保留); 前端也会提示需要重新拆解',
+    })
+  }
   logTaskProgress('Agent', 'prompt-template-selected', { episodeId, templateId: tid })
   return tid
 }
@@ -239,7 +255,7 @@ app.post('/storyboard_breaker/planning', async (c) => {
   // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
   let templateId: string
   try {
-    templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+    templateId = await resolveTemplateForEpisode(episode_id, body.template_id)
   } catch (err: any) {
     return badRequest(c, err?.message || '未知的 prompt 模板')
   }
@@ -333,7 +349,7 @@ app.post('/storyboard_breaker/planning/step1', async (c) => {
   if (parsed.model) opts.modelOverride = parsed.model
   // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
   try {
-    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+    opts.templateId = await resolveTemplateForEpisode(episode_id, body.template_id)
   } catch (err: any) {
     return badRequest(c, err?.message || '未知的 prompt 模板')
   }
@@ -369,7 +385,7 @@ app.post('/storyboard_breaker/planning/step2', async (c) => {
   if (Array.isArray(shot_plan)) opts.shotPlanOverride = shot_plan
   // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
   try {
-    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+    opts.templateId = await resolveTemplateForEpisode(episode_id, body.template_id)
   } catch (err: any) {
     return badRequest(c, err?.message || '未知的 prompt 模板')
   }
@@ -398,7 +414,7 @@ app.post('/storyboard_breaker/planning/step3', async (c) => {
   if (Array.isArray(shot_details)) opts.shotDetailsOverride = shot_details
   // Sprint 19: 模板 id (未知 id → 400, 不静默 fallback)
   try {
-    opts.templateId = resolveTemplateForEpisode(episode_id, body.template_id)
+    opts.templateId = await resolveTemplateForEpisode(episode_id, body.template_id)
   } catch (err: any) {
     return badRequest(c, err?.message || '未知的 prompt 模板')
   }

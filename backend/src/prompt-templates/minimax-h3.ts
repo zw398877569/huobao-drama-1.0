@@ -27,9 +27,14 @@
  *   (它承载角色外貌定义), 由代码层在生成期把编号占位符替换成最终编号。
  */
 import { z } from 'zod'
-import { V3ImagePromptPermanentSchema } from '../services/llm-schema-validator.js'
+import { V3ImagePromptPermanentSchema, permanentToText } from '../services/llm-schema-validator.js'
 import { generalTemplate } from './general.js'
-import type { PromptTemplate } from './types.js'
+import type {
+  AssembleInput,
+  AssembleOutput,
+  GenerationInjectInput,
+  PromptTemplate,
+} from './types.js'
 
 /**
  * 文本字段: 接受 string, 也接受 string[] (LLM 偶尔把多段描述输出成数组)。
@@ -171,6 +176,150 @@ H3 官方四段 (这四个字段是本模板的核心输出):
 - 所有文本字段必须是【字符串】; dialogue 有多个角色时每个角色写一行放在同一个字符串里 (用换行分隔), 不要输出数组。
 - 输出里不要出现 <think> 思考块, 不要输出解释, 只输出那个 JSON。`
 
+// ─── H3 的 assemble: 官方四段 ───────────────────────────────────────────────
+
+/**
+ * H3 的 video_prompt 组装 —— 官方四段, 顺序固定:
+ *   subject_definitions → detailed_description → overall_soundscape → non_diegetic_music
+ * (官方 Ref2VA 六段里的 summary / retention_analysis 用户拍板不做 —— D2)
+ *
+ * image_prompt 【保持 general 的做法】(工单 B 明确要求): 生图走 nano-banana 那条链,
+ * 不该被 H3 模板影响 —— 决策 9 保留 image_prompt_permanent 就是为了这个。
+ */
+function assembleH3(input: AssembleInput): AssembleOutput {
+  const { shot, cleanedPermanent } = input
+  const permanentText = cleanedPermanent.imagePromptPermanent
+    ? permanentToText(cleanedPermanent.imagePromptPermanent)
+    : ''
+  const plotStateText = `${shot.image_prompt_plot_state?.trim() || ''}${cleanedPermanent.plotState ? (shot.image_prompt_plot_state ? ' | ' : '') + cleanedPermanent.plotState : ''}`
+  const imagePrompt = [permanentText, shot.description || '', plotStateText].filter(Boolean).join('。')
+
+  const videoPrompt = [
+    `subject_definitions:\n${(shot.subject_definitions || '').trim()}`,
+    `detailed_description:\n${(shot.detailed_description || '').trim()}`,
+    `overall_soundscape:\n${(shot.overall_soundscape || 'N/A').trim()}`,
+    `non_diegetic_music:\n${(shot.non_diegetic_music || 'N/A').trim()}`,
+  ].join('\n\n')
+
+  return {
+    imagePrompt,
+    videoPrompt,
+    imagePromptPlotState: plotStateText || null,
+    videoPromptPlotState: shot.video_prompt_plot_state || null,
+  }
+}
+
+// ─── H3 的生成期注入: Subject 绑定 / Speaker ID / 对白 / 限制项 ───────────────
+
+/** 官方限制项 (工单 B 照抄官方原版) */
+const H3_CONSTRAINTS =
+  'No text, subtitles, logos or watermarks of any kind, single continuous shot without cuts, ' +
+  'maintain spatial continuity, avoid character deformation and identity drift.'
+
+/** 首帧锚点 —— 沿用 Sprint 17 的同一句, 但放进 detailed_description 内部 */
+const H3_OPENING_ANCHOR =
+  "opening frame matches [Picture 1]; continues from previous shot's tail composition"
+
+/**
+ * 对白原文 → 官方要求的标点形态。
+ * 官方: "Standardize punctuation to the basic written marks needed to express the sentence,
+ * such as ',', '.', '?', and '!'; remove repeated tildes, emoji, bullets, and repeated or
+ * decorative punctuation." —— 台词内容一个字不改, 只清装饰符。
+ */
+export function normalizeDialogueForH3(text: string): string {
+  let t = String(text || '').trim()
+  if (!t) return ''
+  t = t.replace(/[“”‘’「」『』"]/g, '')            // 中文引号
+  t = t.replace(/[…]{2,}|\.{4,}/g, '...')              // 连续省略号 → 单个
+  t = t.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')  // emoji
+  t = t.replace(/\s+/g, ' ').trim()
+  if (t && !/[.?!。！？…]$/.test(t)) t += '.'
+  return t
+}
+
+/**
+ * 在某个段 (subject_definitions / detailed_description / ...) 的【开头】插一段文本。
+ * 段格式是我们自己拼的 (段标题独占一行, 段之间空行), 所以定位是可靠的。
+ */
+function prependToSection(prompt: string, section: string, block: string): string {
+  const re = new RegExp(`(^|\\n)(${section}\\s*:)`, 'i')
+  const m = re.exec(prompt)
+  if (!m) return `${prompt.trimEnd()}\n\n${block}`   // 兜底: 定位不到就追加到末尾
+  const at = m.index + m[0].length
+  return `${prompt.slice(0, at)}\n${block}${prompt.slice(at)}`
+}
+
+/** 在某个段的【末尾】插一段文本 */
+function appendToSection(prompt: string, section: string, block: string): string {
+  const re = new RegExp(`(^|\\n)(${section}\\s*:)`, 'i')
+  const m = re.exec(prompt)
+  if (!m) return `${prompt.trimEnd()}\n\n${block}`
+  const bodyStart = m.index + m[0].length
+  const rest = prompt.slice(bodyStart)
+  const nextSec = /\n\n(?=[A-Za-z_][A-Za-z_0-9 ]*\s*:)/.exec(rest)
+  const bodyEnd = nextSec ? bodyStart + nextSec.index : prompt.length
+  const body = prompt.slice(bodyStart, bodyEnd).trimEnd()
+  return `${prompt.slice(0, bodyStart)}\n${body}\n\n${block}${prompt.slice(bodyEnd)}`
+}
+
+/**
+ * H3 的生成期注入。
+ *
+ * 做什么 (工单 B):
+ *   ① <Subject N> 绑定: 角色 → <Subject N>, 编号 = characters 数组下标 + 1
+ *      (characters 已按 characters.id 升序 —— 跟 <Subject N> / (Sx) 的编号顺序一致, 跨镜跨集都不换)
+ *   ② (Sx) Speaker ID: 跟 <Subject N> 同序 (官方 #7: 同一人物全程同一个 Speaker ID)
+ *   ③ 对白块: 从 tts_segments 生成 `<Subject N> (Sx) says, <d>[Chinese]台词原文</d>`
+ *      —— 台词【一字不改】(官方: preserve the exact source words and original language)
+ *   ④ 首帧锚点: 放进 detailed_description 内部 (不追加到末尾)
+ *   ⑤ 承接上一镜 result: 放进 detailed_description
+ *   ⑥ 限制项: 独立末段
+ *
+ * ⚠️ 对白是【代码层】注入的 (官方要求 preserve the exact source words) —— LLM 写的话会被改写。
+ * ⚠️ 这个 hook 在【翻译之后】跑 (video-generation.ts), 所以中文台词肯定不会被翻。
+ */
+function injectH3(input: GenerationInjectInput): string | null {
+  const { prompt, referenceImageMode, ttsSegments, characters } = input
+  if (!prompt) return null
+  let out = prompt
+
+  // ① 首帧锚点 (官方 §5.3: the shot begins from <Picture 1> —— 这里用 Sprint 17 的同一句)
+  if (referenceImageMode === 'ref2v-picture-1' || referenceImageMode === 'fl2v-first-frame') {
+    out = prependToSection(out, 'detailed_description', H3_OPENING_ANCHOR)
+  }
+
+  // ② 对白块 (从 tts_segments; 台词原文一字不改)
+  const charList = characters || []
+  const subjectIndexOf = (name: string): number => {
+    const n = (name || '').trim()
+    const i = charList.findIndex((c) => c.name === n)
+    return i >= 0 ? i + 1 : 0
+  }
+  const dialogueLines: string[] = []
+  for (const seg of ttsSegments || []) {
+    const text = normalizeDialogueForH3(seg.text || '')
+    if (!text) continue
+    const idx = subjectIndexOf(seg.speaker || '')
+    const who = idx > 0 ? `<Subject ${idx}>` : `(${seg.speaker || 'the speaker'})`
+    const sid = idx > 0 ? `(S${idx})` : ''
+    dialogueLines.push(`${who} ${sid} says, <d>[Chinese]${text}</d>`)
+  }
+  if (dialogueLines.length) {
+    out = appendToSection(out, 'detailed_description', dialogueLines.join(' '))
+  }
+
+  // ③ 承接上一镜 result (放进 detailed_description)
+  const prev = (input.previousResult || '').trim()
+  if (prev) {
+    out = appendToSection(out, 'detailed_description',
+      `Continues from the closing state of the previous shot: "${normalizeDialogueForH3(prev)}".`)
+  }
+
+  // ④ 限制项 (独立末段)
+  out = `${out.trimEnd()}\n\n${H3_CONSTRAINTS}`
+  return out
+}
+
 export const minimaxH3Template: PromptTemplate = {
   id: 'minimax-h3',
   name: 'MiniMax H3 官方格式',
@@ -182,7 +331,12 @@ export const minimaxH3Template: PromptTemplate = {
     systemPrompt: H3_STEP2_SYSTEM_PROMPT,
     schema: H3Step2Schema,
   },
-  // assemble / inject 由 Task B 实现 (minimax-h3.ts 之外的 h3-assemble 模块), 这里先占位
-  assemble: generalTemplate.assemble,
-  generation: generalTemplate.generation,
+  assemble: assembleH3,
+  generation: {
+    // 官方用 <d>[Chinese]…</d>, 不能跟 general 的 <n>0-3.9秒：开口:'…'</n> 同时给 H3 (语义冲突)
+    useDialogueTimeline: false,
+    inject: injectH3,
+    // 清洗沿用 general 的 (抽象词/切黑指令/IP) —— 跟模板无关, 是安全网
+    cleanup: generalTemplate.generation.cleanup,
+  },
 }

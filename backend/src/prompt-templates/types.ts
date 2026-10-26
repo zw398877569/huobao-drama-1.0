@@ -55,6 +55,11 @@ export interface ShotDetailsItem {
   image_prompt_plot_state?: string
   video_prompt_permanent?: string
   video_prompt_plot_state?: string
+  // ── Sprint 23 Task A: H3 官方四段 (general 模板不用, 但 assemble 的入参类型要能带) ──
+  subject_definitions?: string
+  detailed_description?: string
+  overall_soundscape?: string
+  non_diegetic_music?: string
 }
 
 // ─── 模板接口 ────────────────────────────────────────────────────────────
@@ -118,6 +123,8 @@ export interface GenerationInjectInput {
     isNarrator?: boolean
     voice?: string
   }> | null
+  /** 上一镜的收尾状态 (同场景上一镜的 result) —— H3 模板的"承接上一镜"注入用 */
+  previousResult?: string | null
   /** 本 episode 的角色 (按 characters.id 升序 = <Subject N> / (Sx) 的编号顺序) */
   characters?: Array<{
     id: number

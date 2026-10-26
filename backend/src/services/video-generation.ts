@@ -407,6 +407,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             episodeId: storyboardEpisodeId,
             ttsSegments: injectCtx.ttsSegments,
             characters: injectCtx.characters,
+            previousResult: injectCtx.previousResult,
           })
           const anchorMode = referenceImageMode
           if (anchor) {
@@ -725,8 +726,9 @@ async function resolveGenerationInjectContext(
 ): Promise<{
   ttsSegments: Array<{ speaker?: string; text?: string; isNarrator?: boolean; voice?: string }> | null
   characters: Array<{ id: number; name: string; appearancePermanent?: string; personality?: string; role?: string }> | null
+  previousResult: string | null
 }> {
-  const empty = { ttsSegments: null, characters: null }
+  const empty = { ttsSegments: null, characters: null, previousResult: null }
   if (!storyboardId || !episodeId) return empty
   try {
     const [sb] = db.select({ ttsSegments: schema.storyboards.ttsSegments })
@@ -738,6 +740,26 @@ async function resolveGenerationInjectContext(
         if (Array.isArray(arr) && arr.length) ttsSegments = arr
       } catch { /* 坏 JSON → 当没有台词, 不阻断生成 */ }
     }
+    // 上一镜的收尾状态 (同 episode, storyboard_number = 当前 - 1) —— H3 模板的"承接上一镜"注入用
+    let previousResult: string | null = null
+    try {
+      const [cur] = db.select({
+        storyboardNumber: schema.storyboards.storyboardNumber,
+        sceneId: schema.storyboards.sceneId,
+      }).from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+      if (cur) {
+        const [prev] = db.select({ result: schema.storyboards.result, sceneId: schema.storyboards.sceneId })
+          .from(schema.storyboards)
+          .where(and(
+            eq(schema.storyboards.episodeId, episodeId),
+            eq(schema.storyboards.storyboardNumber, (cur.storyboardNumber || 1) - 1),
+          ))
+          .all()
+        // 只有同场景的上一镜才承接 (跨场景不承接)
+        if (prev && prev.sceneId === cur.sceneId) previousResult = prev.result || null
+      }
+    } catch { /* 取不到就跳过承接, 不阻断生成 */ }
+
     const charLinks = db.select({ characterId: schema.episodeCharacters.characterId })
       .from(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
     const ids = [...new Set(charLinks.map((l) => l.characterId))].sort((a, b) => a - b)
@@ -759,7 +781,7 @@ async function resolveGenerationInjectContext(
           role: c.role ?? undefined,
         }))
       : []
-    return { ttsSegments, characters }
+    return { ttsSegments, characters, previousResult }
   } catch (err: any) {
     logTaskWarn('VideoTask', 'inject-context-failed', {
       storyboardId, episodeId, error: err?.message || String(err),

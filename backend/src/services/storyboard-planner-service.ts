@@ -91,6 +91,40 @@ export async function savePlanningData(episodeId: number, partial: PlanningData)
     .run()
 }
 
+/**
+ * Sprint 23 (PM msg-20261027-095 决策 3): 清掉指定步骤的中间态。
+ *
+ * 切换 prompt 模板时用:
+ *   - step1 的产物 (shot_plan) 两种模板通用 → 【保留】
+ *   - step2 的输出格式跟模板绑定 (general 的 permanent/description/plot_state 三段
+ *     vs H3 的 subject_definitions/detailed_description/overall_soundscape/non_diegetic_music 四段)
+ *     → 必须清, 否则 step3 拿旧格式去 assemble 会拼出空 prompt
+ *     (general 的 assemble 读 permanent/description/plot_state, H3 的输出里没有这三段)
+ *   - step3 已经落库的分镜同理要清
+ */
+export async function clearPlanningSteps(
+  episodeId: number,
+  steps: Array<'step2' | 'step3'>,
+): Promise<boolean> {
+  const existing = await getPlanningData(episodeId)
+  const next: PlanningData = { ...existing }
+  let changed = false
+  if (steps.includes('step2')) {
+    if (next.step2_done_at !== undefined) { delete next.step2_done_at; changed = true }
+    if (next.step2_details !== undefined) { delete next.step2_details; changed = true }
+  }
+  if (steps.includes('step3')) {
+    if (next.step3_done_at !== undefined) { delete next.step3_done_at; changed = true }
+    if (next.step3_storyboard_ids !== undefined) { delete next.step3_storyboard_ids; changed = true }
+  }
+  if (!changed) return false
+  db.update(schema.episodes)
+    .set({ planningData: JSON.stringify(next), updatedAt: now() })
+    .where(eq(schema.episodes.id, episodeId))
+    .run()
+  return true
+}
+
 // ─── Context Read (跟 readStoryboardContext tool 同源) ────────────────
 
 interface StoryboardContext {
