@@ -21,6 +21,7 @@ import {
   buildResultBlock,
   ensureIntegratedHeader,
   getRhythmFormula,
+  insertAtIntegratedStart,
   insertIntoIntegratedSection,
 } from '../utils/storyboard-rules.js'
 import { permanentToText } from '../services/llm-schema-validator.js'
@@ -199,12 +200,19 @@ export const generalTemplate: PromptTemplate = {
     // Sprint 15/16 的台词时间轴 —— general 开着 (行为不变)
     useDialogueTimeline: true,
     // Sprint 17 Task B 的首帧锚点 —— 只有平台真收到参考图才注入
+    //
+    // ★ Sprint 23 Task B: 契约统一为【返回完整 prompt】——
+    //   Sprint 17 这里是返回"要插入的片段", 由 video-generation 插到开头;
+    //   但 H3 模板要注入多处 (首帧锚点 / 对白块 / 承接上一镜 / 限制项), 片段契约表达不了。
+    //   general 的【行为不变】: 同一句锚点, 同样插在开头, 只是由模板自己完成插入。
     inject(input) {
-      if (input.referenceImageMode === 'ref2v-picture-1') return OPENING_FRAME_ANCHOR
-      if (input.referenceImageMode === 'fl2v-first-frame') {
-        return 'the opening frame continues the composition of the given first frame'
+      let anchor: string | null = null
+      if (input.referenceImageMode === 'ref2v-picture-1') anchor = OPENING_FRAME_ANCHOR
+      else if (input.referenceImageMode === 'fl2v-first-frame') {
+        anchor = 'the opening frame continues the composition of the given first frame'
       }
-      return null
+      if (!anchor) return input.prompt
+      return insertAtIntegratedStart(input.prompt, anchor)
     },
     // Sprint 17 Task E 的代码层清洗
     cleanup(input) {

@@ -4,7 +4,7 @@ import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEn
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 // Sprint 17 (PM msg-20261021-076) Task B/E: 首帧锚点 (英文固定句, 翻译后注入) + 代码层清洗
-import { insertAtIntegratedStart } from '../utils/storyboard-rules.js'
+
 import { checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
 // Sprint 19 (PM msg-20261025-082): 生成期的注入/清洗走模板 —— Sprint 20 的 H3 模板要在这里
 //   关掉 general 的注入 (台词时间轴 + 首帧锚点 + 清洗), 通用逻辑不用动
@@ -400,8 +400,11 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             ? 'ref2v-picture-1'
             : (hasFirstFrameField ? 'fl2v-first-frame' : 'none')
           const injectCtx = await resolveGenerationInjectContext(vRecord.storyboardId, storyboardEpisodeId)
-          const anchor = tpl.generation.inject({
-            prompt: body.prompt,
+          // ★ Sprint 23 Task B: inject 的契约 = 【返回完整 prompt】(不是"要插入的片段")。
+          //   general 注入首帧锚点; H3 注入 首帧锚点 + 对白块 + 承接上一镜 + 限制项 —— 片段契约表达不了。
+          //   ⚠️ 注入作用在【翻译后的】finalPrompt 上 (H3 的中文台词绝不能被翻)。
+          const injected = tpl.generation.inject({
+            prompt: finalPrompt,
             referenceImageMode,
             storyboardId: vRecord.storyboardId,
             episodeId: storyboardEpisodeId,
@@ -409,15 +412,15 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             characters: injectCtx.characters,
             previousResult: injectCtx.previousResult,
           })
-          const anchorMode = referenceImageMode
-          if (anchor) {
-            body.prompt = insertAtIntegratedStart(body.prompt, anchor)
-            finalPrompt = body.prompt
-            logTaskProgress('VideoTask', 'opening-frame-anchor', {
+          if (injected && injected !== finalPrompt) {
+            finalPrompt = injected
+            body.prompt = injected
+            logTaskProgress('VideoTask', 'prompt-injected', {
               id,
               storyboardId: vRecord.storyboardId,
-              mode: anchorMode,
-              hint: '老路径 四.2 首帧延续 —— 平台收到参考图时, 明确指定它就是开场帧的构图起点',
+              templateId: tpl.id,
+              mode: referenceImageMode,
+              hint: '模板生成期注入 (general=首帧锚点; H3=首帧锚点+对白块+承接上一镜+限制项)',
             })
           }
         }
