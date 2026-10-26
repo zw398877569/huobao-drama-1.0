@@ -100,7 +100,11 @@ export async function savePlanningData(episodeId: number, partial: PlanningData)
  *     vs H3 的 subject_definitions/detailed_description/overall_soundscape/non_diegetic_music 四段)
  *     → 必须清, 否则 step3 拿旧格式去 assemble 会拼出空 prompt
  *     (general 的 assemble 读 permanent/description/plot_state, H3 的输出里没有这三段)
- *   - step3 已经落库的分镜同理要清
+ *
+ * ⚠️ 这里【只清 planning_data 里的标记】, 【不动 storyboards 表】——
+ *   已落库的分镜要等重跑 step3 才被替换 (step3 persist 是 DELETE+INSERT 重建)。
+ *   中间态 = 库里还是旧分镜 + 标记被清空 → 此时直接生成视频会用旧模板的 prompt,
+ *   所以前端在切模板时会提示"需要重新拆解 (step1/step2 会重跑), 已有分镜会被替换"。
  */
 export async function clearPlanningSteps(
   episodeId: number,

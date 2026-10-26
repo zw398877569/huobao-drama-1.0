@@ -238,6 +238,16 @@ export function normalizeDialogueForH3(text: string): string {
 }
 
 /**
+ * H3 的四个段名 —— 段边界【只认这四个】。
+ *
+ * ★ Sprint 23 追加 P2 (PM msg-20261026-099): 原来用通用的 "英文词+冒号" 模式找下一段,
+ *   detailed_description 正文里出现 "Note: xxx" / "camera moves left: xxx" 这种
+ *   【空行 + 英文短语 + 冒号】就会被误判成下一段 → 对白块/承接句插到错误位置。
+ */
+const H3_SECTION_NAMES = ['subject_definitions', 'detailed_description', 'overall_soundscape', 'non_diegetic_music']
+const H3_NEXT_SECTION_RE = new RegExp(`\\n\\n(?=(?:${H3_SECTION_NAMES.join('|')})\\s*:)`, 'i')
+
+/**
  * 在某个段 (subject_definitions / detailed_description / ...) 的【开头】插一段文本。
  * 段格式是我们自己拼的 (段标题独占一行, 段之间空行), 所以定位是可靠的。
  */
@@ -256,7 +266,7 @@ function appendToSection(prompt: string, section: string, block: string): string
   if (!m) return `${prompt.trimEnd()}\n\n${block}`
   const bodyStart = m.index + m[0].length
   const rest = prompt.slice(bodyStart)
-  const nextSec = /\n\n(?=[A-Za-z_][A-Za-z_0-9 ]*\s*:)/.exec(rest)
+  const nextSec = H3_NEXT_SECTION_RE.exec(rest)
   const bodyEnd = nextSec ? bodyStart + nextSec.index : prompt.length
   const body = prompt.slice(bodyStart, bodyEnd).trimEnd()
   return `${prompt.slice(0, bodyStart)}\n${body}\n\n${block}${prompt.slice(bodyEnd)}`
@@ -290,19 +300,31 @@ function injectH3(input: GenerationInjectInput): string | null {
 
   // ② 对白块 (从 tts_segments; 台词原文一字不改)
   const charList = characters || []
+  // ★ Sprint 23 追加 P2 (PM msg-20261026-099): 精确匹配失败时按"去掉括号/空格后的规范化名"再匹配一次。
+  //   关键是不管怎么匹配, 同一角色名必须映射到【同一个编号】—— 否则跨镜 Speaker ID 会乱
+  //   (官方 #7: 同一人物在整个视频中必须始终使用同一个 Speaker ID)。
+  const normalizeName = (s: string): string =>
+    String(s || '').replace(/[（(].*?[)）]/g, '').replace(/[\s·・]/g, '').trim()
   const subjectIndexOf = (name: string): number => {
     const n = (name || '').trim()
-    const i = charList.findIndex((c) => c.name === n)
-    return i >= 0 ? i + 1 : 0
+    if (!n) return 0
+    const exact = charList.findIndex((c) => c.name === n)
+    if (exact >= 0) return exact + 1
+    const nn = normalizeName(n)
+    if (!nn) return 0
+    const loose = charList.findIndex((c) => normalizeName(c.name) === nn)
+    return loose >= 0 ? loose + 1 : 0
   }
   const dialogueLines: string[] = []
   for (const seg of ttsSegments || []) {
     const text = normalizeDialogueForH3(seg.text || '')
     if (!text) continue
     const idx = subjectIndexOf(seg.speaker || '')
-    const who = idx > 0 ? `<Subject ${idx}>` : `(${seg.speaker || 'the speaker'})`
-    const sid = idx > 0 ? `(S${idx})` : ''
-    dialogueLines.push(`${who} ${sid} says, <d>[Chinese]${text}</d>`)
+    // 匹配上 → 官方格式 `<Subject N> (Sx) says, <d>…</d>`;
+    // 匹配不上 → 官方 §5.4 的降级写法 "a stable voice description followed by (Sx)" 的简化版
+    //   (这里直接用角色名当 voice 描述; 没有可分配的编号就不硬造一个, 免得跨镜编号乱)
+    const who = idx > 0 ? `<Subject ${idx}> (S${idx})` : `(${seg.speaker || 'the speaker'})`
+    dialogueLines.push(`${who} says, <d>[Chinese]${text}</d>`)
   }
   if (dialogueLines.length) {
     out = appendToSection(out, 'detailed_description', dialogueLines.join(' '))

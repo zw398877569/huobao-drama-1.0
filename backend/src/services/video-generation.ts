@@ -373,7 +373,7 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         }
         finalPrompt = cleanup.prompt
 
-        const { url, method, headers, body, fallbackReason } = adapter.buildGenerateRequest(config, {
+        const buildArgs = {
           id: vRecord.id,
           model: vRecord.model,
           prompt: finalPrompt,
@@ -387,15 +387,26 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           audioUrls: resolvedAudioUrls,
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
-        })
+        }
+        let built = adapter.buildGenerateRequest(config, buildArgs)
         // ── Sprint 17 Task B: 首帧延续锚点 (老路径 四.2) ──
         //   "opening frame matches [Picture 1]; continues from previous shot's tail composition"
         //   ⚠️ 必须在【翻译之后】注入 —— 这句是英文固定句, 翻译器会把它改写掉 (Sprint 15 同类坑)。
         //   ⚠️ [Picture 1] 只在 Ref2V 模式成立 (平台收 ref_image_0); FL2V 走 first_frame 字段,
         //      没有 Picture 编号 —— 所以必须等 buildGenerateRequest 出来才知道平台实际收的是哪种图。
-        if (body && typeof body.prompt === 'string' && body.prompt) {
-          const hasRefImage0 = typeof body.ref_image_0 === 'string' && !!body.ref_image_0
-          const hasFirstFrameField = typeof body.first_frame === 'string' && !!body.first_frame
+        //
+        // ★ Sprint 23 追加 P0 (PM msg-20261026-099): 注入必须落在【真正发出去的那一份】里。
+        //   minimax-official / minimax-video / volcengine-video 三个 adapter 的 body 里【没有 prompt 字段】
+        //   (它们用 content[0].text) → 之前"build 之后改 body.prompt"对它们等于改了个没人读的字段,
+        //   H3 模板的对白块/<Subject N>/(Sx)/限制项 全丢, 官方格式等于空壳。
+        //   修法: 先 build 一次 (探测平台实际收的是哪种参考图 → 锚点措辞), 注入后【再 build 一次】,
+        //   让每个 adapter 自己把注入后的 prompt 放进它该放的位置 (body.prompt / content[0].text)。
+        //   ⚠️ 代价: adapter 的 buildGenerateRequest 会跑两次 (纯构造, 不发网络请求);
+        //      它内部可能记一条 model-fallback warn (有 fallback 时会记两次, 内容相同)。
+        {
+          const probeBody: any = built.body
+          const hasRefImage0 = typeof probeBody?.ref_image_0 === 'string' && !!probeBody.ref_image_0
+          const hasFirstFrameField = typeof probeBody?.first_frame === 'string' && !!probeBody.first_frame
           const referenceImageMode = hasRefImage0
             ? 'ref2v-picture-1'
             : (hasFirstFrameField ? 'fl2v-first-frame' : 'none')
@@ -414,16 +425,18 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           })
           if (injected && injected !== finalPrompt) {
             finalPrompt = injected
-            body.prompt = injected
+            // ★ 重建 request —— 让 adapter 把注入后的 prompt 放进它自己的字段 (body.prompt / content[0].text)
+            built = adapter.buildGenerateRequest(config, { ...buildArgs, prompt: injected })
             logTaskProgress('VideoTask', 'prompt-injected', {
               id,
               storyboardId: vRecord.storyboardId,
               templateId: tpl.id,
               mode: referenceImageMode,
-              hint: '模板生成期注入 (general=首帧锚点; H3=首帧锚点+对白块+承接上一镜+限制项)',
+              hint: '模板生成期注入 (general=首帧锚点; H3=首帧锚点+对白块+承接上一镜+限制项); 已重建 request, 注入内容进了实际请求',
             })
           }
         }
+        const { url, method, headers, body, fallbackReason } = built
 
         if (finalPrompt.length > H3_PROMPT_MAX_CHARS) {
           logTaskWarn('VideoTask', 'prompt-exceeds-h3-limit', {
