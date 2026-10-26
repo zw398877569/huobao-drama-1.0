@@ -18,6 +18,13 @@ import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWar
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
 
+/**
+ * 容器里 Noto CJK 字体的安装目录 (Dockerfile Stage 3 装了 fonts-noto-cjk)。
+ * Sprint 23 Task F: subtitles filter 强制带 fontsdir —— libass 靠 fontconfig 找系统字体,
+ * 容器没装中文字体时中文全是豆腐块 (QA msg-20261024-081 的 P0)。
+ * 实际安装路径以 CI 构建日志里那行 fc-list 为准。
+ */
+const SUBTITLE_FONTS_DIR = '/usr/share/fonts/opentype/noto'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 const DATA_ROOT = path.resolve(__dirname, '../../../data')
@@ -199,9 +206,16 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
           .replace(/\\/g, '/')
           .replace(/:/g, '\\:')
           .replace(/'/g, "\\'")
-        // Sprint 11 Task E: FontSize 20 → 32 (1080x1920 竖屏上 20 几乎看不清), 保留 Outline=2 黑边
+        // Sprint 11 Task E: FontSize 20 → 32, 保留 Outline=2 黑边
+        //   ⚠️ Sprint 23 Task F (PM msg-20261027-095 决策 6): 字号【不动】—— 要不要按实际分辨率调
+        //   (建议 40-44) 是另一个决策, PM 未拍板, 本单只修下面注释里的事实错误。
+        //   原注释写『(1080x1920 竖屏上 20 几乎看不清)』, 但项目实际产出全是 16:9 横屏 1344x768 (实测),
+        //   竖屏那个前提假设是错的 → 已改成实际分辨率的描述。
+        //   fontsdir 强制指向 Noto CJK 字体目录: libass 通过 fontconfig 发现系统字体, 容器里没装中文字体时
+        //   中文全是豆腐块 (QA msg-20261024-081 的 P0 —— 中文字幕从来没成功渲染过一次)。
+        //   直接指目录比依赖 family name 匹配更稳: FontName 查不到也不影响 fontsdir 生效 (决策 6)。
         const forceStyle = 'FontSize=32\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,Outline=2'
-        filters.push(`subtitles=filename='${escapedPath}':force_style='${forceStyle}'`)
+        filters.push(`subtitles=filename='${escapedPath}':fontsdir='${SUBTITLE_FONTS_DIR}':force_style='${forceStyle}'`)
       } else if (subtitlePath) {
         logTaskProgress('ComposeTask', 'subtitle-filter-unavailable', {
           storyboardId,

@@ -53,11 +53,21 @@ ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
 ARG APT_MIRROR
 
 # ffmpeg (runtime) + tsx (runs TS directly)
+# Sprint 23 Task F (PM msg-20261027-095 决策 6/10): 装 fontconfig + fonts-noto-cjk。
+#   原因: QA msg-20261024-081 的 P0 —— 容器镜像没装任何中文字体, libass 渲染中文全是豆腐块,
+#   【中文字幕从来没成功渲染过一次】(历史上一直 fallback)。
+#   ⚠️ fontconfig 必须一起装 —— libass 是通过 fontconfig 发现系统字体的, 光有字体文件它认不出来。
+#   ⚠️ 显式 fc-cache -f —— 装包 postinst 会跑, 但 node:24-slim 里可能静默跳过 → 缓存没生成 → 仍然找不到字体。
+#   fc-list 那行只是把 family name / 安装路径打进 CI 构建日志, 供验收时核对, 失败也不会让构建挂掉 (head 兜底)。
 # Same conditional mirror switch — saves 5-10 min on China builds by avoiding deb.debian.org
 RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s#https://deb.debian.org/debian#$APT_MIRROR/debian https://mirrors.aliyun.com/debian https://mirrors.cloud.tencent.com/debian#g" /etc/apt/sources.list.d/debian.sources ; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends ffmpeg sqlite3 \
+    fontconfig fonts-noto-cjk \
+    && fc-cache -f \
+    && echo "--- noto cjk fonts (给 QA 核对 family name / 实际安装路径) ---" \
+    && fc-list | grep -i 'noto sans cjk' | head -3 \
     && rm -rf /var/lib/apt/lists/* \
     && npm i -g tsx
 
