@@ -11,12 +11,15 @@
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { generalTemplate } from './general.js'
+import { minimaxH3Template } from './minimax-h3.js'
 import type { PromptTemplate } from './types.js'
 
 export const DEFAULT_TEMPLATE_ID = 'general'
 
 const registry = new Map<string, PromptTemplate>()
 registry.set(generalTemplate.id, generalTemplate)
+// Sprint 23 Task A: MiniMax H3 官方格式模板 (用户手动切换, 默认仍是 general)
+registry.set(minimaxH3Template.id, minimaxH3Template)
 
 export function listTemplates(): PromptTemplate[] {
   return [...registry.values()]
