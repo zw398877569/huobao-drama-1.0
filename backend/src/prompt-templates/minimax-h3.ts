@@ -128,7 +128,11 @@ export const H3_STEP2_SYSTEM_PROMPT = `你是 MiniMax H3 视频模型的提示�
   angle             (string, 必填) 机位: 平视 / 仰视 / 俯视 / 侧视
   movement          (string, 必填) 运镜: 固定 / 推 / 拉 / 摇 / 跟
   dialogue          (string, 必填) 本镜的对白原文, 多角色时每个角色写一行 (用换行分隔)
+      ★ 反向也要一致: dialogue 里的每一句, 都要在 detailed_description 里有对应的说话动作, 顺序一致
   result            (string, 必填) 本镜的收尾状态 (一句话, 描述动作停在哪里)
+      ★ 【必须用英文写】—— 它会被代码层注入到 H3 的英文 detailed_description 段里。
+        写成中文会被 H3 当成台词直接念出来 (实测 2026-10-26 drama 16 ep16 sb#7:
+        音频里把中文收尾状态原样念了出来)。
   image_prompt_permanent  (object, 必填) 角色的 5 维永久外貌, 结构严格如下:
       { "character_traits": [ {"category": "age"|"face"|"hair"|"body"|"outfit", "value": "具体描述"} ],
         "scene_aesthetic": ["氛围1", "氛围2"],
@@ -158,10 +162,19 @@ H3 官方四段 (这四个字段是本模板的核心输出):
         + 色调(主+辅色) + 时间/天气 + 风格统一
       - ★ 【不要在 detailed_description 里写对白原文】—— 对白由代码层注入, 保证一字不差、保持原语言
         (官方 #6 规则: 对白保持原始语言, 不要翻译成英文)。你只在需要发声的位置描述人物的动作/朝向。
+      - ★ 【说话动作必须与 dialogue 逐句对应】—— 你在正文里写某人说话/开口/回答/回应时,
+        必须在本镜 dialogue 里找到对应的那句台词 (谁说哪句就写哪句的动作, 顺序一致)。
+        【禁止】写没有对应台词的说话动作 (例如台词里没有回答, 就不要写 "moves his lips to answer")。
+        没有台词的角色不要描述他开口说话 —— H3 会给"某人说话"的动作自动配语音, 自己补话。
       - 长度 350-500 英文词左右 (对白密集时优先保证完整对白时间线, 不要机械凑词数)
   overall_soundscape (string) 全片的环境音与物理声 (雨声/脚步/门响/器物碰撞), 不写音乐。
       跟具体某一镜同步的对白/音效仍写在 detailed_description 里。无则写 "N/A"。
+      ★ 【只写环境音/物理声】—— 不要写配乐; 【严禁】把镜头指令/动作描述/构图说明写进这一段
+        (camera / shot / framing / take / cut 这些属于 detailed_description)。
   non_diegetic_music (string) 观众才听得到、角色听不到的配乐 (配器 + 速度 + 动态发展)。无则写 "N/A"。
+      ★ 【只写配乐】(器乐/速度/节奏/动态变化); 【严禁】把镜头指令、动作描述、构图说明写进这一段
+        (它们属于 detailed_description) —— LLM 会把这两段当垃圾桶 (实测: 配乐段末尾混进了
+        "Keep the initial frame's composition consistent..." 这种镜头指令)。
       ★ 这两段里【不要重复写对白】。
 
 ## 老路径的影视规则 (必须遵守)
@@ -383,8 +396,25 @@ function injectH3(input: GenerationInjectInput): string | null {
   // ③ 承接上一镜 result (放进 detailed_description)
   const prev = (input.previousResult || '').trim()
   if (prev) {
+    // ★ Sprint 24 fix_3 (PM msg-20261026-107): 去掉【裸引号】——
+    //   H3 把【引号里的内容】当成角色要说的话 → 承接句是【画面状态描述】, 被原样念出来
+    //   (实测 drama 16 ep16 sb#7 video id=193: 音频里念出了中文收尾状态)。
+    //   官方规范里也没有"用引号包叙述文字"的写法 → 引号是我们自创的、H3 会误读的信号。
+    //   防呆: normalizeDialogueForH3 已经剥掉中英文引号, 这里再兜一层 (残留引号一律不能进 prompt)。
+    const prevText = normalizeDialogueForH3(prev).replace(/[“”‘’「」『』"]/g, '').trim()
+    // 结尾标点只补一次 (prev 自带句号时别叠成 "..")
+    const prevTail = /[.。!?！？…]$/.test(prevText) ? prevText : `${prevText}.`
     out = appendToSection(out, 'detailed_description',
-      `Continues from the closing state of the previous shot: "${normalizeDialogueForH3(prev)}".`)
+      `Continues from the closing state of the previous shot: ${prevTail}`)
+    // ★ Sprint 24 fix_5: 承接句不是英文 → warn (fix_1 只是 prompt 约束, 不是 100% 保证)。
+    //   不 warn 的话, 这个问题只能靠逐字比对最终 prompt 才能发现 (这次就是这样)。
+    if (/[^\x00-\x7F]/.test(prevText)) {
+      logTaskWarn('PromptTemplate', 'h3-continuity-not-english', {
+        storyboardId: input.storyboardId,
+        prevPreview: prevText.slice(0, 120),
+        hint: '承接上一镜的内容不是英文 —— H3 可能把它当台词念出来; 检查 step2 的 result 字段 (要求写英文)',
+      })
+    }
   }
 
   // ④ 限制项 (独立末段)
