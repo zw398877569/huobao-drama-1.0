@@ -1,5 +1,5 @@
 import { db, schema } from '../db/index.js'
-import { eq, and, asc } from 'drizzle-orm'
+import { eq, and, asc, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
@@ -9,6 +9,8 @@ import { checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
 // Sprint 19 (PM msg-20261025-082): 生成期的注入/清洗走模板 —— Sprint 20 的 H3 模板要在这里
 //   关掉 general 的注入 (台词时间轴 + 首帧锚点 + 清洗), 通用逻辑不用动
 import { getEpisodeTemplate } from '../prompt-templates/index.js'
+// Sprint 23 Task C: 翻译前把 <d>...</d> 对白块脱敏 (保险: 正常路径上对白是翻译后注入的, 这里只防 LLM 自己乱加)
+import { maskDialogueBlocks } from '../utils/dialogue-mask.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -304,7 +306,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         if (shouldTranslate) {
           try {
             logTaskProgress('VideoTask', 'translating-prompt', { id, original: truncateForLog(promptWithTimeline) })
-            finalPrompt = await translateVideoPromptToEnglish(promptWithTimeline)
+            // Sprint 23 Task C: <d> 对白块脱敏-还原 (PM 决策 1)。
+            //   H3 模板的对白是【翻译之后】由代码层注入的, 正常路径这里没有 <d> 块;
+            //   这层是保险 —— 防 LLM 自己在 detailed_description 里乱加 <d>[Chinese]…</d> 被翻掉。
+            const dMask = maskDialogueBlocks(promptWithTimeline)
+            finalPrompt = await translateVideoPromptToEnglish(dMask.text)
+            finalPrompt = dMask.restore(finalPrompt)
             // Sprint 16: 校验翻译器有没有把台词整段吃掉。吃掉了 prompt 会静默变回「没有台词」,
             //   口型又对不上且零报错 —— 所以必须数一遍, 对不上就 warn 并把中文时间轴补回去。
             if (dialogueMarkersBefore > 0 && countDialogueMarkers(finalPrompt) < dialogueMarkersBefore) {
@@ -392,7 +399,15 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           const referenceImageMode = hasRefImage0
             ? 'ref2v-picture-1'
             : (hasFirstFrameField ? 'fl2v-first-frame' : 'none')
-          const anchor = tpl.generation.inject({ prompt: body.prompt, referenceImageMode })
+          const injectCtx = await resolveGenerationInjectContext(vRecord.storyboardId, storyboardEpisodeId)
+          const anchor = tpl.generation.inject({
+            prompt: body.prompt,
+            referenceImageMode,
+            storyboardId: vRecord.storyboardId,
+            episodeId: storyboardEpisodeId,
+            ttsSegments: injectCtx.ttsSegments,
+            characters: injectCtx.characters,
+          })
           const anchorMode = referenceImageMode
           if (anchor) {
             body.prompt = insertAtIntegratedStart(body.prompt, anchor)
@@ -695,6 +710,62 @@ async function buildStoryboardDialogueTimeline(
     skippedCount: result.skippedCount,
     filteredCount: result.filteredCount,
     truncatedCount: result.truncatedCount,
+  }
+}
+
+/**
+ * Sprint 23 Task C: 取生成期注入需要的上下文 —— 本镜的配音分段 + 本 episode 的角色表。
+ *
+ * 角色表按 characters.id 升序 —— 这个顺序就是 <Subject N> / (Sx) 的编号顺序
+ * (PM 决策: episode 内角色的固定序号, 跨镜跨集都不换)。
+ */
+async function resolveGenerationInjectContext(
+  storyboardId: number | null | undefined,
+  episodeId: number | null | undefined,
+): Promise<{
+  ttsSegments: Array<{ speaker?: string; text?: string; isNarrator?: boolean; voice?: string }> | null
+  characters: Array<{ id: number; name: string; appearancePermanent?: string; personality?: string; role?: string }> | null
+}> {
+  const empty = { ttsSegments: null, characters: null }
+  if (!storyboardId || !episodeId) return empty
+  try {
+    const [sb] = db.select({ ttsSegments: schema.storyboards.ttsSegments })
+      .from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+    let ttsSegments: Array<{ speaker?: string; text?: string; isNarrator?: boolean; voice?: string }> | null = null
+    if (sb?.ttsSegments) {
+      try {
+        const arr = typeof sb.ttsSegments === 'string' ? JSON.parse(sb.ttsSegments) : sb.ttsSegments
+        if (Array.isArray(arr) && arr.length) ttsSegments = arr
+      } catch { /* 坏 JSON → 当没有台词, 不阻断生成 */ }
+    }
+    const charLinks = db.select({ characterId: schema.episodeCharacters.characterId })
+      .from(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
+    const ids = [...new Set(charLinks.map((l) => l.characterId))].sort((a, b) => a - b)
+    const characters = ids.length
+      ? db.select({
+        id: schema.characters.id,
+        name: schema.characters.name,
+        appearancePermanent: schema.characters.appearancePermanent,
+        personality: schema.characters.personality,
+        role: schema.characters.role,
+      }).from(schema.characters).where(inArray(schema.characters.id, ids)).all()
+        .sort((a, b) => a.id - b.id)
+        // DB 的可空列 → 接口里的可选字段 (null 统一成 undefined)
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          appearancePermanent: c.appearancePermanent ?? undefined,
+          personality: c.personality ?? undefined,
+          role: c.role ?? undefined,
+        }))
+      : []
+    return { ttsSegments, characters }
+  } catch (err: any) {
+    logTaskWarn('VideoTask', 'inject-context-failed', {
+      storyboardId, episodeId, error: err?.message || String(err),
+      hint: '取生成期注入上下文失败, 本次不注入对白/主体绑定 (不阻断视频生成)',
+    })
+    return empty
   }
 }
 

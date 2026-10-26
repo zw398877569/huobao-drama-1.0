@@ -106,6 +106,26 @@ export interface GenerationInjectInput {
   /** 翻译完成、注入之前的最终 prompt */
   prompt: string
   referenceImageMode: ReferenceImageMode
+  // ── Sprint 23 Task C (PM msg-20261027-095): H3 模板的生成期注入需要这些 ──
+  /** 本镜 storyboard id (取 tts_segments / 角色关联用) */
+  storyboardId?: number | null
+  /** 本镜所属 episode id (Speaker ID / <Subject N> 编号按 episode 内角色固定序号分配) */
+  episodeId?: number | null
+  /** 本镜的配音分段 (H3 的 <d>[Chinese]原文</d> 对白块来源; 台词原文一字不改) */
+  ttsSegments?: Array<{
+    speaker?: string
+    text?: string
+    isNarrator?: boolean
+    voice?: string
+  }> | null
+  /** 本 episode 的角色 (按 characters.id 升序 = <Subject N> / (Sx) 的编号顺序) */
+  characters?: Array<{
+    id: number
+    name: string
+    appearancePermanent?: string
+    personality?: string
+    role?: string
+  }> | null
 }
 
 export interface GenerationCleanupInput {
