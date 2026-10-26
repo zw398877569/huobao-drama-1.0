@@ -37,7 +37,18 @@ export function useShotTTS(deps: Deps) {
 
   function getDialogueText(sb: any) {
     const dialogue = sb?.dialogue?.trim() || ''
-    return dialogue ? dialogue.replace(/^.+?[:：]\s*/, '').trim() : ''
+    if (!dialogue) return ''
+    // ★ Sprint 24 fix_2 (PM msg-20261026-104): 原来用 /^.+?[:：]\s*/ 剥 speaker 前缀, 没加 m flag
+    //   → ^ 只匹配【整个字符串的开头】→ 多行台词只有第一行的前缀被剥掉, 第二行的还在正文里
+    //   (显示成 '林达，送单的。 王秀兰：好，进来坐会儿吧。' —— 看着像林达在念'王秀兰：')。
+    //   改成【逐行】剥, 每行各自去掉自己的前缀。
+    //   ⚠️ 只影响这张卡片上的文案 —— 配音内容走 tts_segments (不经过这个字符串),
+    //      编辑弹窗的初值/保存也用的是 sb?.dialogue 原始串, 不会把第二行的前缀删掉。
+    return dialogue
+      .split(/\r?\n/)
+      .map(l => l.trim().replace(/^.+?[:：]\s*/, '').trim())
+      .filter(Boolean)
+      .join(' ')
   }
 
   // Strip leading / trailing full-width and half-width parens plus

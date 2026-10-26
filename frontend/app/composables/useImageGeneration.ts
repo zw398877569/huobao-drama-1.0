@@ -384,15 +384,65 @@ export function useImageGeneration(deps: Deps) {
     }
   }
 
-  function batchPropImages() {
+  async function batchPropImages() {
     const ids = ctx.keyProps.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
     if (!ids.length) {
       toast.info('所有道具图片已生成')
       return
     }
     pendingPropImageIds.value = [...new Set([...pendingPropImageIds.value, ...ids])]
-    ids.forEach(id => { propsAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value).then(() => refresh()).catch((e: any) => toast.error(e.message)) })
+    // ★ Sprint 24 fix_1 (PM msg-20261026-104): 之前只在【请求返回时】刷新一次, 没有任何轮询
+    //   → pendingPropImageIds 永远清不掉 → 卡片一直显示"生成中…" (后端其实早就生成好了,
+    //   实测 6/6 全部成功, 用户刷新一下就好了)。
+    //   其他三个批量入口都有轮询 (batchCharImages → pollBatchImageGeneration;
+    //   batchSceneImages / genPropImg → watchAsyncResult), 只有这里漏了。
+    //
+    //   道具表【没有 status 字段】(不像 scene / storyboard), 失败状态只能从 image_generations 记录看
+    //   → 用 imageAPI.get(genId) 判终态 (跟 batchCharImages 同款), 成功/失败都能退出轮询。
+    const genIds: (number | null)[] = []
+    ids.forEach((id, idx) => {
+      propsAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value)
+        .then((resp: any) => { genIds[idx] = resp?.image_generation_id || null })
+        .catch((e: any) => {
+          pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
+          toast.error(e.message)
+        })
+    })
     toast.success('道具图片批量生成中')
+    // 轮询: 每个 tick 一次 Promise.all 拿全部状态 (30 次 × 8s = 4 分钟)
+    for (let i = 0; i < 30; i++) {
+      await sleep(8000)
+      try {
+        const results = await Promise.all(
+          ids.map((_, j) => (genIds[j] ? imageAPI.get(genIds[j] as number).catch(() => null) : Promise.resolve(null)))
+        )
+        let stillPending = 0
+        let failedCount = 0
+        for (let j = 0; j < ids.length; j++) {
+          // 已经出过终态的 (成功 / 请求直接失败) 不用再看
+          if (!pendingPropImageIds.value.includes(ids[j])) continue
+          const res = results[j]
+          if (res?.status === 'completed' || res?.status === 'succeeded') {
+            pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== ids[j])
+          } else if (res?.status === 'failed') {
+            pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== ids[j])
+            failedCount++
+          } else {
+            stillPending++
+          }
+        }
+        if (stillPending === 0) {
+          await refresh()
+          if (failedCount > 0) toast.error(`${failedCount} 个道具图片生成失败`)
+          else toast.success('所有道具图片生成完成')
+          return
+        }
+        await refresh()
+      } catch {}
+    }
+    // 超时: 清理所有未完成的
+    pendingPropImageIds.value = pendingPropImageIds.value.filter(item => !ids.includes(item))
+    toast.error('部分道具图片生成超时')
   }
 
   async function genShotFrame(sb: any, frameType: string) {

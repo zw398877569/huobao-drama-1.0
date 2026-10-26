@@ -405,7 +405,13 @@ function extractPromptFromLLM(raw) {
 
   // 5) 必须含中文,否则说明模型只输出了免责声明/英文思考
   if (!/[一-龥]/.test(text)) return null
-  if (text.length > 600) text = text.slice(0, 600)
+  // ★ Sprint 24 fix_3 (PM msg-20261026-104): 删掉这里的 600 字符硬截断。
+  //   旧行为: LLM 改写输出被切在半句中间 (实测 scene 49: inLen=949 → outLen=800/600 整,
+  //   结尾切在 '...cin', 场景描述中段丢了 ~130-150 字符)。
+  //   长度上限由 capRewrittenLength 统一管 (clamp(inLen × 1.5, 1500, 6000), 在逗号边界截),
+  //   它跟输入长度挂钩, 不会像写死的 600/800 那样砍掉正常内容。
+  //   ⚠️ 上面 'paragraphs.length === 0 → 所有段落拼接' 的兜底分支本来就不受 600 限制,
+  //      现在两条分支统一由 capRewrittenLength 兜底, 行为差异消失 (不是新引入的不一致)。
   return text.trim()
 }
 
@@ -454,8 +460,8 @@ function extractPromptFromLLMEnglish(raw: string) {
   // 剥首尾双引号 (英文版只覆盖 ", 中文版覆盖了「」『』中文引号)
   text = text.replace(/^["]+|["]+$/g, '')
 
-  // 英文 token 密度低, 长度上限从 600 字提到 800 (200 字 ≈ 100-130 英文 token)
-  if (text.length > 800) text = text.slice(0, 800)
+  // ★ Sprint 24 fix_3: 删掉这里的 800 字符硬截断 (同上, 由 capRewrittenLength 统一管)。
+  //   实测 scene 50 (五零一室内): inLen=926 → outLen=800, 丢 ~126 字符, 且切在半句中间。
   return text.trim()
 }
 

@@ -553,6 +553,19 @@ export async function runStep2(opts: {
     step2_done_at: now(),
     step2_details: result.shot_details,
   })
+  // ★ Sprint 24 fix_4 (PM msg-20261026-104): step2 变了 → step3 的产物必然失效 → 清掉 step3 完成标记。
+  //   不清的话 getPlanningState 会从 planning_data 里推断出 current_step=3 (陈旧)
+  //   → 用户/前端以为 step3 已完成 → 直接去跑 step 6/8/9 → 用的是上一次的旧分镜
+  //   (这次就是 95 字符空壳的 video_prompt)。
+  //   ⚠️ 只清标记, 不动 storyboards 表 —— 已落库的分镜要等重跑 step3 才被 DELETE+INSERT 替换。
+  const clearedStep3 = await clearPlanningSteps(episodeId, ['step3'])
+  if (clearedStep3) {
+    logTaskProgress('StoryboardPlanner', 'step2-rerun-cleared-step3', {
+      episodeId,
+      shotCount: result.shot_details.length,
+      hint: 'step2 跑完 → step3 完成标记已失效 (库里的旧分镜要等重跑 step3 才被替换)',
+    })
+  }
   logTaskSuccess('StoryboardPlanner', 'step2-done', {
     episodeId, shotCount: result.shot_details.length,
   })
