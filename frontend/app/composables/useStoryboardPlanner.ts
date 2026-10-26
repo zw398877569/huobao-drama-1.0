@@ -58,6 +58,12 @@ export interface ShotDetailsItem {
   video_prompt_plot_state?: string
 }
 
+/** Sprint 23 Task D: 可选的 prompt 模板 (后端 prompt-templates 注册表) */
+export const PROMPT_TEMPLATES = [
+  { id: 'general', name: '通用', hint: '现有分镜拆解逻辑 (默认, 行为不变)' },
+  { id: 'minimax-h3', name: 'MiniMax H3', hint: 'H3 官方四段格式 (subject_definitions / detailed_description / overall_soundscape / non_diegetic_music)' },
+] as const
+
 export function useStoryboardPlanner(opts: {
   dramaId: number | (() => number)
   episodeId: number | (() => number)
@@ -95,6 +101,13 @@ export function useStoryboardPlanner(opts: {
     return opts.selectedTextConfigId?.() ?? null
   }
 
+  // Sprint 23 Task D: 当前选中的 prompt 模板 (默认 general —— 用户拍板 D3 默认保持现有行为)
+  const templateId = ref<string>('general')
+
+  function setTemplateId(id: string) {
+    templateId.value = id
+  }
+
   function resetWizard() {
     wizardOpen.value = false
     currentStep.value = 0
@@ -120,6 +133,8 @@ export function useStoryboardPlanner(opts: {
       step1Plan.value = s?.step1_plan ?? []
       step2Details.value = s?.step2_details ?? []
       currentStep.value = s?.current_step ?? 0
+      // Sprint 23 Task D: 回显本集上次用的模板 (后端 GET planning/state 已返回 templateId)
+      templateId.value = s?.templateId || 'general'
       const s1Done = !!s?.step1_plan
       const s2Done = !!s?.step2_details
       const s3Done = !!s?.step3_storyboard_ids
@@ -176,6 +191,8 @@ export function useStoryboardPlanner(opts: {
       }
       const textConfigId = getTextConfigId()
       if (textConfigId) body.text_config_id = textConfigId
+      // Sprint 23 Task D: 带上 prompt 模板 id (后端会落库到 episodes.prompt_template)
+      body.template_id = templateId.value
 
       // QA msg-20261010-008 ISSUE-D: $fetch 默认 30s timeout, LLM 偶尔 30-60s 跑超时报错 modal 状态卡住.
       //   跟 backend callLLMJson 180s 一致 + retry: 0 (callLLMJson 内部已 retry 1 次, 前端不重复 retry 防双倍请求)
@@ -212,6 +229,7 @@ export function useStoryboardPlanner(opts: {
       }
       const textConfigId = getTextConfigId()
       if (textConfigId) body.text_config_id = textConfigId
+      body.template_id = templateId.value
 
       const resp = await $fetch<{ shot_details: ShotDetailsItem[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step2',
@@ -244,6 +262,7 @@ export function useStoryboardPlanner(opts: {
         episode_id: getEpisodeId(),
         shot_details: details,
       }
+      body.template_id = templateId.value
       const resp = await $fetch<{ createdStoryboardIds: number[] }>(
         '/api/v1/agent/storyboard_breaker/planning/step3',
         { method: 'POST', body, timeout: 420_000, retry: 0 },
@@ -306,6 +325,10 @@ export function useStoryboardPlanner(opts: {
     stepStatus,
     error,
     totalDuration,
+    // Sprint 23 Task D: prompt 模板
+    templateId,
+    setTemplateId,
+    PROMPT_TEMPLATES,
     // actions
     openWizard,
     closeWizard,

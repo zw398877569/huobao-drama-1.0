@@ -2014,6 +2014,22 @@
                 <span>step1 失败: {{ error }}</span>
                 <button class="btn btn-sm" @click="runStep1">重试</button>
               </div>
+              <!-- Sprint 23 Task D: prompt 模板选择 (默认通用 = 现有行为不变, 用户拍板 D3) -->
+              <div class="wizard-template-row">
+                <span class="wizard-template-label">提示词模板</span>
+                <div class="tpl-seg">
+                  <button
+                    v-for="t in PROMPT_TEMPLATES"
+                    :key="t.id"
+                    class="tpl-seg-btn"
+                    :class="{ active: templateId === t.id }"
+                    :title="t.hint"
+                    :disabled="wizardLoading"
+                    @click="onPickTemplate(t.id)"
+                  >{{ t.name }}</button>
+                </div>
+                <span class="dim" style="font-size:11px;">{{ PROMPT_TEMPLATES.find(t => t.id === templateId)?.hint }}</span>
+              </div>
               <div v-if="currentStep === 0" class="wizard-action">
                 <button class="btn btn-primary" :disabled="wizardLoading" @click="runStep1">
                   <Loader2 v-if="wizardLoading" :size="12" class="animate-spin" />
@@ -2385,12 +2401,26 @@ const {
   openWizard, closeWizard, reopenWizard, runStep1, runStep2, runStep3,
   updateShotDuration, removeShot: wizardRemoveShot, addShot: wizardAddShot,
   updateDetailPrompt,
+  // Sprint 23 Task D: prompt 模板选择
+  templateId,
+  setTemplateId,
+  PROMPT_TEMPLATES,
 } = useStoryboardPlanner({
   dramaId,  // QA-012: dramaId 是 const number 不带 .value (主因: wizard 后端 400)
   episodeId: () => epId.value,
   selectedTextConfigId: () => selectedTextConfigId.value,
   onComplete: () => { refresh(); closeWizard() },
 })
+
+// Sprint 23 Task D: 切模板 —— 已跑过 step1/step2 时要确认 (V4 persist 是 DELETE+INSERT 重建 storyboard)
+function onPickTemplate(id: string) {
+  if (id === templateId.value) return
+  const hasProgress = stepStatus.value[1] === 'done' || stepStatus.value[2] === 'done'
+  if (hasProgress) {
+    if (!confirm('切换提示词模板需要重新拆解 (step1/step2 会重跑), 已有分镜会被替换。继续？')) return
+  }
+  setTemplateId(id)
+}
 
 const regeneratingOne = ref(false)
 const imageViewer = ref({ open: false, src: '', title: '' })
@@ -4905,6 +4935,19 @@ onMounted(() => { refresh() })
 .wizard-close { background: none; border: none; font-size: 24px; color: #6b7280; cursor: pointer; padding: 0 8px; }
 .wizard-close:hover { color: #111827; }
 .wizard-body { flex: 1; overflow-y: auto; padding: 20px; }
+/* Sprint 23 Task D: prompt 模板选择器 (分段控件) */
+.wizard-template-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.wizard-template-label { font-size: 12px; color: var(--text-1); font-weight: 500; }
+.tpl-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg-0); }
+.tpl-seg-btn {
+  border: none; background: transparent; color: var(--text-1);
+  font-size: 12px; font-family: var(--font-body); cursor: pointer;
+  padding: 5px 12px; transition: all .16s var(--ease-out); white-space: nowrap;
+}
+.tpl-seg-btn + .tpl-seg-btn { border-left: 1px solid var(--border); }
+.tpl-seg-btn:hover { background: var(--bg-hover); color: var(--text-0); }
+.tpl-seg-btn.active { background: var(--accent-bg); color: var(--accent-text); font-weight: 600; }
+.tpl-seg-btn:disabled { opacity: .45; cursor: not-allowed; }
 .wizard-tip { background: #f9fafb; border-left: 3px solid #3b82f6; padding: 10px 14px; border-radius: 4px; margin: 0 0 16px; color: #4b5563; font-size: 13px; }
 .wizard-action { display: flex; justify-content: center; padding: 40px 0; }
 .wizard-table-wrap { overflow-x: auto; }
