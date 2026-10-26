@@ -297,7 +297,15 @@ const KIND_INSTRUCTIONS: Record<ImagePromptKind, string[]> = {
  */
 const KIND_CONSTRAINTS: Record<ImagePromptKind, string> = {
   scene: ', empty environment, no people, no characters, no human figures, no silhouettes, no human body parts, no one sitting or standing, architecture and furnishings only, no human activity',
-  character: ', plain neutral seamless studio backdrop, even soft lighting, no environment, no room, no street, no outdoor scenery, no furniture in background, character sheet presentation',
+  // ★ Sprint 24 fix_2 (PM msg-20261026-101): 角色形象图加 no text 硬约束。
+  //   现象: drama 16 两张角色图都带文字标签 (林达中英混合清单 / 王秀兰俄文乱码 + 幻觉小字)。
+  //   原因: characters.ts 模板把中文结构化档案 + 清单式措辞拼进 prompt,
+  //         模型理解成"要标注在图上的清单" → 生成类似文字的东西 (语种随机, 是模型渲染不出中文的乱码)。
+  //   ⚠️ 已确认 nano-banana adapter 【不支持 negative prompt】
+  //      (backend/src/services/adapters/nano-banana-image.ts 里没有 negative 相关代码)
+  //      → 只能靠 prompt 里写 no text, 这条是唯一可行的硬手段。
+  //   这条约束在【LLM 改写之后】追加 (applyKindConstraint 的位置) → 不会被 LLM 洗掉。
+  character: ', plain neutral seamless studio backdrop, even soft lighting, no environment, no room, no street, no outdoor scenery, no furniture in background, character sheet presentation, no text, no letters, no typography, no labels, no captions, no annotations, no signage, no watermark',
   prop: '',
   shot: '',
   grid: '',

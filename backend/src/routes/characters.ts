@@ -12,7 +12,7 @@ import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger
 import { getStylePreset } from '../services/negative-prompt-presets.js'
 import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
 import { getAgeAnchorTokens } from '../constants/age-anchor.js'
-import { selectForCodeSide, formatCodeSideTokens, logFewshotSelection } from '../services/face-archive-service.js'
+import { selectForCodeSide, logFewshotSelection } from '../services/face-archive-service.js'
 
 const app = new Hono()
 
@@ -115,8 +115,19 @@ app.post('/:id/generate-image', async (c) => {
   const aestheticTokens = getCharacterAestheticTokens(drama?.characterAesthetic)
   // Sprint 5 Task D: face-archive code-side 1-2 条精选 (latest archivedAt DESC)
   // V2 治本 (msg-20261010-001): appearance 列已被 RENAME → DROP, 不再传给 CharacterContext
+  // ★ Sprint 24 fix_1 (PM msg-20261026-101): face-archive 档案块【不再拼进生图 prompt】。
+  //   实测 (drama 16 ep16): 选到的档案条目全是古风 (danfeng phoenix eyes / bean-paste lips /
+  //   silver hairpin / classical chinese beauty / low chignon) → rule F 要求
+  //   "Keep every concrete detail of the original description" → LLM 忠实照抄进英文 prompt
+  //   → 角色图长出剧本里没有的【银色发簪】+【盘发】, 还多出围裙和手表。
+  //   根因: selectForCodeSide 的 _drama 参数根本没被使用 (只按 factor='Face' + gender 过滤),
+  //   face_type_entries 表也没有【风格/题材】维度 → 做不出安全的风格门控,
+  //   对现代题材项目参考价值 ≈ 0 (库里最近归档的条目全是古风)。
+  //   082/083 的剥除逻辑只写在 fallback 分支 —— 之前 240 字符上限意外充当了过滤器,
+  //   rule F 放宽上限 (0060bc0) 后档案块就原样回来了。
+  //   ⚠️ 选档 + 留痕保留 (还能在 flow log 里看到候选条目), 只是不再喂给 LLM。
+  //   要恢复这个功能, 前置条件是 face_type_entries 能按 drama 风格/题材过滤。
   const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: drama?.style, characterAesthetic: drama?.characterAesthetic }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, permanentTraits: char.permanentTraits }, 2)
-  const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
   if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
   // Sprint 5 Task G: AGE ANCHOR 独立模块 (跟 face-archive 解耦, 三段并列硬拼)
   // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列)
@@ -132,7 +143,6 @@ app.post('/:id/generate-image', async (c) => {
     personality ? 'personality: ' + personality : '',
     stylePreset.positiveCharacterTokens,
     aestheticTokens,
-    faceArchiveTokens,
     ageAnchorTokens,
     'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     // V2 治本 (msg-20261010-001): 移除 'ignore PLOT_STATE' 文字指令 — 数据源头已分 PERMANENT / PLOT_STATE 两列,
@@ -140,7 +150,12 @@ app.post('/:id/generate-image', async (c) => {
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
     'AGE ANCHOR: if a numeric age is mentioned (e.g. "25 years old", "around 30"), pin the character to that exact integer; if vague ("young", "middle-aged"), default to 25-30 for protagonist or elderly for aged roles; do NOT free-render into 50+ when "around 30" is given,',
     'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
-    'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
+    // ★ Sprint 24 fix_2 (PM msg-20261026-101): 原来这行是 'includes: face closeup, eye detail,
+    //   hair detail, outfit detail, accessory detail' —— 清单式措辞 + 'accessory detail'
+    //   会让模型 (a) 把这些当成"要标注在图上的条目" → 图上出现文字标签;
+    //   (b) 凭空造饰品 (drama 15 的银发簪 / drama 16 的手表和围裙都是这么来的)。
+    //   改成描述画面本身, 不列条目, 也不指向具体物件类别。
+    'showing the same facial features, hairstyle and outfit in every view',
     'consistent character design across all views',
     'high quality, detailed illustration, professional character art',
   ].filter(Boolean).join(', ')
@@ -200,8 +215,8 @@ app.post('/batch-generate-images', async (c) => {
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''
     // Sprint 5 Task D: face-archive code-side 1-2 条精选 (batch 路径)
+    // ★ Sprint 24 fix_1: 同单个路径 —— 档案块只留痕, 不进 prompt (古风污染源)
     const faceArchiveEntries = selectForCodeSide({ id: char.dramaId, style: dramaStyleMap.get(char.dramaId)?.slug, characterAesthetic: dramaAestheticMap.get(char.dramaId) || undefined }, { id: char.id, name: char.name, personality: char.personality, dramaId: char.dramaId, appearancePermanent: char.appearancePermanent, permanentTraits: char.permanentTraits }, 2)
-    const faceArchiveTokens = faceArchiveEntries.length ? formatCodeSideTokens(faceArchiveEntries) : ''
     if (faceArchiveEntries.length) logFewshotSelection({ scope: 'code-side', dramaId: char.dramaId, characterId: char.id, entries: faceArchiveEntries })
     // Sprint 5 Task G: AGE ANCHOR 独立模块 (batch 路径)
     // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列)
@@ -214,12 +229,12 @@ app.post('/batch-generate-images', async (c) => {
       personality ? 'personality: ' + personality : '',
       stylePreset.positiveCharacterTokens,
       aestheticTokens,
-      faceArchiveTokens,
       ageAnchorTokens,
       'character reference sheet, official character design, focusing on the character\'s permanent visual identity (appearance, look, expression, posture, outfit)',
     'do NOT include story-specific props, actions, or objects that only appear in particular scenes (e.g. "front paw rests on a red button" is a plot moment, not a permanent feature),',
       'layout: large full-body portrait on left, three-view figures (front/side/back) on right',
-      'includes: face closeup, eye detail, hair detail, outfit detail, accessory detail',
+      // ★ Sprint 24 fix_2: 同单个路径 (清单式措辞 → 描述式)
+      'showing the same facial features, hairstyle and outfit in every view',
       'consistent character design across all views',
       'high quality, detailed illustration, professional character art',
     ].filter(Boolean).join(', ')
