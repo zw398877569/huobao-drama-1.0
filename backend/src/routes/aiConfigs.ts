@@ -33,17 +33,36 @@ const HUOBAO_AGENT_MODEL = 'gemini-3-pro-preview'
 // - script_rewriter: 长文改写,T 低=不乱发挥;MaxT 高=剧本不截断
 // - extractor: 结构化 JSON 输出,T 极低=格式稳定
 // - storyboard_breaker: 17 字段 × N 镜头,MaxT 必须高;T 中=兼顾创造+可控
-// - voice_assigner: 选择决策类,T 不需高
-// - grid_prompt_generator: 中→英翻译 + 创意,T 中高平衡
-// 兜底值给未来新加 Agent 用
+// - voice_assigner: 选择决策类,T 不需高 —— 但 MaxT 仍要 8192 (见下面「MaxT 一律 8192」)
+// - grid_prompt_generator: 中→英翻译 + 创意,T 中高平衡 —— MaxT 同样要 8192
+//
+// ★ MaxT 一律 8192 (Sprint 24 fix_1, PM msg-20261026-105):
+//   ensureAgentDefaults() 在 startup 时会把 DB 的 T/MaxT 【无条件 sync 回本推荐值】
+//   (只有 DB 值 == 推荐值时才 skipped 不写) → 推荐值偏小, 用户在 UI 里设的 8192
+//   【每次重启 backend 都会被改回去】。实测 2026-10-26 11:02 容器启动时
+//   用户用 SQL 设的 8192 被改回了 2048/4096。
+//   → 推荐值必须跟用户想设的值一致, 两边相同 → 幂等跳过 → 永久生效。
+//   ⚠️ 以后【不要】给这些 agent 写回 < 8192 的 MaxT (下面 ensureAgentDefaults 里有 WARN 守着)。
+//   ⚠️ maxTokens 目前在 agent 调用链上是死字段 (agent.generate 没传 maxTokens),
+//      实测走服务端默认、thinking 常态 2400-3000 token 够用 —— 改成 8192 是【防御性】:
+//      将来谁给 agent.generate 补上 maxTokens 传参, 8192 才是安全值 (2048 必炸在 thinking 上)。
 const HUOBAO_AGENT_PARAMS: Record<string, { temperature: number; maxTokens: number }> = {
   script_rewriter:       { temperature: 0.5, maxTokens: 8192 },
   extractor:             { temperature: 0.3, maxTokens: 8192 }, // 2026-10-12 sprint 43 FIX-4: 4096 容易 LLM 截断分批 save, 提到 8192
   storyboard_breaker:    { temperature: 0.6, maxTokens: 8192 },
-  voice_assigner:        { temperature: 0.4, maxTokens: 2048 },
-  grid_prompt_generator: { temperature: 0.6, maxTokens: 4096 },
+  // ★ Sprint 24 fix_1: 2048 → 8192 (原值会在 startup 时覆盖掉用户在 UI 设的 8192)
+  voice_assigner:        { temperature: 0.4, maxTokens: 8192 },
+  // ★ Sprint 24 fix_1: 4096 → 8192 (同上)
+  grid_prompt_generator: { temperature: 0.6, maxTokens: 8192 },
 }
-const AGENT_PARAMS_FALLBACK = { temperature: 0.5, maxTokens: 2048 }
+// 兜底值给未来新加 Agent 用 —— ★ Sprint 24 fix_1: 同样提到 8192 (新 agent 走这个兜底时别又写回小值)
+const AGENT_PARAMS_FALLBACK = { temperature: 0.5, maxTokens: 8192 }
+
+/**
+ * agent 推荐 maxTokens 的下限 (Sprint 24 fix_2, PM msg-20261026-105)。
+ * 低于这个值的推荐值会在 startup 时把用户设的 max_tokens 覆盖回小值 → 启动时 WARN。
+ */
+const AGENT_MIN_RECOMMENDED_MAX_TOKENS = 8192
 
 /**
  * 把每个 agent 的 T/MaxT sync 到 HUOBAO_AGENT_PARAMS 推荐值。
@@ -59,6 +78,17 @@ export function ensureAgentDefaults() {
   const ts = now()
   for (const agent of HUOBAO_AGENT_DEFAULTS) {
     const params = HUOBAO_AGENT_PARAMS[agent.agentType] || AGENT_PARAMS_FALLBACK
+    // ★ Sprint 24 fix_2: 推荐值 < 8192 → WARN (不抛错, 不影响启动)。
+    //   因为 ensureAgentDefaults 会把 DB 的值无条件 sync 回推荐值,
+    //   推荐值偏小 = 用户在 UI 里设的 max_tokens 每次重启都被改回去 (用户会以为设置没生效)。
+    if (params.maxTokens < AGENT_MIN_RECOMMENDED_MAX_TOKENS) {
+      logTaskWarn('AIConfig', 'agent-max-tokens-below-recommended', {
+        agentType: agent.agentType,
+        recommendedMaxTokens: params.maxTokens,
+        minimum: AGENT_MIN_RECOMMENDED_MAX_TOKENS,
+        hint: '推荐 maxTokens < 8192 —— ensureAgentDefaults 会把用户在 UI 设的值覆盖回推荐值; 请把 HUOBAO_AGENT_PARAMS 提到 8192',
+      })
+    }
     const [existing] = db.select().from(schema.agentConfigs)
       .where(eq(schema.agentConfigs.agentType, agent.agentType)).all()
     if (!existing) continue
