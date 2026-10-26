@@ -27,6 +27,7 @@
  *   (它承载角色外貌定义), 由代码层在生成期把编号占位符替换成最终编号。
  */
 import { z } from 'zod'
+import { logTaskWarn } from '../utils/task-logger.js'
 import { V3ImagePromptPermanentSchema, permanentToText } from '../services/llm-schema-validator.js'
 import { generalTemplate } from './general.js'
 import type {
@@ -282,7 +283,19 @@ const H3_NEXT_SECTION_RE = new RegExp(`\\n\\n(?=(?:${H3_SECTION_NAMES.join('|')}
 function prependToSection(prompt: string, section: string, block: string): string {
   const re = new RegExp(`(^|\\n)(${section}\\s*:)`, 'i')
   const m = re.exec(prompt)
-  if (!m) return `${prompt.trimEnd()}\n\n${block}`   // 兜底: 定位不到就追加到末尾
+  if (!m) {
+    // ★ Sprint 24 fix_2 (PM msg-20261026-102): 定位失败【不能静默】——
+    //   之前这里直接兜底追加到 prompt 末尾, 没有任何日志 → 以为 H3 格式生效了, 实际全堆在末尾。
+    //   最常见触发原因: 翻译器把 H3 四段重排成了 general 三段 (已由 videoTranslate 契约修掉),
+    //   但翻译器不保证 100% 听话 → 这里留一道告警。
+    logTaskWarn('PromptTemplate', 'h3-section-not-found', {
+      section,
+      action: 'append-to-prompt-end',
+      promptHead: prompt.slice(0, 200),
+      hint: '找不到 H3 段标题 —— 注入内容已追加到 prompt 末尾 (不是段内)。检查翻译器是否重排了段名。',
+    })
+    return `${prompt.trimEnd()}\n\n${block}`
+  }
   const at = m.index + m[0].length
   return `${prompt.slice(0, at)}\n${block}${prompt.slice(at)}`
 }
@@ -291,7 +304,16 @@ function prependToSection(prompt: string, section: string, block: string): strin
 function appendToSection(prompt: string, section: string, block: string): string {
   const re = new RegExp(`(^|\\n)(${section}\\s*:)`, 'i')
   const m = re.exec(prompt)
-  if (!m) return `${prompt.trimEnd()}\n\n${block}`
+  if (!m) {
+    // ★ Sprint 24 fix_2: 同 prependToSection —— 定位失败要留痕, 不能静默
+    logTaskWarn('PromptTemplate', 'h3-section-not-found', {
+      section,
+      action: 'append-to-prompt-end',
+      promptHead: prompt.slice(0, 200),
+      hint: '找不到 H3 段标题 —— 注入内容已追加到 prompt 末尾 (不是段内)。检查翻译器是否重排了段名。',
+    })
+    return `${prompt.trimEnd()}\n\n${block}`
+  }
   const bodyStart = m.index + m[0].length
   const rest = prompt.slice(bodyStart)
   const nextSec = H3_NEXT_SECTION_RE.exec(rest)
@@ -389,6 +411,16 @@ export const minimaxH3Template: PromptTemplate = {
   generation: {
     // 官方用 <d>[Chinese]…</d>, 不能跟 general 的 <n>0-3.9秒：开口:'…'</n> 同时给 H3 (语义冲突)
     useDialogueTimeline: false,
+    // ★ Sprint 24 fix_1: H3 的翻译契约 —— 翻译器必须原样保留官方四段 (不加 '### ' 前缀),
+    //   并且不做 general 的时间轴对齐 (H3 没有 <n> 时间轴)。
+    //   背景: 翻译器原来硬编码 general 的三段式 → H3 四段每次都被重排
+    //   (实测 2026-10-26 16:56 drama 16 ep16 sb#7: 翻译后 3131 字符, 四个 H3 段名一个都不在)
+    //   → injectH3 定位不到段 → 注入内容全部堆到 prompt 末尾。
+    videoTranslate: {
+      sectionHeaders: ['subject_definitions:', 'detailed_description:', 'overall_soundscape:', 'non_diegetic_music:'],
+      preserveTags: ['<Subject N>', '<Picture N>'],
+      alignSpeakingSchedule: false,
+    },
     inject: injectH3,
     // 清洗沿用 general 的 (抽象词/切黑指令/IP) —— 跟模板无关, 是安全网
     cleanup: generalTemplate.generation.cleanup,

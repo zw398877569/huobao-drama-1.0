@@ -310,7 +310,10 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             //   H3 模板的对白是【翻译之后】由代码层注入的, 正常路径这里没有 <d> 块;
             //   这层是保险 —— 防 LLM 自己在 detailed_description 里乱加 <d>[Chinese]…</d> 被翻掉。
             const dMask = maskDialogueBlocks(promptWithTimeline)
-            finalPrompt = await translateVideoPromptToEnglish(dMask.text)
+            // ★ Sprint 24 fix_1: 按模板的翻译契约走 —— H3 保留官方四段, general 走原三段式 (逐字不变)
+            finalPrompt = await translateVideoPromptToEnglish(dMask.text, {
+              contract: tpl.generation.videoTranslate,
+            })
             finalPrompt = dMask.restore(finalPrompt)
             // Sprint 16: 校验翻译器有没有把台词整段吃掉。吃掉了 prompt 会静默变回「没有台词」,
             //   口型又对不上且零报错 —— 所以必须数一遍, 对不上就 warn 并把中文时间轴补回去。

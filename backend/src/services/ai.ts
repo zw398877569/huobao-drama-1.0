@@ -577,33 +577,105 @@ export async function translateImagePromptToEnglish(prompt: string): Promise<str
  *   - 中文对白 (开口:'...' / <d>...</d> 内部) — 不能翻译成英文, 演员要照原语言念
  *   - 删掉 speaker 前缀 (如 "年轻人:" 应被剥掉, 只保留台词)
  */
-export async function translateVideoPromptToEnglish(prompt: string): Promise<string> {
+/**
+ * 视频 prompt 的翻译契约 —— 由【prompt 模板】提供 (PromptTemplate.generation.videoTranslate)。
+ *
+ * ★ Sprint 24 fix_1 (PM msg-20261026-102): 翻译器的 system prompt 原来硬编码了
+ *   general 的三段式 ("Integrated multimodal description:" / "Overall soundscape:" /
+ *   "Non-diegetic music:") → H3 模板的官方四段 (subject_definitions / detailed_description /
+ *   overall_soundscape / non_diegetic_music) 每次翻译都被【重排】成三段 →
+ *   injectH3 找不到 'detailed_description:' 段 → 对白块/首帧锚点/承接句全部兜底追加到 prompt 末尾。
+ *   (实测 2026-10-26 16:56 drama 16 ep16 sb#7: 翻译后 3131 字符, 四个 H3 段名一个都不在)
+ *
+ * 不填这个契约 = general 的默认行为 (三段式 + Sprint 16 的描述/时间轴对齐) —— 逐字不变。
+ */
+export interface VideoTranslateContract {
+  /** 必须原样保留的段标题 (带冒号); 顺序 = 输出顺序 */
+  sectionHeaders: string[]
+  /** 必须原样保留的引用标签 (如 <Subject N> / <Picture N>); 不许重编号/丢失 */
+  preserveTags?: string[]
+  /**
+   * 是否做 Sprint 16 的「描述/说话时间轴对齐」。
+   * H3 = false —— H3 用 <d>[Chinese]…</d> 对白块, 没有 general 的 <n>0-3秒：</n> 时间轴
+   * (generation.useDialogueTimeline=false), 套 general 的对齐逻辑会误导翻译器。
+   */
+  alignSpeakingSchedule?: boolean
+}
+
+/**
+ * 翻译器共用的规则段 (标签保护 / 中文台词保护 / 剥 speaker 前缀)。
+ *
+ * ⚠️ general 的 system prompt 必须【逐字不变】(验收要求 general 零回归) ——
+ *   所以这里的片段和 general 原串是一字一句对齐的, 改这段等于改 general 的翻译行为。
+ */
+const TRANSLATE_SHARED_RULES = (
+  'Keep XML-style tags intact: <n>0-3s</n> and <n>0-3秒：</n> timecodes, <location>X</location>, '
+  + '<role>X</role>, <voice>X</voice>. '
+  + 'CRITICAL: the Chinese words inside 开口:\'...\' or <d>...</d> are the SPOKEN lines. '
+  + 'They MUST stay in the ORIGINAL Chinese language — do NOT translate the spoken words. '
+  + 'They stay Chinese because they must match the Chinese voice audio. '
+  + 'Translate ONLY the surrounding action/description. '
+  + 'Strip speaker name prefix (e.g. "年轻人:" before the line should be removed, keep only the spoken words). '
+)
+
+/** general 的时间轴对齐规则 (Sprint 16) */
+const TRANSLATE_SCHEDULE_RULES = (
+  'SPEAKING SCHEDULE (critical): the user text ends with schedule lines shaped like '
+  + '<n>0-4秒：王秀兰开口:\'...\'</n>. '
+  + 'IMPORTANT: these schedule lines are ALREADY in their final form — copy them VERBATIM. '
+  + 'Do NOT translate them, do NOT change their speaker names, their timecodes or their dialogue text, '
+  + 'and do NOT add or remove any schedule line. ONLY the surrounding description gets translated into English. '
+  + 'Then make the description agree with the schedule: inside each schedule time range, the listed speaker '
+  + 'is the one talking / moving their mouth; never describe a character who is speaking in the schedule as '
+  + 'still, motionless, silent or not moving; and never describe a non-speaking character as talking. '
+)
+
+const TRANSLATE_OUTPUT_RULE = 'Output ONLY the English translation, no commentary, no thinking blocks.'
+
+/** general 的翻译 system prompt (三段式 + 对齐) —— 逐字保持原样 */
+const GENERAL_VIDEO_TRANSLATE_SYSTEM = (
+  'You are translating AND aligning a video generation prompt for an AI video model. '
+  + 'Preserve the three H3 sections exactly with their English headers: '
+  + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
+  + TRANSLATE_SHARED_RULES
+  + TRANSLATE_SCHEDULE_RULES
+  + TRANSLATE_OUTPUT_RULE
+)
+
+/** 按模板给的契约拼 system prompt (H3 用) */
+function buildContractTranslateSystem(contract: VideoTranslateContract): string {
+  const headers = contract.sectionHeaders.map((h) => `"${h}"`).join(', ')
+  const keepTags = contract.preserveTags?.length
+    ? `Keep these references intact: ${contract.preserveTags.join(', ')} (do NOT renumber them, do NOT drop them). `
+    : ''
+  const schedule = contract.alignSpeakingSchedule
+    ? TRANSLATE_SCHEDULE_RULES
+    : 'There is NO speaking schedule in this prompt and you must NOT create one. '
+  return (
+    'You are translating a video generation prompt for an AI video model. '
+    + `Preserve these ${contract.sectionHeaders.length} sections exactly, in the same order, with their exact headers: ${headers}. `
+    + 'Do NOT rename them, do NOT merge them, do NOT add markdown prefixes such as "### ". '
+    + keepTags
+    + TRANSLATE_SHARED_RULES
+    + schedule
+    + TRANSLATE_OUTPUT_RULE
+  )
+}
+
+export async function translateVideoPromptToEnglish(
+  prompt: string,
+  opts?: { contract?: VideoTranslateContract },
+): Promise<string> {
   // Sprint 16 (PM msg-20261020-072) 在原有翻译职责上加了「描述/说话时间轴对齐」:
   //   翻译本质就是改写整个 prompt, 让同一次调用顺手把 integrated 描述里的角色动作
   //   跟末尾的说话时间轴对齐 —— 等于白捡一次对齐, 不额外花 LLM 调用。
   //   不对齐的后果 (QA 2026-10-20 实测): 描述写 "Linda sits completely still" 而音频里
   //   Linda 在说话, H3 两个都看到了 -> 画面让另一个人动嘴, 音频是 Linda 的声音。
-  const systemPrompt = (
-    'You are translating AND aligning a video generation prompt for an AI video model. '
-    + 'Preserve the three H3 sections exactly with their English headers: '
-    + '"Integrated multimodal description:", "Overall soundscape:", "Non-diegetic music:". '
-    + 'Keep XML-style tags intact: <n>0-3s</n> and <n>0-3秒：</n> timecodes, <location>X</location>, '
-    + '<role>X</role>, <voice>X</voice>. '
-    + 'CRITICAL: the Chinese words inside 开口:\'...\' or <d>...</d> are the SPOKEN lines. '
-    + 'They MUST stay in the ORIGINAL Chinese language — do NOT translate the spoken words. '
-    + 'They stay Chinese because they must match the Chinese voice audio. '
-    + 'Translate ONLY the surrounding action/description. '
-    + 'Strip speaker name prefix (e.g. "年轻人:" before the line should be removed, keep only the spoken words). '
-    + 'SPEAKING SCHEDULE (critical): the user text ends with schedule lines shaped like '
-    + '<n>0-4秒：王秀兰开口:\'...\'</n>. '
-    + 'IMPORTANT: these schedule lines are ALREADY in their final form — copy them VERBATIM. '
-    + 'Do NOT translate them, do NOT change their speaker names, their timecodes or their dialogue text, '
-    + 'and do NOT add or remove any schedule line. ONLY the surrounding description gets translated into English. '
-    + 'Then make the description agree with the schedule: inside each schedule time range, the listed speaker '
-    + 'is the one talking / moving their mouth; never describe a character who is speaking in the schedule as '
-    + 'still, motionless, silent or not moving; and never describe a non-speaking character as talking. '
-    + 'Output ONLY the English translation, no commentary, no thinking blocks.'
-  )
+  //
+  // ★ Sprint 24 fix_1: 有契约 (H3) → 按契约拼; 没契约 (general) → 原串逐字不变。
+  const systemPrompt = opts?.contract
+    ? buildContractTranslateSystem(opts.contract)
+    : GENERAL_VIDEO_TRANSLATE_SYSTEM
   // 视频翻译兼做对齐, 用快模型 (见 resolvePromptLLMConfig 注释)。PROMPT_TRANSLATION_FAST=0 可关。
   const preferFast = process.env.PROMPT_TRANSLATION_FAST !== '0'
   return callTextLLMForPrompt(prompt, systemPrompt, { preferFastConfig: preferFast })

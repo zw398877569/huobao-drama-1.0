@@ -20,6 +20,9 @@
  */
 import { z } from 'zod'
 import { V3ImagePromptPermanentSchema, type SalvageResult } from '../services/llm-schema-validator.js'
+// ★ Sprint 24 fix_1: 翻译契约由模板提供 (类型定义在 ai.ts —— 那是翻译器的地盘)。
+//   用 `import type` → 编译期擦除, 不会引入运行时依赖 (prompt-templates 不依赖 services/ai.js)。
+import type { VideoTranslateContract } from '../services/ai.js'
 
 // ─── 数据结构 (原 storyboard-planner-service.ts, 搬过来避免循环依赖) ─────────
 
@@ -193,5 +196,17 @@ export interface PromptTemplate {
     inject(input: GenerationInjectInput): string | null
     /** 生成期清洗 (Sprint 17 的抽象词/拼接指令/IP) */
     cleanup(input: GenerationCleanupInput): GenerationCleanupOutput
+    /**
+     * 视频 prompt 的翻译契约 (可选)。
+     *
+     * ★ Sprint 24 fix_1 (PM msg-20261026-102): 翻译器原来硬编码 general 的三段式
+     *   ("Integrated multimodal description:" / "Overall soundscape:" / "Non-diegetic music:")
+     *   → H3 模板的官方四段每次翻译都被重排成三段 → injectH3 找不到 'detailed_description:' 段
+     *   → 对白块/首帧锚点/承接句全部兜底追加到 prompt 末尾 (H3 官方格式等于没送达模型)。
+     *
+     * 不填 = general 的默认行为 (三段式 + Sprint 16 的描述/时间轴对齐) —— 逐字不变。
+     * H3 填一份自己的 (保留官方四段 + 不做时间轴对齐)。
+     */
+    videoTranslate?: VideoTranslateContract
   }
 }
