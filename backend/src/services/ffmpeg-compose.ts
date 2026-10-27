@@ -161,7 +161,12 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
             end = videoDuration
           }
 
-          const prefix = seg.speaker && !seg.isNarrator ? `${seg.speaker}：` : ''
+          // ★ Sprint 25 fix_1 (PM msg-20261027-111): 字幕一律【不带角色名前缀】(PM 2026-10-27 拍板, 选项 B)。
+          //   原来这里按 seg.speaker 加 '林达：' 前缀 → 成片字幕形如 '林达：林达，送单的。' 看着重复。
+          //   PM 已知并接受 B 的代价 ('林达，送单的。' 可能被误读成半句话 / 多角色快速对话分不清),
+          //   明确要求【不要】自作主张改成智能去重 (选项 C)。
+          //   ⚠️ 只影响显示层: 台词原文、时间轴、音频对齐、旁白判定全部不动。
+          const prefix = ''
           srtLines.push(
             String(srtLines.filter(l => /^\d+$/.test(l)).length + 1),
             `${formatSrtTimestamp(start)} --> ${formatSrtTimestamp(end)}`,
