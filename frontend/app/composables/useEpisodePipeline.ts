@@ -34,8 +34,10 @@ export function useEpisodePipeline(deps: Deps) {
     get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
     set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
   })
-  // 导出区子 tab: 'merge' = 拼接导出 (默认), 'free' = 自由创作
-  const exportTab = ref<'merge' | 'free' | 'video-schedule'>('merge')
+  // 导出区子 tab: 'merge' = 拼接导出 (默认), 'video-schedule' = 视频生成定时计划
+  // ★ Sprint 26 Task A (PM msg-20261027-121): 'free' (自由创作) 已提升为顶层页面 /free,
+  //   从这里【移走】(PM 2026-10-27 拍板 D1: 移走不是复制) → 导出区只剩两个子 tab。
+  const exportTab = ref<'merge' | 'video-schedule'>('merge')
   const frameMode = ref('first')
   const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 
@@ -140,8 +142,7 @@ export function useEpisodePipeline(deps: Deps) {
       label: '导出',
       items: [
         { key: 'export:merge', label: '拼接导出', desc: '', icon: 'Download', done: !!ctx.mergeUrl.value },
-        // 自由创作: 不依赖分镜进度, done 始终 false — 不参与 pipeline 总进度
-        { key: 'export:free', label: '自由创作', desc: '', icon: 'Sparkles', done: false },
+        // ★ Sprint 26 Task A: 'export:free' (自由创作) 已移到顶层页 /free, 这里不再有它的进度项
         // Sprint 10 PM msg-20261014-001 task G: 视频生成定时计划 (项目内 node-cron 调度)
         { key: 'export:video-schedule', label: '视频生成定时计划', desc: '', icon: 'Clock', done: false },
       ],
@@ -242,8 +243,9 @@ export function useEpisodePipeline(deps: Deps) {
     }
     if (section === 'export') {
       ctx.panel.value = 'export'
-      // export:merge / export:free / export:video-schedule — 设置对应的子 tab
-      if (step === 'free' || step === 'merge' || step === 'video-schedule') {
+      // export:merge / export:video-schedule — 设置对应的子 tab
+      // ★ Sprint 26 Task A: 'free' 已移到顶层页 /free
+      if (step === 'merge' || step === 'video-schedule') {
         exportTab.value = step
       }
     }

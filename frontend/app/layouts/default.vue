@@ -36,6 +36,13 @@
           </svg>
           <span>任务</span>
         </NuxtLink>
+        <!-- ★ Sprint 26 Task A: 自由创作提升为顶层页面 (排在『任务』后面) -->
+        <NuxtLink to="/free" class="nav-link" :class="{ active: route.path === '/free' }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="4"/>
+          </svg>
+          <span>自由创作</span>
+        </NuxtLink>
       </nav>
 
       <div class="header-right">

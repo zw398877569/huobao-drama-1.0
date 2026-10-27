@@ -1712,7 +1712,8 @@
 
       <!-- ===== EXPORT PANEL ===== -->
       <div v-else class="content-panel">
-        <!-- 导出区子 tab (拼接导出 / 自由创作) -->
+        <!-- 导出区子 tab (拼接导出 / 视频生成定时计划) -->
+        <!-- ★ Sprint 26 Task A: 自由创作已提升为顶层页面 /free, 这里【移走】不再保留它的 tab -->
         <div class="step-toolbar prod-toolbar export-toolbar">
           <div class="toolbar-left">
             <div class="prod-tabs">
@@ -1722,13 +1723,6 @@
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 拼接导出
-              </button>
-              <button
-                :class="['prod-tab', { active: exportTab === 'free' }]"
-                @click="exportTab = 'free'"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="4"/></svg>
-                自由创作
               </button>
             </div>
           </div>
@@ -1784,10 +1778,6 @@
           </div>
         </div>
 
-        <!-- 子视图: 自由创作 (独立组件, 不依赖分镜) -->
-        <div v-else-if="exportTab === 'free'" class="export-host">
-          <FreeCreationPanel :configs="videoConfigs" />
-        </div>
         <!-- Sprint 10 PM msg-20261014-001 task G: 视频生成定时计划 (Nuxt auto-import ~/components/VideoSchedulePlan.vue) -->
         <div v-else-if="exportTab === 'video-schedule'" class="export-host">
           <VideoSchedulePlan :episode-id="epId" />
