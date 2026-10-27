@@ -7,6 +7,9 @@ import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 import { splitGridImage } from '../services/grid-split.js'
 import { createAgent } from '../agents/index.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
+// ★ Sprint 27 Task A follow-up (PM msg-20261027-127): 格子分配的唯一实现
+//   (原来 routes/grid.ts 和 agents/tools/grid-prompt-tools.ts 各有一份, 改一处漏一处 → 同一响应里自相矛盾)
+import { normalizeGridLayout, buildFirstLastCellPlan } from '../utils/grid-layout.js'
 
 const app = new Hono()
 
@@ -133,38 +136,6 @@ function buildStoryboardReferenceHints(
   return [...new Set(hints)].slice(0, 4)
 }
 
-/**
- * ★ Sprint 27 Task A (PM msg-20261020-122): first_last 模式的宫格【固定 2 列】(每行 = 一个镜头的首帧 + 尾帧)。
- *
- * 背景 (bug 根因): 原来的分配是
- *     const sb = storyboards[i % storyboards.length]   // i 是【格子序号】
- *     const isFirst = i % 2 === 0
- * → 格子序号被直接当成镜头索引, 而首/尾帧又按格子奇偶交替分配
- * → 【每个镜头只拿到 1 格, 不是首+尾两格】。3x3(9格) 的实际分配是:
- *   格1=镜1首帧 / 格2=镜2尾帧 / 格3=镜3首帧 / 格4=镜4尾帧 ...
- *   ① 镜头1 永远拿不到尾帧 (它恰恰是空镜, 尾帧是走廊尽头501门那个构图, 是承接镜头2 的关键)
- *   ② 镜头2 被标成 last_frame 但格子画的是镜头2 的描述
- *   ③ 与 UI 文案『每镜头占一行: 左首帧 + 右尾帧』不符
- *
- * 改法 (方案甲, PM 拍板二选一里 dev 选的): 每行 = 一个镜头的 首帧(左) + 尾帧(右), 行数 = 镜头数上限。
- *   · 天然满足工单 3 条硬约束: 同镜头首尾同行相邻 / 不被别的镜头拆开 / 按 shot_number 升序
- *   · 不浪费格子 —— 方案乙(保持用户选的 cols)在奇数列下每行会空 1 格, 而【空格子在生图模型眼里
- *     不是空, 它会自己编内容填进去】, 反而污染画面
- *   · 每格更大: 3行x2列 = 1920x1080 → 每格 960x540 (3x3 只有 640x360), 切出来当参考帧更清晰
- *   · 完全对齐 UI 文案『每镜头占一行: 左首帧 + 右尾帧』
- *
- * 行数还会被 clamp 到【实际选中的镜头数】—— 放不下的镜头不分配 (前端会 toast 提示, 不是静默截断)。
- */
-function normalizeGridLayout(mode: string, rows: number, cols: number, shotCount: number) {
-  const r = Math.max(1, Math.floor(Number(rows) || 1))
-  const c = Math.max(1, Math.floor(Number(cols) || 1))
-  if (mode === 'first_last') {
-    const useRows = Math.min(r, Math.max(shotCount, 1))
-    return { rows: useRows, cols: 2, truncated: useRows < r }
-  }
-  return { rows: r, cols: c, truncated: false }
-}
-
 // Build prompt based on mode
 function buildGridPrompt(
   mode: string,
@@ -197,19 +168,18 @@ function buildGridPrompt(
   if (mode === 'first_last') {
     // ★ Sprint 27 Task A: 每行 = 一个镜头的 首帧(左) + 尾帧(右) —— 原来是把格子序号当镜头索引 + 奇偶交替
     //   → 每镜头只拿 1 格, 镜头1 永远拿不到尾帧 (详见 normalizeGridLayout 的注释)。
+    const plan = buildFirstLastCellPlan(rows, storyboards.length)
+    const useRows = Math.max(...plan.map(p => p.row)) + 1
     const pairCols = 2
-    const useRows = Math.min(rows, storyboards.length)
-    const cells = Array.from({ length: useRows * pairCols }, (_, i) => {
-      const row = Math.floor(i / pairCols)
-      const isFirst = i % pairCols === 0
-      const sb = storyboards[row]
-      const desc = sb.imagePrompt || sb.description || sb.title || `shot ${sb.storyboardNumber || row + 1}`
+    const cells = plan.map((p) => {
+      const sb = storyboards[p.shotIndex]
+      const desc = sb.imagePrompt || sb.description || sb.title || `shot ${sb.storyboardNumber || p.shotIndex + 1}`
       const action = sb.action || sb.movement || ''
       const refs = buildStoryboardReferenceHints(sb, referenceAssets, storyboardCharacterIds)
-      const frameHint = isFirst
+      const frameHint = p.frameType === 'first_frame'
         ? 'opening moment'
         : `${action ? `${action}, ` : ''}closing moment, subtle motion change`
-      return `${cellLabel(i, useRows, pairCols)}: ${refs.length ? `参考${refs.join('、')}，` : ''}${desc}, ${frameHint}`
+      return `${cellLabel(p.cellIndex, useRows, pairCols)}: ${refs.length ? `参考${refs.join('、')}，` : ''}${desc}, ${frameHint}`
     })
     return [
       `${useRows}x${pairCols} grid layout, consistent art style, ${style},`,
@@ -287,21 +257,20 @@ function buildGridCellPrompts(
   if (mode === 'first_last') {
     // ★ Sprint 27 Task A: 每行 = 一个镜头的 首帧(左) + 尾帧(右)
     //   第 i 格 → 镜头索引 = floor(i / 2), 首帧 = 偶数格。详见 normalizeGridLayout 的注释。
+    const plan = buildFirstLastCellPlan(rows, storyboards.length)
+    const useRows = Math.max(...plan.map(p => p.row)) + 1
     const pairCols = 2
-    const useRows = Math.min(rows, storyboards.length)
-    return Array.from({ length: useRows * pairCols }, (_, i) => {
-      const row = Math.floor(i / pairCols)
-      const isFirst = i % pairCols === 0
-      const sb = storyboards[row]
+    return plan.map((p) => {
+      const sb = storyboards[p.shotIndex]
       const desc = sb.imagePrompt || sb.description || sb.title || `shot ${sb.storyboardNumber || ''}`
       const motion = sb.action || sb.movement || ''
       const refs = buildStoryboardReferenceHints(sb, referenceAssets, storyboardCharacterIds)
       return {
         shot_number: sb.storyboardNumber,
-        frame_type: isFirst ? 'first_frame' : 'last_frame',
-        prompt: isFirst
-          ? `${cellLabel(i, useRows, pairCols)}，首帧：${refs.length ? `参考${refs.join('、')}，` : ''}${desc}${sb.location ? `, ${sb.location}` : ''}${sb.shotType ? `, ${sb.shotType}` : ''}`
-          : `${cellLabel(i, useRows, pairCols)}，尾帧：${refs.length ? `参考${refs.join('、')}，` : ''}${desc}${motion ? `, ${motion}` : ''}${sb.location ? `, ${sb.location}` : ''}${sb.shotType ? `, ${sb.shotType}` : ''}`,
+        frame_type: p.frameType,
+        prompt: p.frameType === 'first_frame'
+          ? `${cellLabel(p.cellIndex, useRows, pairCols)}，首帧：${refs.length ? `参考${refs.join('、')}，` : ''}${desc}${sb.location ? `, ${sb.location}` : ''}${sb.shotType ? `, ${sb.shotType}` : ''}`
+          : `${cellLabel(p.cellIndex, useRows, pairCols)}，尾帧：${refs.length ? `参考${refs.join('、')}，` : ''}${desc}${motion ? `, ${motion}` : ''}${sb.location ? `, ${sb.location}` : ''}${sb.shotType ? `, ${sb.shotType}` : ''}`,
       }
     })
   }
@@ -545,6 +514,9 @@ app.post('/generate', async (c) => {
     cols,
     mode = 'first_frame', // first_frame | first_last | multi_ref
     custom_prompt,
+    // ★ Sprint 25 fix_2 (PM msg-20261027-127): 用户在宫格工具里选的生图模型配置
+    //   不给 = 用 active 的默认生图配置 (跟原来行为一致)
+    image_config_id,
   } = body
 
   if (!storyboard_ids?.length) return badRequest(c, 'storyboard_ids required')
@@ -603,6 +575,8 @@ app.post('/generate', async (c) => {
       size,
       frameType: `grid_${mode}_${actualRows}x${actualCols}`,
       referenceImages,
+      // ★ Sprint 25 fix_2: 真正把用户选的生图配置传下去 (之前没传 → 宫格永远用默认配置)
+      configId: image_config_id ? Number(image_config_id) : undefined,
     })
 
     logTaskProgress('GridGenerate', 'reference-images', {
@@ -623,6 +597,7 @@ app.post('/generate', async (c) => {
       storyboard_ids: storyboard_ids,
       size,
       frameType: `grid_${mode}_${actualRows}x${actualCols}`,
+      imageConfigId: image_config_id ? Number(image_config_id) : null,
       referenceImages,
       prompt,
       cellPrompts: buildGridCellPrompts(mode, storyboards, actualRows, actualCols, referenceAssets),

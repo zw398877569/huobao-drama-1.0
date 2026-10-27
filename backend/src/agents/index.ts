@@ -865,7 +865,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   mode=\`first_last\` (首尾帧节奏宫格)
     - 触发:user 说"首尾帧" / "节奏感" / "运动轨迹" / "动态对比"
     - 用途:展示同一镜头的起止状态,辅助视频生成时对齐
-    - cell_prompts 奇数格 first_frame + 偶数格 last_frame(交替)
+    - ★ cell_prompts 必须【同一镜头的首帧和尾帧成对相邻】: 每行放一个镜头, 左边=首帧, 右边=尾帧
+      (第1行=镜头1的首帧+尾帧, 第2行=镜头2的首帧+尾帧, ...)
+    - ★ 【不要】写成"全格交替"(奇数格首帧/偶数格尾帧) —— 那样每个镜头只拿到 1 格,
+      镜头1 永远拿不到自己的尾帧, 首尾帧配对根本不成立 (Sprint 27 要修的就是这个)
 
   mode=\`multi_ref\` (同一镜头的多角度宫格)
     - 触发:user 说"多角度" / "多视角" / "同一镜头不同角度" / "参考图"

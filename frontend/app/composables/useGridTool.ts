@@ -9,6 +9,12 @@ type Deps = {
     dramaId: number
   },
   refresh: () => Promise<void>,
+  /**
+   * ★ Sprint 25 fix_2 (PM msg-20261027-127): 宫格工具选中的生图模型配置。
+   *   格式跟其它生图入口一样是 "configId:modelName" 复合值 (页面侧的 imageConfigIds['grid'])。
+   *   不给 = 用默认的 active 生图配置 (跟原来行为一致)。
+   */
+  gridImageConfigId?: Ref<string | null>
 }
 
 export function useGridTool(deps: Deps) {
@@ -387,6 +393,14 @@ export function useGridTool(deps: Deps) {
     }
   }
 
+  /** ★ Sprint 25 fix_2: 从 "configId:modelName" 复合值里取 configId */
+  function gridSelectedImageConfigId(): number | undefined {
+    const raw = deps.gridImageConfigId?.value
+    if (!raw) return undefined
+    const id = Number(String(raw).split(':')[0])
+    return Number.isFinite(id) && id > 0 ? id : undefined
+  }
+
   async function startGridGen() {
     let rows, cols, ids
     if (gridMode.value === 'multi_ref') {
@@ -410,6 +424,8 @@ export function useGridTool(deps: Deps) {
         cols,
         mode: gridMode.value,
         custom_prompt: gridPromptText.value || undefined,
+        // ★ Sprint 25 fix_2: 真正把用户选的生图配置传给后端 (之前只是前端存着, 生图永远用默认配置)
+        image_config_id: gridSelectedImageConfigId(),
       })
       gridGenId.value = res.image_generation_id
       gridActualLayout.value = res.grid || { rows, cols }

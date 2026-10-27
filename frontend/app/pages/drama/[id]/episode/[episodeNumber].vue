@@ -1420,6 +1420,15 @@
                     <div style="align-self:flex-end" v-if="gridMode !== 'multi_ref'">
                       <button class="btn btn-sm" @click="gridSelectAll">{{ (gridSelected?.length ?? 0) === (sbs?.length ?? 0) ? '取消全选' : '全选' }}</button>
                     </div>
+                    <!-- ★ Sprint 25 fix_2 (PM msg-20261027-127): 宫格图工具的生图模型选择器
+                         (之前没有, 宫格图只能用默认配置; 别的四个生图入口都有) -->
+                    <div style="align-self:flex-end">
+                      <button class="btn btn-sm model-btn" @click="modelPopoverTab = modelPopoverTab === 'grid' ? null : 'grid'" :title="'切换图片模型: ' + gridModelLabel">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        {{ gridModelLabel }}
+                      </button>
+                      <span v-if="imageConfigIds['grid']" class="tag" style="font-size:10px">自定义</span>
+                    </div>
                   </div>
 
                   <div class="grid-pick-list">
@@ -2308,6 +2317,8 @@ const {
 } = useGridTool({
   ctx: { sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
   refresh,
+  // ★ Sprint 25 fix_2: 宫格图工具选的生图模型配置 (复用页面侧的 imageConfigIds['grid'])
+  gridImageConfigId: computed(() => imageConfigIds.value['grid'] ?? null),
 })
 
 
@@ -2426,6 +2437,26 @@ const videoModelPopoverOpen = ref(false)
 const modelPopoverTab = ref<string | null>(null)
 
 // 获取当前选中模型的显示标签
+// ★ Sprint 25 fix_2: 宫格图工具的生图模型标签 (跟 currentModelLabel 同口径, 只是取 imageConfigIds['grid'])
+const gridModelLabel = computed(() => {
+  const stored = imageConfigIds.value['grid']
+  if (!stored) return lockedImageConfigLabel.value || '未配置'
+  const configId = parseModelValue(stored)
+  if (!configId) return '未配置'
+  const cfg = imageConfigs.value.find(c => c.id === configId)
+  if (!cfg) return '未配置'
+  let modelStr = ''
+  if (Array.isArray(cfg.model)) {
+    modelStr = cfg.model[0] || ''
+  } else {
+    try {
+      const m = JSON.parse(cfg.model || '[]')
+      modelStr = Array.isArray(m) ? (m[0] || '') : (m || '')
+    } catch { modelStr = cfg.model || '' }
+  }
+  return modelStr || cfg.name
+})
+
 const currentModelLabel = computed(() => {
   const stored = imageConfigIds.value[prodTab.value]
   if (!stored) return lockedImageConfigLabel.value || '未配置'

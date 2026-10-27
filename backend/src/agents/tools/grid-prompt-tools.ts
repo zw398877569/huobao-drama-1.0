@@ -7,6 +7,7 @@
  * 2. 场景图片提示词
  * 3. 宫格图提示词
  */
+import { buildFirstLastCellPlan } from '../../utils/grid-layout.js'
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, schema } from '../../db/index'
@@ -185,19 +186,26 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       }
 
       if (mode === 'first_last') {
-        const cellPrompts = []
-        for (let i = 0; i < totalCells; i++) {
-          const s = shots[i % shots.length]
-          const isFirst = i % 2 === 0
-          cellPrompts.push({
+        // ★ Sprint 27 Task A follow-up (PM msg-20261027-127): 同一镜头的首尾帧必须【同行相邻成对】。
+        //   原来这里是 shots[i % shots.length] + i % 2 (格子序号当镜头索引 + 奇偶交替)
+        //   → 【每个镜头只拿 1 格, 不是首+尾两格】, 镜头1 永远拿不到它的尾帧
+        //   (而镜头1 是空镜, 尾帧『走廊尽头 501 门』正是承接镜头2 的关键构图)。
+        //   而且这里跟 routes/grid.ts 的 fallback 路径【算法不一致】→
+        //   同一个响应里, 格子卡片是交替的、LLM 自己写的参考图映射是成对的 → 用户看到矛盾。
+        //   → 现在两边统一走 backend/src/utils/grid-layout.ts 的共享实现。
+        const plan = buildFirstLastCellPlan(rows, shots.length)
+        const useRows = Math.max(...plan.map(p => p.row)) + 1
+        const cellPrompts = plan.map((p) => {
+          const s = shots[p.shotIndex]
+          return {
             shot_number: s.shot_number,
-            frame_type: isFirst ? 'first_frame' : 'last_frame',
-            prompt: isFirst
-              ? `格${i + 1}：${reference_legend ? `参考${reference_legend}，` : ''}${s.description}${s.location ? `, ${s.location}` : ''}${s.shot_type ? `, ${s.shot_type}` : ''}, opening scene`
-              : `格${i + 1}：${reference_legend ? `参考${reference_legend}，` : ''}${s.description}${s.location ? `, ${s.location}` : ''}${s.shot_type ? `, ${s.shot_type}` : ''}, ending scene, continuous motion`,
-          })
-        }
-        const gridPrompt = `${rows}x${cols} grid layout, exactly ${totalCells} visible panels, consistent art style, cinematic quality, ${legendPrefix}${shots.map(s => s.description).join(' | ')}, no merged panels, no missing panels, no text, no watermark`
+            frame_type: p.frameType,
+            prompt: p.frameType === 'first_frame'
+              ? `格${p.cellIndex + 1}：${reference_legend ? `参考${reference_legend}，` : ''}${s.description}${s.location ? `, ${s.location}` : ''}${s.shot_type ? `, ${s.shot_type}` : ''}, opening scene`
+              : `格${p.cellIndex + 1}：${reference_legend ? `参考${reference_legend}，` : ''}${s.description}${s.location ? `, ${s.location}` : ''}${s.shot_type ? `, ${s.shot_type}` : ''}, ending scene, continuous motion`,
+          }
+        })
+        const gridPrompt = `${useRows}x2 grid layout, exactly ${plan.length} visible panels, consistent art style, cinematic quality, ${legendPrefix}${shots.slice(0, useRows).map(s => s.description).join(' | ')}, every row shows the opening moment on the left and the closing moment on the right of the SAME shot, no merged panels, no missing panels, no text, no watermark`
         return { grid_prompt: gridPrompt, cell_prompts: cellPrompts }
       }
 
