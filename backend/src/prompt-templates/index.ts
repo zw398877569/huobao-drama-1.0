@@ -14,11 +14,20 @@ import { generalTemplate } from './general.js'
 import { minimaxH3Template } from './minimax-h3.js'
 import type { PromptTemplate } from './types.js'
 
-export const DEFAULT_TEMPLATE_ID = 'general'
+/**
+ * 默认 prompt 模板 —— PM 2026-10-27 拍板 (msg-20261027-112): 从 'general' 改成 'minimax-h3'。
+ * general 模板【保留】—— 用户仍可在分步拆解向导里手动切回「通用」。
+ *
+ * ⚠️ 光改这里【不够】: episodes.prompt_template 列是 TEXT NOT NULL DEFAULT 'general',
+ *    新建 episode 时数据库默认值会先落库 → getEpisodeTemplateId 读到的是 'general'。
+ *    所以新建路径 (routes/episodes.ts + routes/dramas.ts) 必须显式写这个默认值,
+ *    列默认值 (db/schema.ts + db/index.ts 的 ensureColumn) 也要同步改 —— 见 112 单 handoff。
+ */
+export const DEFAULT_TEMPLATE_ID = 'minimax-h3'
 
 const registry = new Map<string, PromptTemplate>()
 registry.set(generalTemplate.id, generalTemplate)
-// Sprint 23 Task A: MiniMax H3 官方格式模板 (用户手动切换, 默认仍是 general)
+// Sprint 23 Task A: MiniMax H3 官方格式模板 (★ Sprint 25: 已是默认模板, general 保留可手动切回)
 registry.set(minimaxH3Template.id, minimaxH3Template)
 
 export function listTemplates(): PromptTemplate[] {

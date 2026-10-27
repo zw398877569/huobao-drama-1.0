@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { eq, isNull, like, desc } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { getActiveVideoConfigLabel } from '../services/ai.js'
@@ -82,6 +83,8 @@ app.post('/', async (c) => {
       episodeNumber: i,
       title: `第${i}集`,
       status: 'draft',
+      // ★ Sprint 25 (PM msg-20261027-112): 新建 drama 的默认 episode 模板 = H3 (同上, 必须显式写)
+      promptTemplate: DEFAULT_TEMPLATE_ID,
       createdAt: ts,
       updatedAt: ts,
     }).run()
@@ -189,6 +192,8 @@ app.put('/:id/episodes', async (c) => {
         dramaId,
         episodeNumber: ep.episode_number || ep.episodeNumber || 1,
         title: ep.title || '未命名',
+        // ★ Sprint 25: 批量新建 episode 时也要显式写默认模板 (同上)
+        promptTemplate: (ep.prompt_template ? String(ep.prompt_template).trim() : '') || DEFAULT_TEMPLATE_ID,
         createdAt: ts,
         updatedAt: ts,
       })

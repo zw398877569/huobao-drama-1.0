@@ -54,7 +54,10 @@ export const episodes = sqliteTable('episodes', {
   //   'general' = 现有通用模板 (默认, 行为跟重构前一致); Sprint 20 在此基础上加 H3 官方模板。
   //   迁移走 db/index.ts 的 ensureColumn 幂等加列 (TEXT NOT NULL DEFAULT 'general'),
   //   SQLite 加列时用 DEFAULT 填已有行, 老 episode 不会失败。
-  promptTemplate: text('prompt_template').notNull().default('general'),
+  // ★ Sprint 25 (PM msg-20261027-112): 默认值 'general' → 'minimax-h3' (PM 拍板默认模板换 H3)。
+  //   ⚠️ 老库 (已建过这一列) 的默认值烤在 sqlite_master 里, 改这里只影响新装;
+  //     老库靠【新建 episode 的插入路径显式写 DEFAULT_TEMPLATE_ID】保证 (见 routes/episodes.ts)。
+  promptTemplate: text('prompt_template').notNull().default('minimax-h3'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

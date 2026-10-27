@@ -60,7 +60,7 @@ export interface ShotDetailsItem {
 
 /** Sprint 23 Task D: 可选的 prompt 模板 (后端 prompt-templates 注册表) */
 export const PROMPT_TEMPLATES = [
-  { id: 'general', name: '通用', hint: '现有分镜拆解逻辑 (默认, 行为不变)' },
+  { id: 'general', name: '通用', hint: '现有分镜拆解逻辑 (跟重构前逐字一致, 可手动切回)' },
   { id: 'minimax-h3', name: 'MiniMax H3', hint: 'H3 官方四段格式 (subject_definitions / detailed_description / overall_soundscape / non_diegetic_music)' },
 ] as const
 
@@ -101,8 +101,9 @@ export function useStoryboardPlanner(opts: {
     return opts.selectedTextConfigId?.() ?? null
   }
 
-  // Sprint 23 Task D: 当前选中的 prompt 模板 (默认 general —— 用户拍板 D3 默认保持现有行为)
-  const templateId = ref<string>('general')
+  // Sprint 23 Task D: 当前选中的 prompt 模板
+  //   ★ Sprint 25 (PM msg-20261027-112): 默认改成 minimax-h3 (PM 拍板; general 仍可手动切回)
+  const templateId = ref<string>('minimax-h3')
 
   function setTemplateId(id: string) {
     templateId.value = id
@@ -134,7 +135,7 @@ export function useStoryboardPlanner(opts: {
       step2Details.value = s?.step2_details ?? []
       currentStep.value = s?.current_step ?? 0
       // Sprint 23 Task D: 回显本集上次用的模板 (后端 GET planning/state 已返回 templateId)
-      templateId.value = s?.templateId || 'general'
+      templateId.value = s?.templateId || 'minimax-h3'
       const s1Done = !!s?.step1_plan
       const s2Done = !!s?.step2_details
       const s3Done = !!s?.step3_storyboard_ids

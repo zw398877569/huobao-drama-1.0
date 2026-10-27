@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
 
@@ -32,6 +33,10 @@ app.post('/', async (c) => {
     imageConfigId: body.image_config_id,
     videoConfigId: body.video_config_id,
     audioConfigId: body.audio_config_id,
+    // ★ Sprint 25 (PM msg-20261027-112): 新建 episode 的 prompt 模板默认 H3。
+    //   必须【显式写】—— 列是 TEXT NOT NULL DEFAULT 'general', 不写就落到数据库默认值,
+    //   DEFAULT_TEMPLATE_ID 改了也白改 (老库的列默认值烤在 sqlite_master 里, 改不动)。
+    promptTemplate: (body.prompt_template ? String(body.prompt_template).trim() : '') || DEFAULT_TEMPLATE_ID,
     // Step 4.E: schema 列由 Step 3.D 添加 (db/index.ts:41)
     ...(targetDuration != null ? { targetDuration } : {}),
     createdAt: ts,

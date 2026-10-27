@@ -414,7 +414,7 @@ ensureColumn('episodes', 'text_config_id', 'INTEGER')
 // Sprint 19 (PM msg-20261025-082) Task C — episodes.prompt_template (分镜拆解 prompt 模板)
 //   TEXT NOT NULL DEFAULT 'general' —— SQLite 的 ALTER TABLE ADD COLUMN 带 NOT NULL 时必须有
 //   DEFAULT, 已有行会被 DEFAULT 填上, 不会失败 (PM 工单要求 dev 实测确认, 已在 win host 验证)。
-ensureColumn('episodes', 'prompt_template', "TEXT NOT NULL DEFAULT 'general'")
+ensureColumn('episodes', 'prompt_template', "TEXT NOT NULL DEFAULT 'minimax-h3'")  // ★ Sprint 25 (PM msg-20261027-112): 默认模板 general → minimax-h3
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 // P0 Scene Intention: derived from scene_intention agent
