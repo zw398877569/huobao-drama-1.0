@@ -220,6 +220,37 @@ const REWRITE_LEN_RATIO = 1.5
 const REWRITE_LEN_MIN_CAP = 1500
 const REWRITE_LEN_MAX_CAP = 6000
 
+/**
+ * 【改写膨胀观测】(Sprint 25, PM 2026-10-27 拍板: 只观测, 不改输出)
+ *
+ * 背景: 0060bc0 把 rule F 的 240 上限去掉后, 长输入不再被压缩 (实测 2236→239 那种 0.11x 已消失),
+ *   但短输入会被模型【复述式放大】(423→1465 = 3.46x / 106→478 = 4.51x) —— 模型把同一批元素
+ *   换说法说了两三遍, 不是编造, 但复述里夹带编造就有风险。
+ *
+ * ⚠️ 为什么用【长度比】而不是"重复度"指标:
+ *   实测 (2026-10-26/27 flow-log 的 35 个 llm-rewrite-success 样本) —
+ *   模型是【换说法】复述, 词面几乎不重合:
+ *     精确短语重复率: 几乎全是 0 (测不到)
+ *     词级 3-gram Jaccard: 正常样本也有 0.145, 最高那条 0.351 其实是正常的 1.49x → 不可用
+ *     实词 Jaccard: 同样分不开 (正常 0.145 vs 异常 0.146)
+ *   唯一稳定的信号是长度比:
+ *     35 个正常样本全部落在 1.02x ~ 1.54x
+ *     3 个异常样本是 2.25x / 3.46x / 4.51x
+ *   → 阈值 2.0 取自实测 (1.54 与 2.25 之间有大空隙), 并给中英字符密度差留了余量。
+ *
+ * 这条【只告警】: 命中说明"输出比输入长一倍以上", 大概率是模型在复述;
+ *   去重/截断有误伤合法内容的风险, 要动先拿真实样本验证。
+ */
+const REWRITE_EXPANSION_WARN_RATIO = 2.0
+
+function measureRewriteExpansion(text: string, inputLen: number): { outLen: number; ratio: number; phraseCount: number } {
+  const src = String(text || '')
+  const outLen = src.length
+  const ratio = inputLen > 0 ? Math.round((outLen / inputLen) * 100) / 100 : 0
+  const phraseCount = src.split(',').filter((p) => p.trim().length >= 6).length
+  return { outLen, ratio, phraseCount }
+}
+
 export function capRewrittenLength(text: string, inputLen: number): { text: string; capped: boolean; cap: number } {
   const cap = Math.min(
     Math.max(Math.ceil(inputLen * REWRITE_LEN_RATIO), REWRITE_LEN_MIN_CAP),
@@ -357,7 +388,21 @@ const SYSTEM_INSTRUCTION_BASE = [
   //                     (这就是用户 2026-10-09 报的"场景图里有个不存在的人物"的真正根因)
   //     141 → 391 / 165 → 429  模型【不守规矩】, 超限 2.6~2.8 倍
   //   kind 分支 (applyKindConstraint) 只能堵症状 (LLM 输出后追加约束), 被砍掉的信息【补不回来】。
-  'F. Output IN ENGLISH, comma-separated short phrases. Keep every concrete detail of the original description. Do NOT invent elements that are not in the original (no extra people, no extra props, no extra scenery). Output length should be comparable to the input, not capped.',
+  //   ★ Sprint 25 (PM 2026-10-27 拍板): 措辞再收紧一版 —— 0060bc0 去掉了 240 上限,
+  //   但 "Keep every concrete detail" + "comparable to the input" 这两句组合起来 =
+  //   给模型"把每个细节展开写"的许可 → 实测模型把同一批元素换说法复述了两三遍:
+  //     423 → 1465 (3.46x)  scene: "heavy rain pouring diagonally through the open stairwell"
+  //            前后又说了 "cold rain slanting through the open stairwell" /
+  //            "fifth-floor corridor of an old residential building" / "overhead fluorescent lights"
+  //     106  → 478  (4.51x)
+  //   不是编造 (新人/新道具), 是【复述】—— 但复述里夹带编造就有风险
+  //   (088 体检里"场景图里坐着一个吃面的年轻女性"就是那类机制)。
+  //   改法: ① "Rewrite, do NOT expand ... no more, no less" 掐掉扩展许可
+  //        ② "state each element ONLY ONCE" 直接打重复
+  //        ③ 长度方向从"可比"改成"只许短不许长" (shorter is fine, longer is not)
+  //   ★ "Keep every concrete detail" 和 "Do NOT invent elements" 必须保留 —— 那是 0060bc0 的核心,
+  //     丢了就回到老坑 (砍掉 89% / 逼模型编造凑数)。
+  'F. Output IN ENGLISH, comma-separated short phrases. Rewrite, do NOT expand: keep the SAME information as the input, no more, no less. Keep every concrete detail of the original description, but state each element ONLY ONCE - do not restate or rephrase the same element twice. Do NOT invent elements that are not in the original (no extra people, no extra props, no extra scenery). Output length should be close to the input length (shorter is fine, longer is not).',
   'G. Do NOT output explanations, prefixes, quotes, or markdown code blocks. Do NOT output <think> thinking blocks. Output only the rewritten prompt string.',
   // 2026-09-25 PM msg-20260924-006 (Q5 task_A): 加显式指令, 防 MiniMax-M3 中转站禁不掉 thinking block 时输出空
   'IMPORTANT: Output ONLY the rewritten prompt string. NO thinking, NO explanation, NO analysis. Even if thinking block is forced, the FINAL ANSWER must be a complete rewritten prompt.',
@@ -565,6 +610,25 @@ async function attemptSanitizerLLM(url: string, config: any, rawPrompt: string, 
       outLen: rewritten.length,
       rewritten,
     })
+    // ★ Sprint 25 (PM 2026-10-27): 膨胀观测 —— 只告警, 不改输出。
+    //   规则 F 的措辞已收紧 (Rewrite, do NOT expand / state each element ONLY ONCE),
+    //   但 LLM 不 100% 听话 → 这里留一道信号, 命中就能一眼看出"这次改写是不是在复述"。
+    {
+      const expansion = measureRewriteExpansion(rewritten, rawPrompt.length)
+      if (expansion.ratio > REWRITE_EXPANSION_WARN_RATIO) {
+        logTaskWarn('PromptSanitizer', 'llm-rewrite-expanded', {
+          attempt,
+          configSource,
+          provider: config.provider,
+          inLen: rawPrompt.length,
+          outLen: expansion.outLen,
+          ratio: expansion.ratio,
+          phraseCount: expansion.phraseCount,
+          preview: rewritten.slice(0, 160),
+          hint: '改写输出比输入长一倍以上 —— 模型可能在复述同一批元素 (不是编造); 本条只告警不改输出, 核对同批次的 llm-rewrite-success.rewritten 全文',
+        })
+      }
+    }
     const polished = sanitizeImagePromptLocal(rewritten)
     if (polished !== rewritten) {
       logTaskProgress('PromptSanitizer', 'llm-output-polished', {
