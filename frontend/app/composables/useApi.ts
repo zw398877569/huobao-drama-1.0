@@ -58,6 +58,10 @@ export const episodeAPI = {
   props: (id: number) => api.get(`/episodes/${id}/props`),
   storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
   pipelineStatus: (id: number) => api.get(`/episodes/${id}/pipeline-status`),
+  // ★ Sprint 26 Task B: 删除前的规模统计 (确认框显示 N 分镜 / M 图 / K 视频)
+  stats: (id: number) => api.get(`/episodes/${id}/stats`),
+  // ★ Sprint 26 Task B: 剧集软删 (后端只打 deleted_at 标记, 数据保留)
+  remove: (id: number) => api.delete(`/episodes/${id}`),
 }
 
 export const storyboardAPI = {

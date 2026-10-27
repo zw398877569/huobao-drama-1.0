@@ -130,9 +130,65 @@ app.put('/:id', async (c) => {
   return success(c)
 })
 
+/**
+ * 取 episode —— 已软删的当【不存在】(Sprint 26 Task B, PM msg-20261027-121)
+ *
+ * ★ episodes 表本来就有 deleted_at 列 (schema + 用户的库里都有), 只是从来没启用过软删逻辑。
+ *   这里开始启用它: 非空 = 已删除 → 所有按 episodeId 查的接口都要当它不存在。
+ */
+function getActiveEpisode(episodeId: number) {
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep || ep.deletedAt) return null
+  return ep
+}
+
+// GET /episodes/:id/stats — 删除前的规模统计 (Sprint 26 Task B)
+//   给前端的二次确认框用: 让用户知道删的是什么规模。
+//   ⚠️ 走【预查】而不是 DELETE 的响应 —— 确认框在删除【之前】弹, DELETE 的返回已经晚了。
+app.get('/:id/stats', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const ep = getActiveEpisode(episodeId)
+  if (!ep) return notFound(c, 'Episode not found')
+
+  const sbs = db.select().from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, episodeId)).all()
+  const sbIds = sbs.map(s => s.id)
+  // 图片数口径: 该集分镜里【已经产出图】的数量 (首帧/尾帧任一非空)。
+  //   不用 image_generations 的记录数 —— 那会把废弃的重新生成版本也算进去, 数字偏大。
+  const imageCount = sbs.filter(s => !!(s.firstFrameImage || s.lastFrameImage)).length
+  const videoCount = sbIds.length
+    ? db.select().from(schema.videoGenerations)
+      .where(inArray(schema.videoGenerations.storyboardId, sbIds)).all().length
+    : 0
+
+  return success(c, {
+    episode_id: episodeId,
+    episode_title: ep.title,
+    storyboard_count: sbs.length,
+    image_count: imageCount,
+    video_count: videoCount,
+  })
+})
+
+// DELETE /episodes/:id — 软删 (Sprint 26 Task B)
+//   照抄 dramas.ts:156 的做法: 只打 deletedAt 标记, 【不删】storyboards / 图片 / 视频 / 磁盘文件。
+//   删一集连带毁掉 N 个分镜 + 图片 + 视频, 不可恢复风险太大 → 软删, 跟 drama 保持一致。
+app.delete('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, id)).all()
+  if (!ep) return notFound(c, 'Episode not found')
+  if (ep.deletedAt) return success(c, { id, already_deleted: true })
+  await db.update(schema.episodes)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(schema.episodes.id, id))
+    .run()
+  return success(c, { id })
+})
+
 // GET /episodes/:id/characters — characters linked to this episode
 app.get('/:id/characters', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  if (!getActiveEpisode(episodeId)) return notFound(c, 'Episode not found')
   const links = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
   const charIds = links.map(l => l.characterId)
@@ -145,6 +201,7 @@ app.get('/:id/characters', async (c) => {
 // GET /episodes/:id/scenes — scenes linked to this episode
 app.get('/:id/scenes', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  if (!getActiveEpisode(episodeId)) return notFound(c, 'Episode not found')
   const links = db.select().from(schema.episodeScenes)
     .where(eq(schema.episodeScenes.episodeId, episodeId)).all()
   const sceneIds = links.map(l => l.sceneId)
@@ -159,6 +216,7 @@ app.get('/:id/scenes', async (c) => {
 //   排序: critical > major > minor (剧情重要性)
 app.get('/:id/props', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  if (!getActiveEpisode(episodeId)) return notFound(c, 'Episode not found')
   const links = db.select().from(schema.episodeProps)
     .where(eq(schema.episodeProps.episodeId, episodeId)).all()
   if (!links.length) return success(c, [])
@@ -189,6 +247,7 @@ app.get('/:id/props', async (c) => {
 // GET /episodes/:episode_id/storyboards
 app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
+  if (!getActiveEpisode(episodeId)) return notFound(c, 'Episode not found')
   // 2026-09-10: 查询时按 storyboardNumber 去重, 同一 episode 下保留 id 最大(最新)的一条,
   // 避免反复拆解/重新生成本镜头时数据库残留重复 storyboard_number 记录, 导致
   // 前端配音列表里出现两条相同 # 编号。
@@ -227,7 +286,7 @@ app.get('/:episode_id/storyboards', async (c) => {
 // GET /episodes/:id/pipeline-status — 流水线进度
 app.get('/:id/pipeline-status', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  const ep = getActiveEpisode(episodeId)
   if (!ep) return notFound(c, 'Episode not found')
 
   const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()

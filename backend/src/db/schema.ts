@@ -60,7 +60,11 @@ export const episodes = sqliteTable('episodes', {
   promptTemplate: text('prompt_template').notNull().default('minimax-h3'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
+  // ★ Sprint 26 Task B (PM msg-20261027-121): 剧集软删 (跟 drama 一致)
+  //   非空 = 已删除, 查询时一律过滤 (软删 = 标记 + 列表隐藏, 磁盘文件不清理)。
+  //   迁移走 db/index.ts 的 ensureColumn 幂等加列 (老库加列时已有行填 NULL = 未删除)。
   deletedAt: text('deleted_at'),
+
 })
 
 export const characters = sqliteTable('characters', {

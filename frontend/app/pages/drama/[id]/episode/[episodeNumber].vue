@@ -2554,10 +2554,23 @@ onBeforeUnmount(() => {
 // Script step navigation
 
 
+// ★ Sprint 26 Task B: 已删集提示只弹一次 (refresh 会被多次调用)
+const episodeDeletedNotified = ref(false)
+
 async function refresh() {
   try {
     drama.value = await dramaAPI.get(dramaId)
     const ep = drama.value.episodes?.find(e => (e.episode_number || e.episodeNumber) === episodeNumber)
+    if (!ep && Array.isArray(drama.value?.episodes)) {
+      // ★ Sprint 26 Task B: 这一集被软删了 (已删集不在 GET /dramas/:id 的 episodes 数组里)。
+      //   原来这里直接往下走 → ep.id 是 undefined → 后面 4 个接口全炸 → 白屏。
+      if (!episodeDeletedNotified.value) {
+        episodeDeletedNotified.value = true
+        toast.error('该剧集已被删除')
+        await navigateTo(`/drama/${dramaId}`)
+      }
+      return
+    }
     if (ep) {
       episode.value = ep
       // 2026-09-10 review: 4 个端点并行 (Promise.allSettled) 而不是串行

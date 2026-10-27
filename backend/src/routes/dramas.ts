@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq, isNull, like, desc } from 'drizzle-orm'
+import { eq, and, isNull, like, desc } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
@@ -28,8 +28,9 @@ app.get('/', async (c) => {
 
   // Attach episode/character/scene counts
   const enriched = await Promise.all(items.map(async (drama) => {
+    // ★ Sprint 26 Task B: 过滤已软删的剧集 (否则删掉的集还显示在剧集列表里 = 删除没生效)
     const eps = await db.select().from(schema.episodes)
-      .where(eq(schema.episodes.dramaId, drama.id))
+      .where(and(eq(schema.episodes.dramaId, drama.id), isNull(schema.episodes.deletedAt)))
     const chars = await db.select().from(schema.characters)
       .where(eq(schema.characters.dramaId, drama.id))
     const scns = await db.select().from(schema.scenes)
@@ -112,8 +113,9 @@ app.get('/:id', async (c) => {
   const [drama] = await db.select().from(schema.dramas).where(eq(schema.dramas.id, id))
   if (!drama) return notFound(c, '剧本不存在')
 
+  // ★ Sprint 26 Task B: 同样过滤已软删的剧集
   const eps = await db.select().from(schema.episodes)
-    .where(eq(schema.episodes.dramaId, id))
+    .where(and(eq(schema.episodes.dramaId, id), isNull(schema.episodes.deletedAt)))
   const chars = await db.select().from(schema.characters)
     .where(eq(schema.characters.dramaId, id))
   const scns = await db.select().from(schema.scenes)

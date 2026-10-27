@@ -547,6 +547,8 @@ ensureColumn('cron_runs', 'output_full', 'TEXT')
 //   存 3 步 endpoint 中间态 JSON (step1 plan + step2 details),
 //   失败可从中间态恢复, 不需要重跑 LLM. 老 episode NULL 兼容 (老 endpoint 走 V3 拼接逻辑, 0 兼容成本).
 ensureColumn('episodes', 'planning_data', 'TEXT')
+// ★ Sprint 26 Task B (PM msg-20261027-121): 剧集软删标记列 (加列时已有行填 NULL = 未删除)
+ensureColumn('episodes', 'deleted_at', 'TEXT')
 export const db = drizzle(sqlite, { schema })
 export { schema }
 export type DB = typeof db

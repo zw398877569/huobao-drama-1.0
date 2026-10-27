@@ -71,6 +71,16 @@
             <span v-if="ep.duration" class="ep-duration">{{ ep.duration }}s</span>
           </div>
         </div>
+        <!-- ★ Sprint 26 Task B: 删除本集 (hover 才显现; @click.stop 阻止冒泡, 不触发整行跳转) -->
+        <button
+          class="ep-delete"
+          :title="`删除 E${String(ep.episode_number || ep.episodeNumber).padStart(2, '0')}`"
+          @click.stop="deleteEpisode(ep)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+          </svg>
+        </button>
         <div class="ep-arrow">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="9 18 15 12 9 6"/>
@@ -276,6 +286,42 @@ const newEpisodeTargetDuration = ref(100)  // 默认 100s (后端 DEFAULT_EPISOD
 const estimatingTarget = ref(false)
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
+
+/**
+ * ★ Sprint 26 Task B (PM msg-20261027-121): 删除剧集 (软删)
+ *
+ * 流程: 先 GET /episodes/:id/stats 拿规模 → 二次确认框显示 N 分镜 / M 图 / K 视频
+ *   → 用户确认 → DELETE /episodes/:id (后端只打 deleted_at 标记, 数据保留在库中)
+ *   → 刷新剧集列表 (后端已过滤 deleted_at → 这集从列表消失)。
+ * ⚠️ 统计走【预查】而不是 DELETE 的响应 —— 确认框在删除【之前】弹, DELETE 返回时已经晚了。
+ */
+async function deleteEpisode(ep) {
+  if (!ep?.id) return
+  let stats = null
+  try {
+    stats = await episodeAPI.stats(ep.id)
+  } catch (e) {
+    toast.error(e?.message || '获取剧集信息失败')
+    return
+  }
+  const num = String(ep.episode_number || ep.episodeNumber).padStart(2, '0')
+  const title = ep.title || `第${num}集`
+  const msg = [
+    `确定删除「E${num} ${title}」？`,
+    '',
+    `将删除 ${stats?.storyboard_count ?? 0} 个分镜 / ${stats?.image_count ?? 0} 张图片 / ${stats?.video_count ?? 0} 个视频。`,
+    '',
+    '该集将从列表中移除（数据仍保留在数据库中，但界面上无法再访问）。',
+  ].join('\n')
+  if (!confirm(msg)) return
+  try {
+    await episodeAPI.remove(ep.id)
+    toast.success(`已删除 E${num} ${title}`)
+    await load()
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
+}
 
 function configLabel(config) {
   if (!config) return ''
@@ -519,6 +565,25 @@ onMounted(() => { load(); loadConfigs() })
   box-shadow: var(--shadow);
   transform: translateX(4px);
 }
+
+/* ★ Sprint 26 Task B: 剧集删除按钮 —— 默认完全透明且不可点 (避免误触), hover 卡片时才出现 */
+.ep-delete {
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+.ep-card:hover .ep-delete { opacity: 1; pointer-events: auto; }
+.ep-delete:hover { color: #e5534b; border-color: var(--border); background: var(--bg-2); }
+.ep-delete:focus-visible { opacity: 1; pointer-events: auto; outline: 1px solid var(--accent); }
 
 .ep-number {
   width: 44px; height: 44px; flex-shrink: 0;
