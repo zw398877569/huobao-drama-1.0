@@ -49,12 +49,32 @@ export function useGridTool(deps: Deps) {
 
   const gridStorageKey = computed(() => `huobao:grid:${deps.ctx.dramaId}:${ctx.epId.value || 0}`)
 
-  const gridLayoutOptions = [
-    { label: '2x2', value: '2x2' },
-    { label: '3x3', value: '3x3' },
-    { label: '4x4', value: '4x4' },
-    { label: '5x5', value: '5x5' },
-  ]
+  // ★ Sprint 27 Task A (PM msg-20261020-122): first_last 模式的宫格【固定 2 列】
+  //   (每行 = 一个镜头的 首帧 + 尾帧) → 布局选项变成「N 行」(N = 能放下的镜头数),
+  //   免得用户看到 '3x3' 以为能放 9 个镜头 (实际是 3 个镜头的首尾对)。
+  const gridLayoutOptions = computed(() => {
+    if (gridMode.value === 'first_last') {
+      return [2, 3, 4, 5].map(r => ({ label: `${r} 行`, value: `${r}x2` }))
+    }
+    return [
+      { label: '2x2', value: '2x2' },
+      { label: '3x3', value: '3x3' },
+      { label: '4x4', value: '4x4' },
+      { label: '5x5', value: '5x5' },
+    ]
+  })
+
+  // ★ Sprint 27 Task A: 切模式时把 layout 值改成对应形态
+  //   (first_last 用 'Nx2', 其它模式用 'NxN' —— 否则下拉框会显示空值)
+  watch(gridMode, (m) => {
+    const [r, c] = String(gridLayout.value || '3x3').split('x').map(Number)
+    const n = r || 3
+    if (m === 'first_last') {
+      if (c !== 2) gridLayout.value = `${n}x2`
+    } else if (c === 2) {
+      gridLayout.value = `${n}x${n}`
+    }
+  })
 
   // desc 第一句 = 它是什么;第二句 = 什么时候用。新手最常选错 multi_ref,所以这条提示最显眼。
   const gridModes = [
@@ -84,7 +104,9 @@ export function useGridTool(deps: Deps) {
     const count = gridSelected.value?.length ?? 0
     if (gridMode.value === 'first_last') {
       const { rows, cols } = gridLayoutShape.value
-      return `${count} 个镜头 → ${rows}x${cols} 宫格（按首尾帧风格生成，切分后再手动分配）`
+      const base = `${count} 个镜头 → ${rows} 行 × ${cols} 列宫格（每行一个镜头的首帧 + 尾帧，切分后再手动分配）`
+      // ★ Sprint 27 Task A: 选多了要【明确提示只生成前 N 个】, 不能静默截断
+      return count > rows ? `${base}；当前布局最多容纳 ${rows} 个镜头，将只生成前 ${rows} 个` : base
     }
     const { rows, cols } = gridLayoutShape.value
     const cells = rows * cols
@@ -160,6 +182,14 @@ export function useGridTool(deps: Deps) {
   })
 
   const gridAutoLayout = computed(() => gridLayoutShape.value)
+
+  // ★ Sprint 27 Task A: 真正发出去的布局 —— first_last 模式每行 1 个镜头,
+  //   行数 = 放得下的镜头数 (选多了只生成前 N 个, 由 generateGridPrompt 弹 toast 提示)。
+  const gridEffectiveLayout = computed(() => {
+    const { rows, cols } = gridAutoLayout.value
+    if (gridMode.value !== 'first_last') return { rows, cols }
+    return { rows: Math.min(rows, Math.max(gridSelected.value?.length ?? 0, 1)), cols: 2 }
+  })
 
   const gridBlankStyle = computed(() => {
     const { rows, cols } = gridAutoLayout.value
@@ -316,9 +346,17 @@ export function useGridTool(deps: Deps) {
     gridPromptText.value = ''
     gridCellPrompts.value = []
     gridPromptSource.value = ''
+    // ★ Sprint 27 Task A: first_last 模式选多了 → 明确提示只生成前 N 个 (不是静默截断)
+    if (gridMode.value === 'first_last') {
+      const cap = gridLayoutShape.value.rows
+      const cnt = gridSelected.value?.length ?? 0
+      if (cnt > cap) {
+        toast.warning(`当前布局最多容纳 ${cap} 个镜头, 已选 ${cnt} 个, 将只生成前 ${cap} 个`)
+      }
+    }
     try {
       const shotIds = getGridPromptShotIds()
-      const { rows, cols } = gridAutoLayout.value
+      const { rows, cols } = gridEffectiveLayout.value
 
       const res = await gridAPI.prompt({
         storyboard_ids: shotIds,
@@ -354,7 +392,9 @@ export function useGridTool(deps: Deps) {
     if (gridMode.value === 'multi_ref') {
       rows = gridAutoLayout.value.rows; cols = gridAutoLayout.value.cols; ids = [gridSingleTarget.value]
     } else {
-      rows = gridAutoLayout.value.rows; cols = gridAutoLayout.value.cols; ids = gridSelected.value.slice(0, gridTotalCells.value)
+      // ★ Sprint 27 Task A: 用【生效布局】(first_last 的行数 = 放得下的镜头数, 固定 2 列)
+      rows = gridEffectiveLayout.value.rows; cols = gridEffectiveLayout.value.cols
+      ids = gridSelected.value.slice(0, gridTotalCells.value)
       if (gridMode.value === 'first_last') ids = [...gridSelected.value]
     }
     gridActiveShotIds.value = ids.filter(Boolean)
