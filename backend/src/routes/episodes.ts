@@ -97,6 +97,8 @@ app.post('/estimate-target-duration', async (c) => {
 // PUT /episodes/:id - Update episode fields
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
+  // ★ Sprint 26 Task B follow-up (可选边界 a): 已软删的集当不存在 —— 不允许再改名/改配置。
+  if (!getActiveEpisode(id)) return notFound(c, 'Episode not found')
   const body = await c.req.json()
 
   // Step 4.E: target_duration 加入允许字段 (UI 编辑 episode 也可改)
@@ -131,6 +133,24 @@ app.put('/:id', async (c) => {
 })
 
 /**
+ * 同一 episode 下按 storyboard_number 去重 (保留 id 最大的那条)。
+ *
+ * 反复拆解/重新生成本镜头时, 数据库会残留重复 storyboard_number 记录
+ * (GET /episodes/:episode_id/storyboards 原本就有这个去重, 见那里的注释)。
+ * ★ Sprint 26 Task B follow-up (PM msg-20261027-123): stats 接口也必须用同一套去重 ——
+ *   否则确认框里的分镜数会翻倍 (实测 ep4: 原始 84 行 → 实际 42 镜)。
+ * 两处共用这个函数 → 口径永远一致。
+ */
+function dedupeStoryboards<T extends { id: number; storyboardNumber: number }>(rows: T[]): T[] {
+  const dedupeMap = new Map<number, T>()
+  for (const r of rows) {
+    const cur = dedupeMap.get(r.storyboardNumber)
+    if (!cur || r.id > cur.id) dedupeMap.set(r.storyboardNumber, r)
+  }
+  return Array.from(dedupeMap.values()).sort((a, b) => a.storyboardNumber - b.storyboardNumber)
+}
+
+/**
  * 取 episode —— 已软删的当【不存在】(Sprint 26 Task B, PM msg-20261027-121)
  *
  * ★ episodes 表本来就有 deleted_at 列 (schema + 用户的库里都有), 只是从来没启用过软删逻辑。
@@ -150,16 +170,20 @@ app.get('/:id/stats', async (c) => {
   const ep = getActiveEpisode(episodeId)
   if (!ep) return notFound(c, 'Episode not found')
 
-  const sbs = db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId)).all()
-  const sbIds = sbs.map(s => s.id)
-  // 图片数口径: 该集分镜里【已经产出图】的数量 (首帧/尾帧任一非空)。
+  // ★ 先按 storyboard_number 去重 (跟 GET /episodes/:episode_id/storyboards 同一套口径)
+  //   不去重的话, 反复拆解/重新生成残留的重复行会让分镜数翻倍 (实测 ep4: 84 行 → 实际 42 镜)。
+  const sbs = dedupeStoryboards(
+    db.select().from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, episodeId)).all()
+  )
+  // 图片数口径: 该集分镜里【已经产出图】的【镜】数 (首帧/尾帧任一非空)。
   //   不用 image_generations 的记录数 —— 那会把废弃的重新生成版本也算进去, 数字偏大。
   const imageCount = sbs.filter(s => !!(s.firstFrameImage || s.lastFrameImage)).length
-  const videoCount = sbIds.length
-    ? db.select().from(schema.videoGenerations)
-      .where(inArray(schema.videoGenerations.storyboardId, sbIds)).all().length
-    : 0
+  // ★ 视频数口径跟图片数【完全对称】: 同一份去重后的分镜列表里【已经产出视频】的镜数。
+  //   原来用的是 video_generations 的【记录数】(ep17 = 4, 其中 storyboard 910 生成了两次
+  //   —— id 195 @02:08 与 id 197 @03:19, 后者是重新生成) → 与图片数自相矛盾。
+  //   现在跟图片数一样按【实际产出的镜】算 → ep17 = 3。
+  const videoCount = sbs.filter(s => !!(s.videoUrl)).length
 
   return success(c, {
     episode_id: episodeId,
@@ -251,15 +275,11 @@ app.get('/:episode_id/storyboards', async (c) => {
   // 2026-09-10: 查询时按 storyboardNumber 去重, 同一 episode 下保留 id 最大(最新)的一条,
   // 避免反复拆解/重新生成本镜头时数据库残留重复 storyboard_number 记录, 导致
   // 前端配音列表里出现两条相同 # 编号。
-  const allRows = db.select().from(schema.storyboards)
-    .where(eq(schema.storyboards.episodeId, episodeId))
-    .all()
-  const dedupeMap = new Map<number, typeof allRows[number]>()
-  for (const r of allRows) {
-    const cur = dedupeMap.get(r.storyboardNumber)
-    if (!cur || r.id > cur.id) dedupeMap.set(r.storyboardNumber, r)
-  }
-  const rows = Array.from(dedupeMap.values()).sort((a, b) => a.storyboardNumber - b.storyboardNumber)
+  const rows = dedupeStoryboards(
+    db.select().from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, episodeId))
+      .all()
+  )
   const links = db.select().from(schema.storyboardCharacters).all()
   const charIdsByStoryboard = new Map<number, number[]>()
   for (const link of links) {

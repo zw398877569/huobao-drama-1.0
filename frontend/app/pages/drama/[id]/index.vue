@@ -315,7 +315,7 @@ async function deleteEpisode(ep) {
   ].join('\n')
   if (!confirm(msg)) return
   try {
-    await episodeAPI.remove(ep.id)
+    await episodeAPI.del(ep.id)
     toast.success(`已删除 E${num} ${title}`)
     await load()
   } catch (e) {

@@ -61,7 +61,10 @@ export const episodeAPI = {
   // ★ Sprint 26 Task B: 删除前的规模统计 (确认框显示 N 分镜 / M 图 / K 视频)
   stats: (id: number) => api.get(`/episodes/${id}/stats`),
   // ★ Sprint 26 Task B: 剧集软删 (后端只打 deleted_at 标记, 数据保留)
-  remove: (id: number) => api.delete(`/episodes/${id}`),
+  //   ★ 修: 原来写成 api.delete(...) → 封装里根本没有 delete 方法 (只有 api.del)
+  //     → 压缩后报 "t.delete is not a function" → 删除功能完全不可用。
+  //     项目里其它删除 (dramas / storyboards / ai-configs / agent-configs / skills) 全部用 api.del, 这里跟齐。
+  del: (id: number) => api.del(`/episodes/${id}`),
 }
 
 export const storyboardAPI = {
