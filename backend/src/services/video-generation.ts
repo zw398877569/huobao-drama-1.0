@@ -11,6 +11,8 @@ import { checkSceneOpensWithWideShot } from '../utils/prompt-cleanup.js'
 import { getEpisodeTemplate } from '../prompt-templates/index.js'
 // Sprint 23 Task C: 翻译前把 <d>...</d> 对白块脱敏 (保险: 正常路径上对白是翻译后注入的, 这里只防 LLM 自己乱加)
 import { maskDialogueBlocks } from '../utils/dialogue-mask.js'
+// ★ Sprint 29 Task B (PM msg-20261028-129): 保护用户手写中文版里的裸台词
+import { wrapBareDialogue, getStoryboardSpeakerNames } from '../utils/zh-video-prompt.js'
 import { now } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
@@ -309,7 +311,14 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             // Sprint 23 Task C: <d> 对白块脱敏-还原 (PM 决策 1)。
             //   H3 模板的对白是【翻译之后】由代码层注入的, 正常路径这里没有 <d> 块;
             //   这层是保险 —— 防 LLM 自己在 detailed_description 里乱加 <d>[Chinese]…</d> 被翻掉。
-            const dMask = maskDialogueBlocks(promptWithTimeline)
+            // ★ Sprint 29 Task B (PM msg-20261028-129): 用户手写的中文版视频提示词里,
+            //   台词是【裸的】『林达：送单的。』→ 不在翻译器的保护范围 (它只保护 开口:'…' /
+            //   <d>…</d> 形式) → 会被翻成英文 → 成片里角色说英文而配音是中文 → 口型对不上。
+            //   先把台词行包成 <d>[Chinese]…</d> 再走原有的脱敏-还原。
+            //   ★ 自由创作 (isFree) 本来就不翻译, 走不到这里 (用户自己控中英文)。
+            const speakerNames = vRecord.storyboardId ? getStoryboardSpeakerNames(vRecord.storyboardId) : []
+            const wrappedPrompt = wrapBareDialogue(promptWithTimeline, speakerNames)
+            const dMask = maskDialogueBlocks(wrappedPrompt)
             // ★ Sprint 24 fix_1: 按模板的翻译契约走 —— H3 保留官方四段, general 走原三段式 (逐字不变)
             finalPrompt = await translateVideoPromptToEnglish(dMask.text, {
               contract: tpl.generation.videoTranslate,

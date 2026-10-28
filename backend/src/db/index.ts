@@ -485,6 +485,8 @@ ensureColumn('characters', 'permanent_outfit', 'TEXT')
 //   image_prompt_plot_state / video_prompt_plot_state 由 planner agent LLM 在 shot JSON 中填,
 //   拼接 imagePrompt / videoPrompt 时按 permanent + plot_state 两段拼装, 物理隔离防 plot_state 污染 character.appearance_permanent
 ensureColumn('storyboards', 'image_prompt_plot_state', 'TEXT')
+// ★ Sprint 29 Task B (PM msg-20261028-129): 中文版视频提示词列 (加列时已有行填 NULL = 没中文版)
+ensureColumn('storyboards', 'video_prompt_zh', 'TEXT')
 ensureColumn('storyboards', 'video_prompt_plot_state', 'TEXT')
 
 // 2026-10-10 V3 治本 (PM msg-20261010-002) — storyboards 加 image_prompt_permanent 列

@@ -6,10 +6,13 @@ import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
 import { generateTTSForDialogue } from '../services/tts-concat.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
-import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
 import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
+// ★ Sprint 29 Task B (PM msg-20261028-129): 中文版视频提示词 → 翻译回写英文
+import { getEpisodeTemplate } from '../prompt-templates/index.js'
+import { translateZhVideoPrompt, getStoryboardSpeakerNames } from '../utils/zh-video-prompt.js'
 import { autoFillSpeakerFromScript, normalizeDialogueForStorage, parseDialogueSegments } from '../utils/dialogue-parser.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 
@@ -130,6 +133,11 @@ app.put('/:id', async (c) => {
     image_prompt: 'imagePrompt', scene_id: 'sceneId', location: 'location',
     time: 'time', atmosphere: 'atmosphere', result: 'result',
     bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect', scene_intention: 'sceneIntention',
+    // ★ Sprint 29 Task B: 中文版视频提示词 (可编辑可保存, 保存时翻译回写英文)
+    video_prompt_zh: 'videoPromptZh',
+    // ★ Sprint 29: 反向提示词之前【不在白名单里】→ 失焦保存是存不进去的 (工单没提到, 但
+    //   Task A 要求『一次把反向提示词也存了』→ 这里补上)
+    negative_prompt: 'negativePrompt',
   }
 
   const updates: Record<string, any> = { updatedAt: now() }
@@ -165,14 +173,54 @@ app.put('/:id', async (c) => {
     'character_ids' in body ? body.character_ids : getStoryboardCharacterIds(id),
   )
 
+  // ★ Sprint 29 Task B (PM msg-20261028-129): 中文版 → 按【该剧集模板的翻译契约】翻成英文, 写回 video_prompt。
+  //   数据方向 (PM 决策 D3): 中文版 = 源, 英文版 = 翻译产物 → 中文改了, 英文就被译文覆盖。
+  //   ① 中文【没被改动】→ 不触发翻译, 也不覆盖英文框 (只把中文原样存下来)
+  //   ② 翻译失败 → 【不能连带保存失败】: 中文照样存, 英文保持原值不动, 记 warn, 返回给前端提示
+  let zhTranslate: { translated: boolean; skipped?: boolean; error?: string } | null = null
+  if ('video_prompt_zh' in body) {
+    const zh = String(body.video_prompt_zh || '').trim()
+    const old = String(storyboard.videoPromptZh || '').trim()
+    if (zh && zh !== old) {
+      try {
+        const tpl = getEpisodeTemplate(storyboard.episodeId)
+        const contract = (tpl?.generation as any)?.videoTranslate
+        const speakerNames = getStoryboardSpeakerNames(id)
+        const english = await translateZhVideoPrompt(zh, contract, speakerNames)
+        updates.videoPrompt = english
+        zhTranslate = { translated: true }
+        logTaskProgress('StoryboardAPI', 'zh-prompt-translated', {
+          storyboardId: id,
+          templateId: tpl?.id,
+          zhChars: zh.length,
+          enChars: english.length,
+        })
+      } catch (e: any) {
+        logTaskWarn('StoryboardAPI', 'zh-prompt-translate-failed', {
+          storyboardId: id,
+          error: e?.message || String(e),
+          hint: '中文已保存, 翻译成英文失败, 英文未更新',
+        })
+        zhTranslate = { translated: false, error: e?.message || '翻译失败' }
+      }
+    } else {
+      zhTranslate = { translated: false, skipped: true }
+    }
+  }
+
   db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, id)).run()
   if ('character_ids' in body) syncStoryboardCharacters(id, body.character_ids || [])
   logTaskSuccess('StoryboardAPI', 'update', {
     storyboardId: id,
     updatedFields: Object.keys(updates),
     characterIds: body.character_ids,
+    zhTranslate,
   })
-  return success(c)
+  // ★ 把新的英文 prompt 与翻译状态回给前端 (前端要回填英文框 + 决定 toast 文案)
+  return success(c, {
+    video_prompt: (updates.videoPrompt ?? storyboard.videoPrompt ?? '') as string,
+    zh_translate: zhTranslate,
+  })
 })
 
 // POST /storyboards/:id/generate-tts

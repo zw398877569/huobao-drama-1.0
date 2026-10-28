@@ -161,6 +161,10 @@ export const storyboards = sqliteTable('storyboards', {
   //   数据隔离后 LLM 不可能再把 plot_state 误塞进 character.appearance_permanent。
   imagePromptPlotState: text('image_prompt_plot_state'),
   videoPrompt: text('video_prompt'),
+  // ★ Sprint 29 Task B (PM msg-20261028-129): 中文版视频提示词 (可空)。
+  //   数据方向 (PM 决策 D3): 中文版 = 【源】(用户手写微调), 英文版 = 翻译产物。
+  //   视频生成时 prompt 源【中文版优先】(中文版为空 → 用英文版, 行为与改动前逐字一致 = 零回归)。
+  videoPromptZh: text('video_prompt_zh'),
   // shot 视频瞬时剧情态 (PLOT_STATE, 5秒视频窗口内的动作变化)。
   videoPromptPlotState: text('video_prompt_plot_state'),
   // V3 治本核心列 (PM msg-20261010-002): 存结构化 5 维 enum JSON。
