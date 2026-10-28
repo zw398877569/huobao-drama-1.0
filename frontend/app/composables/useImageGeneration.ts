@@ -51,14 +51,70 @@ export function useImageGeneration(deps: Deps) {
     return pendingShotFrameKeys.value.includes(framePendingKey(id, frameType))
   }
 
+  /**
+   * ★ Sprint 28 Task A (PM msg-20261028-128): 参考图的数量上限与优先级。
+   *
+   * 原来是『先来先占, 攒够 6 张就不收了』→ 加了接力图之后, 角色多的镜头会把关键的角色图挤掉
+   * (用户/PM 都点名过这个风险)。改成【按优先级取前 6 张】:
+   *   接力(上一镜末帧) > 角色 > 场景 > 本镜首/尾帧 > 其它参考图
+   * → 角色图(决定脸, 掉了就换脸)优先于场景图(决定空间; 而接力图本身已经提供了空间延续信息)。
+   *   实测: 5 个角色的镜头 = 接力1 + 角色5 = 6 张, 角色图全保住, 只挤掉场景图;
+   *   6 个角色(极端情况)会挤掉 1 张角色图 —— 被挤掉的会 console.warn 出来。
+   */
+  const SHOT_REFERENCE_LIMIT = 6
+
+  /**
+   * ★ 接力图放在参考图数组的第几位: 'first' = 置首 (默认), 'last' = 追加到末尾。
+   *
+   * PM 单里让 dev 实测两种顺序 (A=[上一镜末帧,场景,角色] / B=[场景,角色,上一镜末帧]) 哪个
+   * 『空间延续』更明显 —— 我没法自己跑生图做 A/B 对比 (没有成片判读能力), 所以做成常量:
+   * 实测后改这一行就能切换。
+   *
+   * 默认 'first' 的理由: 用户的核心诉求是【空间连续性】(『两个视频之间毫无关联』『衔接割裂』),
+   * 而 nano-banana 对参考图数组的【第一张】权重最高 (它通常被当作主图);
+   * 过度照抄上一镜的风险, 用 prompt 里的『承接但不要重复』指引来压 (见 buildShotImagePrompt)。
+   */
+  const SHOT_RELAY_REFERENCE_POSITION: 'first' | 'last' = 'first'
+
+  /**
+   * 找到上一镜 (同 episode 内 storyboard_number = 当前 - 1) —— 接力参考的来源。
+   *
+   * ★ Sprint 28 Task A: D2 决策是【全链接力】—— 用户反例『人物从屋内走到屋外, 屋内是一个分镜
+   *   屋外是另一个, 同场景内接力的话这两个分镜割裂感依然很强烈』→ 场景边界 ≠ 叙事断点,
+   *   所以【跨场景也接力】, 只按镜头序号找上一镜, 不看 scene。
+   */
+  function findPrevShot(sb: any) {
+    const num = Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? 0)
+    if (!num) return null
+    return ctx.sbs.value.find((s: any) => {
+      const n = Number(s?.storyboard_number ?? s?.storyboardNumber ?? 0)
+      return n === num - 1
+    }) || null
+  }
+
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
   // 2026-09-18 fix: 加 excludeFirstFrame 参数, 重新生成 first_frame 时不引用旧 first_frame
   //   (避免把"待替换的旧图"作为参考让 LLM 复制旧图的错误)
   function buildShotReferenceAssets(sb: any, excludeFirstFrame = false) {
-    const assets: any[] = []
-    const pushAsset = (asset: any) => {
-      if (!asset?.path || assets.some(a => a.path === asset.path) || (assets?.length ?? 0) >= 6) return
-      assets.push(asset)
+    // ① 先收集候选 (带优先级), 后面统一排序取前 N 张
+    const candidates: Array<{ asset: any; priority: number }> = []
+    const pushAsset = (asset: any, priority: number) => {
+      if (!asset?.path) return
+      if (candidates.some(c => c.asset.path === asset.path)) return
+      candidates.push({ asset, priority })
+    }
+
+    // ★ 接力图 (上一镜末帧) —— 优先级最高
+    const prevShot = findPrevShot(sb)
+    const prevLastFrame = prevShot ? (prevShot.last_frame_image || prevShot.lastFrameImage || null) : null
+    const prevShotNumber = prevShot ? Number(prevShot.storyboard_number ?? prevShot.storyboardNumber ?? 0) : 0
+    if (prevLastFrame) {
+      pushAsset({
+        path: prevLastFrame,
+        kind: 'prev_shot',
+        label: `上一镜#${prevShotNumber}末帧`,
+        prevShotNumber,
+      }, 0)
     }
 
     const sceneId = sb?.scene_id || sb?.sceneId
@@ -68,7 +124,7 @@ export function useImageGeneration(deps: Deps) {
         path: scene.image_url || scene.imageUrl,
         kind: 'scene',
         label: scene.location ? `${scene.location}${scene.time ? `(${scene.time})` : ''}场景` : '场景',
-      })
+      }, 2)
     }
 
     const charIds = sb?.character_ids || sb?.characterIds || []
@@ -83,21 +139,34 @@ export function useImageGeneration(deps: Deps) {
         characterName: char.name,
         // V2 治本 (msg-20261010-001): characters.appearance 列被 DROP, 改读 appearance_permanent (snake/camel 双兼容)
         characterAppearance: ((char as any).appearance_permanent || char.appearancePermanent || char.description || '').trim(),
-      })
-    }
-
-    for (const ref of getRefs(sb)) {
-      pushAsset({ path: ref, kind: 'reference', label: '参考图' })
+      }, 1)
     }
 
     // 重新生成 first_frame 时跳过 first_frame 引用 (避免参考待替换的旧图)
     // last_frame 引用 first_frame 仍合法 (保持视觉连贯)
     const first = excludeFirstFrame ? null : getFirstFrame(sb)
     const last = getLastFrame(sb)
-    if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' })
-    if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' })
+    if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' }, 3)
+    if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' }, 3)
 
-    return assets.map((a, i) => ({ ...a, index: i + 1, imageLabel: `图片${i + 1}` }))
+    for (const ref of getRefs(sb)) {
+      pushAsset({ path: ref, kind: 'reference', label: '参考图' }, 4)
+    }
+
+    // ② 按优先级取前 N 张; ③ 接力图按 SHOT_RELAY_REFERENCE_POSITION 决定置首还是置尾
+    const sorted = candidates.slice().sort((a, b) => a.priority - b.priority)
+    const kept = sorted.slice(0, SHOT_REFERENCE_LIMIT)
+    const dropped = sorted.slice(SHOT_REFERENCE_LIMIT)
+    if (dropped.length) {
+      console.warn('[shot-reference] 超出上限被丢弃:', dropped.map(d => d.asset.kind + ':' + (d.asset.label || '')))
+    }
+    const relay = kept.filter(c => c.asset.kind === 'prev_shot')
+    const rest = kept.filter(c => c.asset.kind !== 'prev_shot')
+    const ordered = SHOT_RELAY_REFERENCE_POSITION === 'first'
+      ? [...relay, ...rest]
+      : [...rest, ...relay]
+
+    return ordered.map((c, i) => ({ ...c.asset, index: i + 1, imageLabel: `图片${i + 1}` }))
   }
 
   // 向后兼容: 保留 getShotReferenceImages,内部走 buildShotReferenceAssets
@@ -120,8 +189,12 @@ export function useImageGeneration(deps: Deps) {
       ? '生成这个镜头的起始关键帧，突出建立关系和动作开始瞬间'
       : '生成这个镜头的结束关键帧，突出动作结束、情绪落点或结果状态'
 
-    const assets = buildShotReferenceAssets(sb)
+    // ★ Sprint 28 Task A: 与 genShotFrame 用【同一份】assets (excludeFirstFrame 口径一致)
+    //   —— 原来两边口径不同 (prompt 的 legend 带 excludeFirstFrame=false 的列表, 实际发的是 true 的列表)
+    //   → 重新生成首帧时 legend 的编号跟实际 images 数组会错位一格。
+    const assets = buildShotReferenceAssets(sb, frameType === 'first_frame')
     const characterAssets = assets.filter(a => a.kind === 'character')
+    const relayAsset = assets.find(a => a.kind === 'prev_shot')
 
     const sections = [
       title ? `镜头标题：${title}` : '',
@@ -141,6 +214,16 @@ export function useImageGeneration(deps: Deps) {
       atmosphere ? `氛围：${atmosphere}` : '',
       frameHint,
     ]
+
+    // ★ Sprint 28 Task A: 接力指引 —— 明确告诉模型这张图是"上一镜的结束画面", 要承接它的空间关系。
+    //   光把图塞进参考图数组不够 (模型不知道它是什么), 这句话才是接力的关键。
+    if (relayAsset) {
+      sections.push(
+        `连续性: ${relayAsset.imageLabel} 是上一镜的结束画面 —— 本镜的构图必须【承接】它: `
+        + `同一空间/同一机位高度与光线方向/人物位置与视线方向延续, `
+        + `但只承接空间关系, 【不要照抄】它的画面内容与人物动作。`
+      )
+    }
 
     // 参考图说明 + 角色一致性要求(nano-banana 的 images 字段不强制 character
     // consistency,必须用 prompt 显式声明谁对应哪张图,并要求保持脸部特征)
@@ -448,7 +531,22 @@ export function useImageGeneration(deps: Deps) {
   async function genShotFrame(sb: any, frameType: string) {
     const prompt = buildShotImagePrompt(sb, frameType)
     // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
-    const referenceImages = buildShotReferenceAssets(sb, frameType === 'first_frame').map(a => a.path)
+    const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame')
+    const referenceImages = shotAssets.map(a => a.path)
+    // ★ Sprint 28 Task A: 记录本次用了哪张接力图 (详细清单在 flow-log 的 ImageTask/reference-images 里)
+    const relay = shotAssets.find(a => a.kind === 'prev_shot')
+    if (relay) {
+      console.info('[shot-relay] 使用上一镜末帧作参考', {
+        storyboardId: sb?.id, frameType,
+        prevShotNumber: relay.prevShotNumber,
+        referenceIndex: relay.index,
+        referencePath: relay.path,
+      })
+    } else {
+      console.info('[shot-relay] 本镜没有接力参考 (上一镜末帧尚未生成)', {
+        storyboardId: sb?.id, frameType,
+      })
+    }
     const key = framePendingKey(sb.id, frameType)
     try {
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)

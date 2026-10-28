@@ -145,6 +145,14 @@ async function processImageGeneration(id: number, config: AIConfig) {
           url: redactUrl(url),
           model: genRecord.model,
         })
+        // ★ Sprint 28 Task A (PM msg-20261028-128): 参考图清单单独记一条 —— 接力参考是
+        //   『上一镜的末帧』, QA 要能从 flow-log 看出本次用了哪几张图 (拿 URL 对 storyboards 的
+        //   last_frame_image 就能认出哪张是接力图)。原来只有 request payload 里的一大坨 body。
+        logTaskProgress('ImageTask', 'reference-images', {
+          id,
+          count: resolvedReferenceImages?.length ?? 0,
+          images: resolvedReferenceImages || [],
+        })
         logTaskPayload('ImageTask', 'request payload', {
           id,
           method,
