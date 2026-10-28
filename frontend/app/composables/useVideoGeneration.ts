@@ -99,7 +99,9 @@ export function useVideoGeneration(deps: Deps) {
   }
 
   async function genVid(sb: any, configId?: number | string | null) {
-    let prompt = sb.video_prompt || sb.videoPrompt || ''
+    // ★ Sprint 29 Task B (PM msg-20261028-129): 【中文版优先】—— 中文是源, 英文是翻译产物。
+    //   中文版为空 → 用英文版, 行为与改动前逐字一致 (硬性零回归要求)。
+    let prompt = sb.video_prompt_zh || sb.videoPromptZh || sb.video_prompt || sb.videoPrompt || ''
     // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
     const first = getFirstFrame(sb)
     const last = getLastFrame(sb)

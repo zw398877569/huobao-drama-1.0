@@ -74,6 +74,76 @@ export function useStoryboardEdit(deps: Deps) {
     return field.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
   }
 
+  // ★ Sprint 29 Task A/B (PM msg-20261028-129): 生成提示分区 —— 中文版视频提示词 + 显式保存按钮
+  //
+  // 数据方向 (PM 决策 D3): 中文版 = 【源】(用户手写微调), 英文版 = 翻译产物。
+  //   · 中文框【不绑失焦自动保存】, 只认『保存提示词』按钮 (避免改到一半被存成半成品)
+  //   · 中文框没被改动时, 后端不触发翻译、也不覆盖英文框 (后端比较"传入值 vs 库里旧值"来判断)
+  const zhPromptText = ref('')
+  const savingPrompts = ref(false)
+
+  function hasNonAscii(v: any): boolean {
+    return /[^\x00-\x7F]/.test(String(v || ''))
+  }
+
+  /** 中文框的初值: video_prompt_zh 优先; 没有的话, 老剧集 (库里 video_prompt 本来就是中文) 用它的原值 */
+  function zhPromptInitValue(sb: any): string {
+    if (!sb) return ''
+    const zh = sb.video_prompt_zh ?? sb.videoPromptZh ?? ''
+    if (zh) return zh
+    const en = sb.video_prompt || sb.videoPrompt || ''
+    // general 模板的老剧集: 库里的 video_prompt 本来就是中文 → 直接当中文版初值 (PM 的设计)
+    return hasNonAscii(en) ? en : ''
+  }
+
+  watch(selectedSb, (sb) => {
+    zhPromptText.value = zhPromptInitValue(sb)
+  }, { immediate: true })
+
+  /**
+   * 保存本分镜的提示词类字段 (显式保存按钮)。
+   * 一次 PUT 存 6 个字段: 静态画面 / 视频 / 中文视频 / 配乐 / 音效 / 反向提示词。
+   * ★ 中文版被改动时, 后端按【该剧集模板的翻译契约】把中文翻成英文并写回 video_prompt,
+   *   返回新英文 → 这里回填到英文框 (用户立刻看到自己改的中文变成了什么样的英文)。
+   * ★ 翻译失败【不影响中文保存】: 中文照样存下来了, 英文保持原值不动 → toast 明确说明。
+   */
+  async function saveShotPrompts() {
+    const sb = selectedSb.value
+    if (!sb?.id) {
+      toast.error('没有选中的镜头')
+      return
+    }
+    savingPrompts.value = true
+    try {
+      const res: any = await storyboardAPI.update(sb.id, {
+        image_prompt: sb.image_prompt ?? sb.imagePrompt ?? '',
+        video_prompt: sb.video_prompt ?? sb.videoPrompt ?? '',
+        video_prompt_zh: zhPromptText.value,
+        bgm_prompt: sb.bgm_prompt ?? sb.bgmPrompt ?? '',
+        sound_effect: sb.sound_effect ?? sb.soundEffect ?? '',
+        negative_prompt: sb.negative_prompt ?? sb.negativePrompt ?? '',
+      })
+      const zhInfo = res?.zh_translate
+      const newEn = res?.video_prompt
+      if (newEn) {
+        sb.video_prompt = newEn
+        sb.videoPrompt = newEn
+      }
+      await refresh()
+      if (zhInfo?.translated) {
+        toast.success('已保存')
+      } else if (zhInfo?.error) {
+        toast.warning(`中文已保存, 翻译成英文失败, 英文未更新: ${zhInfo.error}`)
+      } else {
+        toast.success('已保存')
+      }
+    } catch (e: any) {
+      toast.error(`保存失败: ${e?.message || '未知错误'}`)
+    } finally {
+      savingPrompts.value = false
+    }
+  }
+
   function parseIntention(sb: any) {
     const raw = sb?.scene_intention ?? sb?.sceneIntention
     if (!raw) return null
@@ -361,6 +431,8 @@ export function useStoryboardEdit(deps: Deps) {
     RETAKE_UI_SOFT_CAP, RETAKE_COST_CNY_PER_SHOT, RETAKE_DIMENSIONS,
     // field/style helpers
     applyStylePreset, updateField, toCamel,
+    // ★ Sprint 29 Task A/B: 中文版视频提示词 + 显式保存
+    zhPromptText, savingPrompts, saveShotPrompts,
     // intention
     parseIntention, intentionField, updateIntentionField, analyzeIntention,
     // eval

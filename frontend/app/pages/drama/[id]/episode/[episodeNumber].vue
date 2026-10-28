@@ -757,6 +757,11 @@
                   <div class="detail-section-head">
                     <span class="detail-section-title">生成提示</span>
                     <span class="detail-section-copy">分别服务图片、视频、配乐和音效生成</span>
+                    <!-- ★ Sprint 29 Task A: 显式保存按钮 (同『原始内容』面板的样式) -->
+                    <button class="btn btn-sm" style="margin-left:auto" :disabled="savingPrompts || !selectedSb?.id" @click="saveShotPrompts()">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                      {{ savingPrompts ? '保存中...' : '保存提示词' }}
+                    </button>
                   </div>
                   <label class="field">
                     <span class="field-label">静态画面提示词</span>
@@ -767,6 +772,15 @@
                     <span class="field-label">视频提示词</span>
                     <textarea :value="selectedSb.video_prompt || selectedSb.videoPrompt || ''" class="textarea" rows="5"
                       @blur="updateField(selectedSb, 'video_prompt', $event.target.value)" placeholder="按 3 秒分段的视频提示词..." />
+                  </label>
+                  <!-- ★ Sprint 29 Task B: 中文版视频提示词 (PM 决策 D1: 放在视频提示词下面)
+                       · 不绑失焦自动保存, 只认上面的『保存提示词』按钮 (避免改到一半被存成半成品)
+                       · 角色台词在翻译时保持中文 (后端用 <d> 块保护) -->
+                  <label class="field">
+                    <span class="field-label">中文视频提示词（可编辑）</span>
+                    <span class="dim" style="font-size:11px">改这里 → 点『保存提示词』→ 自动翻成英文覆盖上面的英文提示词 → 重新生成视频后生效</span>
+                    <textarea v-model="zhPromptText" class="textarea" rows="5"
+                      placeholder="本镜暂无中文版, 可手写后保存" />
                   </label>
                   <div class="field-grid field-grid-2">
                     <label class="field">
@@ -2233,6 +2247,8 @@ const {
   getStoryboardCharacterIds, getStoryboardCharacterNames,
   isStoryboardCharacterSelected, toggleStoryboardCharacter,
   getSceneName, deleteShot,
+  // ★ Sprint 29 Task A/B
+  zhPromptText, savingPrompts, saveShotPrompts,
 } = useStoryboardEdit({
   ctx: { sbs, chars, scenes },
   refresh,
