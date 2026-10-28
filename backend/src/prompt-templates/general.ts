@@ -113,6 +113,12 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
      pan left/pan right/handheld/tilt up/tilt down + 景深 shallow f/1.8/standard f/4/deep f/8 +
      视角 eye-level/low angle/high angle/dutch tilt/over-shoulder/POV
      例: "MS 50mm, eye-level, slow dolly in, shallow f/1.8" —— 缺维度 H3 会自己补, 画面失控
+  ★ 文字只写画面不写内容 (Sprint 28 新增, PM msg-20261028-130): 画面里有手机屏/招牌/纸质文本时,
+    只描述画面本身 (手部动作、屏幕冷光、拇指位置、屏幕过曝/反光、模糊的色块),
+    让观众感到"他在看订单备注"就够了, 【不要】要求观众能读出内容;
+    【禁止】出现 clearly presents / clearly displays / legibly shows / 清晰显示 / 文字清晰可读 这类措辞
+    (渲染可读小字是生图/视频模型的固有短板, 提示词越要求清晰, 成片里越是乱码;
+     而同一份提示词的限制项又写着 No text → 自相矛盾)
 - Sprint 17 (PM msg-20261021-076) Task F: 补回老 storyboard_planner 的规则 (V4 重构时丢失)
   ★ 道具时序 (轴5): 角色身上的"情节道具"只能在所属 scene 的 description 里被显式提到时, 才能在本镜出现;
     character.description 里描述的情节瞬间 (例如"前爪按红色按钮"这种特定剧情动作/物体) 不算"角色固有道具",

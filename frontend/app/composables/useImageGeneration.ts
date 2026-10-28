@@ -110,6 +110,61 @@ export function useImageGeneration(deps: Deps) {
     return Number(cur) === Number(pre)
   }
 
+  /**
+   * 名字的 n-gram 是否出现在文本里 (中文没有空格分词, 用 3-gram 近似)。
+   * ★ 用 3 而不是 2: 2-gram 太松 (道具名「手机订单备注」会跟文本里随便一个「手机」沾上),
+   *   3-gram 才能稳定命中「订单备注」这种真正的关键词。
+   */
+  function hasNgramHit(name: string, text: string, n = 3): boolean {
+    const s0 = String(name || '').toLowerCase().trim()
+    if (!s0 || !text) return false
+    if (s0.length <= n) return text.includes(s0)
+    if (text.includes(s0)) return true
+    for (let i = 0; i + n <= s0.length; i++) {
+      if (text.includes(s0.slice(i, i + n))) return true
+    }
+    return false
+  }
+
+  /**
+   * 收集本镜【相关】的道具图 (Sprint 28 follow-up, PM msg-20261028-130 fix_1)。
+   *
+   * ★ 数据结构限制: 项目里【没有 storyboard↔prop 的关联表】(只有 episode_props 按 episode 关联,
+   *   storyboards 表也没有 props 字段) → 无法精确知道"哪个道具出现在哪个镜"。
+   *   → 只能用【文本相关度】近似: 道具名的 3-gram 命中本镜的描述/提示词文本 → 算相关, 排前面。
+   *   (实测 ep19 镜3 的 description 含「订单备注」→ 命中道具「手机订单备注」✓)
+   *
+   * 优先级: 相关道具 3 (场景之后) / 不相关道具 5 (本镜首尾帧之后)
+   *   → PM 要求【不能】因为排不上限就整类丢掉 → 相关的必须能进来;
+   *     既有五类(接力>角色>场景>本镜首尾>杂项)的相对顺序不变。
+   */
+  function collectShotPropAssets(sb: any): Array<{ asset: any; priority: number }> {
+    const text = [
+      sb?.description || '', sb?.image_prompt || sb?.imagePrompt || '',
+      sb?.action || '', sb?.dialogue || '', sb?.result || '', sb?.atmosphere || '',
+    ].join(' ').toLowerCase()
+    if (!text.trim()) return []
+    const out: Array<{ asset: any; priority: number }> = []
+    for (const pr of (ctx.keyProps?.value || [])) {
+      const path = pr?.image_url || pr?.imageUrl
+      const name = String(pr?.name || '').trim()
+      if (!path || !name) continue
+      const relevant = hasNgramHit(name, text)
+      out.push({
+        asset: {
+          path,
+          kind: 'prop',
+          // ★ 用途说明跟角色图/场景图同等级 —— 模型得知道这张图是拿来干嘛的
+          label: `${name}道具图(画面里的该道具以这张图为准)`,
+          propName: name,
+        },
+        priority: relevant ? 3 : 5,
+      })
+    }
+    // 相关的排前面
+    return out.sort((a, b) => a.priority - b.priority)
+  }
+
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
   // 2026-09-18 fix: 加 excludeFirstFrame 参数, 重新生成 first_frame 时不引用旧 first_frame
   //   (避免把"待替换的旧图"作为参考让 LLM 复制旧图的错误)
@@ -160,15 +215,21 @@ export function useImageGeneration(deps: Deps) {
       }, 1)
     }
 
+    // ★ Sprint 28 follow-up fix_1: 道具图 (原来【完全没有】这一类 → 模型只能凭空画道具,
+    //   ep19 镜3 的手机屏幕内容就是这么编出来的)
+    for (const p of collectShotPropAssets(sb)) {
+      pushAsset(p.asset, p.priority)
+    }
+
     // 重新生成 first_frame 时跳过 first_frame 引用 (避免参考待替换的旧图)
     // last_frame 引用 first_frame 仍合法 (保持视觉连贯)
     const first = excludeFirstFrame ? null : getFirstFrame(sb)
     const last = getLastFrame(sb)
-    if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' }, 3)
-    if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' }, 3)
+    if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' }, 4)
+    if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' }, 4)
 
     for (const ref of getRefs(sb)) {
-      pushAsset({ path: ref, kind: 'reference', label: '参考图' }, 4)
+      pushAsset({ path: ref, kind: 'reference', label: '参考图' }, 6)
     }
 
     // ② 按优先级取前 N 张; ③ 接力图按 SHOT_RELAY_REFERENCE_POSITION 决定置首还是置尾

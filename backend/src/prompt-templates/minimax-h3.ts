@@ -176,6 +176,14 @@ H3 官方四段 (这四个字段是本模板的核心输出):
           (实测 2026-10-27: ep17 的 detailed_description 里出现 4 次 "the image" (如
            "Cold blue-grey rain dominates the image" / "The image uses cold blue-grey storm light")
            → 视频模型把镜头当静帧 → 成片像定格, 不动)
+      - ★ 【屏幕/招牌/纸面上的文字: 只写【画面】, 不写【文字内容】】——
+          画面里有手机屏 / 招牌 / 纸质文本时, 只描述画面本身
+          (手部动作、屏幕冷光、拇指位置、屏幕过曝或反光、屏幕上模糊的色块),
+          让观众感到"他在看订单备注"就够了, 【不要】要求观众能读出内容;
+          【禁止】出现 clearly presents / clearly displays / legibly shows / 清晰显示 / 文字清晰可读 这类措辞。
+          (渲染可读小字是生图/视频模型的固有短板, 提示词越要求清晰, 成片里越是乱码;
+           而同一份提示词的限制项又写着 No text → 自相矛盾。2026-10-28 实测: ep19 镜3
+           的 detailed_description 要求"清晰显示订单备注" → 成片手机屏上全是乱码)
       - 长度 350-500 英文词左右 (对白密集时优先保证完整对白时间线, 不要机械凑词数)
   overall_soundscape (string) 全片的环境音与物理声 (雨声/脚步/门响/器物碰撞), 不写音乐。
       跟具体某一镜同步的对白/音效仍写在 detailed_description 里。无则写 "N/A"。
