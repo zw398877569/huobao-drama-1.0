@@ -528,28 +528,65 @@ export function useImageGeneration(deps: Deps) {
     toast.error('部分道具图片生成超时')
   }
 
-  async function genShotFrame(sb: any, frameType: string) {
-    const prompt = buildShotImagePrompt(sb, frameType)
-    // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
-    const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame')
-    const referenceImages = shotAssets.map(a => a.path)
-    // ★ Sprint 28 Task A: 记录本次用了哪张接力图 (详细清单在 flow-log 的 ImageTask/reference-images 里)
-    const relay = shotAssets.find(a => a.kind === 'prev_shot')
-    if (relay) {
-      console.info('[shot-relay] 使用上一镜末帧作参考', {
-        storyboardId: sb?.id, frameType,
-        prevShotNumber: relay.prevShotNumber,
-        referenceIndex: relay.index,
-        referencePath: relay.path,
-      })
-    } else {
-      console.info('[shot-relay] 本镜没有接力参考 (上一镜末帧尚未生成)', {
-        storyboardId: sb?.id, frameType,
-      })
+  /**
+   * ★ Sprint 28 Task B (PM msg-20261028-128): 等上一镜的末帧就绪 (接力依赖)。
+   *
+   * 首尾帧是【逐镜点击】生成的 (没有批量按钮) → 上一镜的末帧有三种状态:
+   *   ① 已经生成好        → 直接接力 (Task A 的 buildShotReferenceAssets 会取到)
+   *   ② 正在生成中        → 等它完成再接力本镜 (用户刚点了它的尾帧但还没出)
+   *   ③ 根本没生成        → 等也没用 (它不会自己出现) → 立即降级不接力 + 明确提示
+   *
+   * 等待只发生在【本镜】内部, 不阻塞别的镜头 (每个镜头各自等自己的上一镜)。
+   */
+  async function waitPrevShotLastFrame(sb: any): Promise<boolean> {
+    const prev = findPrevShot(sb)
+    if (!prev) return false
+    if (prev.last_frame_image || prev.lastFrameImage) return true
+    const prevNum = Number(prev.storyboard_number ?? prev.storyboardNumber ?? 0)
+    // ② 上一镜的末帧正在生成 → 等它 (最多 100 次 × 3s = 5 分钟, 与生图轮询同量级)
+    if (isPendingShotFrame(prev.id, 'last_frame')) {
+      toast.info(`正在等待上一镜#${prevNum}的尾帧, 以保证镜头衔接...`)
+      await watchAsyncResult(() => {
+        const cur = ctx.sbs.value.find(s => s.id === prev.id)
+        return !!(cur?.last_frame_image || cur?.lastFrameImage)
+      }, 100, 3000)
+      const cur = ctx.sbs.value.find(s => s.id === prev.id)
+      if (cur?.last_frame_image || cur?.lastFrameImage) return true
+      toast.warning(`上一镜#${prevNum}的尾帧还没生成好, 本镜无法接力`)
+      return false
     }
+    // ③ 根本没生成 → 立即降级 + 提示 (等下去没意义)
+    toast.warning(`上一镜#${prevNum}还没有尾帧, 本镜无法接力 —— 建议先生成它的尾帧, 再生成本镜首帧`)
+    return false
+  }
+
+  async function genShotFrame(sb: any, frameType: string) {
     const key = framePendingKey(sb.id, frameType)
     try {
+      // 先标记 pending, 再等接力 —— 等待期间 UI 也显示"生成中", 不会出现点了没反应
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
+      // ★ Sprint 28 Task B: 生成首帧前先确保上一镜的末帧就绪 (接力依赖)
+      if (frameType === 'first_frame') {
+        await waitPrevShotLastFrame(sb)
+      }
+      const prompt = buildShotImagePrompt(sb, frameType)
+      // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
+      const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame')
+      const referenceImages = shotAssets.map(a => a.path)
+      // ★ Sprint 28 Task A: 记录本次用了哪张接力图 (详细清单在 flow-log 的 ImageTask/reference-images 里)
+      const relay = shotAssets.find(a => a.kind === 'prev_shot')
+      if (relay) {
+        console.info('[shot-relay] 使用上一镜末帧作参考', {
+          storyboardId: sb?.id, frameType,
+          prevShotNumber: relay.prevShotNumber,
+          referenceIndex: relay.index,
+          referencePath: relay.path,
+        })
+      } else {
+        console.info('[shot-relay] 本镜没有接力参考 (上一镜末帧尚未生成)', {
+          storyboardId: sb?.id, frameType,
+        })
+      }
       const body: Record<string, any> = {
         storyboard_id: sb.id,
         drama_id: ctx.dramaId,
