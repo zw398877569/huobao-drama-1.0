@@ -145,12 +145,15 @@ export const H3_STEP2_SYSTEM_PROMPT = `你是 MiniMax H3 视频模型的提示�
 
 H3 官方四段 (这四个字段是本模板的核心输出):
   subject_definitions  (string) 引用素材定义, 每行一项, 格式照官方:
-      <Subject 1> is [subject definition], derived from <Picture 1>, preserving [key characteristics].
-      <Picture 1> 作为 [人物 / 首帧 / 场景 / 构图] 参考。
+      <Subject 1> is [subject definition], derived from the opening frame, preserving [key characteristics].
+      ★ ★ FL2V (首尾帧) 模式的语义 —— 【不要】用 Ref2V 的 <Picture N> 指代人物:
+          本镜的参考素材只有【开场帧 + 结束帧】两张, 不存在"人物参考图 N";
+          人物身份直接用 the opening frame / the closing frame 指代。
+          (实测 2026-10-27: 62 处 <Picture N> 全是 Ref2V 句式 —— 编号在 FL2V 里指的就是首/尾帧,
+           编号本身没错位, 但换成直白的 the opening frame 更明确, 模型不用去猜"图1是哪张")。
       <Audio 1> 提供 [声音 / 声线 / 音乐] 参考。
       ★ <Subject N> 的编号按 ctx.characters 数组顺序 (ctx.characters[0] 是 <Subject 1>, 依次类推)。
         每个角色的定义里【必须写清外貌关键短语】(脸型/发型/服装), 从 ctx.characters 的 appearancePermanent 提取。
-      ★ <Picture N> 是【本镜】的参考图, <Picture 1> 对应本镜的第 1 张参考图。
       ★ 【不要写 (S1) (S2) 这样的 Speaker ID】—— Speaker ID 由代码层统一分配, 你写了会跟它冲突。
   detailed_description    (string) 主体。按官方写法:
       - 英文正文, 先用 1-2 句英文交代整体风格 (光线/色调/质感), 然后 [Shot 1] 开头 (无时间戳),
@@ -166,6 +169,13 @@ H3 官方四段 (这四个字段是本模板的核心输出):
         必须在本镜 dialogue 里找到对应的那句台词 (谁说哪句就写哪句的动作, 顺序一致)。
         【禁止】写没有对应台词的说话动作 (例如台词里没有回答, 就不要写 "moves his lips to answer")。
         没有台词的角色不要描述他开口说话 —— H3 会给"某人说话"的动作自动配语音, 自己补话。
+      - ★ 【这是视频, 不是图片】—— 禁止把视频写成静态画面:
+          禁用 "the image" / "the picture" / "the frame" / "the visual treatment is ..." 这类静态措辞,
+          也不要写 "the image uses ..." / "... dominates the image" 这种描述【一张图】的句式;
+          改用视频时态: "The shot opens on ..." / "The camera drifts ..." / "She steps forward, then pauses ..."
+          (实测 2026-10-27: ep17 的 detailed_description 里出现 4 次 "the image" (如
+           "Cold blue-grey rain dominates the image" / "The image uses cold blue-grey storm light")
+           → 视频模型把镜头当静帧 → 成片像定格, 不动)
       - 长度 350-500 英文词左右 (对白密集时优先保证完整对白时间线, 不要机械凑词数)
   overall_soundscape (string) 全片的环境音与物理声 (雨声/脚步/门响/器物碰撞), 不写音乐。
       跟具体某一镜同步的对白/音效仍写在 detailed_description 里。无则写 "N/A"。
