@@ -5,7 +5,7 @@ import { success, created, now, badRequest } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
-import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
 
@@ -35,6 +35,32 @@ app.post('/', async (c) => {
       frameType: body.frame_type,
     })
     logTaskPayload('ImageAPI', 'request body', body)
+    // ★ Sprint 28 fix_2 (PM msg-20261028-129): 参考图超限被丢弃的清单 → 进 flow-log。
+    //   原来只有前端 console 直打 stdout, 用户在页面上完全看不到自己哪张角色图被挤掉了。
+    if (Array.isArray(body.dropped_references) && body.dropped_references.length) {
+      const droppedChars = body.dropped_references.filter((d: any) => d?.kind === 'character')
+      logTaskWarn('ImageAPI', 'reference-dropped', {
+        storyboardId: body.storyboard_id,
+        dramaId: body.drama_id,
+        frameType: body.frame_type,
+        droppedCount: body.dropped_references.length,
+        droppedCharacterCount: droppedChars.length,
+        dropped: body.dropped_references,
+        hint: droppedChars.length
+          ? '本镜的参考图超过上限, 这些被挤掉了 —— 含角色形象图, 脸可能对不上'
+          : '本镜的参考图超过上限, 这些被挤掉了',
+      })
+    }
+    // ★ Sprint 28 fix_2: 本次用的接力图 (上一镜的末帧) —— 也进 flow-log, 不用看前端 console
+    if (body.relay_shot_number != null) {
+      logTaskProgress('ImageAPI', 'relay-reference', {
+        storyboardId: body.storyboard_id,
+        dramaId: body.drama_id,
+        frameType: body.frame_type,
+        relayShotNumber: body.relay_shot_number,
+        hint: '本次首帧的参考图里含上一镜的末帧 (接力)',
+      })
+    }
     // 所有 image 生成路径都过 sanitize(角色/场景/分镜/grid 共用)
     // Sprint 21 (QA msg-20261025-085): 按 body 里的 id 推断 kind ——
     //   storyboard_id → 镜头图 (本路由当前唯一的调用方就是镜头图; 优先判断, 免得将来

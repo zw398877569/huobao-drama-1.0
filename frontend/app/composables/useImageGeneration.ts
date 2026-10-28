@@ -92,10 +92,28 @@ export function useImageGeneration(deps: Deps) {
     }) || null
   }
 
+  /**
+   * 本镜与上一镜是不是【同一个场景】(Sprint 28 fix_1, PM msg-20261028-129)。
+   *
+   * ★ 为什么要在意: 接力指引如果写死"必须承接同一空间", 跨场景时就是自相矛盾 ——
+   *   上一镜的末帧跟本镜根本不是同一个空间 (ep17: 镜1~5=scene51 楼道, 镜6~13=scene52 室内;
+   *   镜5→镜6 正是跨场景), 模型会把上一场景的空间元素带进本镜 → 场景污染。
+   *   同场景的措辞不能改弱 (那是接力的主要价值), 跨场景要换成"只承接与空间无关的连续性"。
+   * 拿不到 scene_id 时保守按【同场景】处理 (维持原行为, 不误判)。
+   */
+  function isSameSceneAsPrevShot(sb: any): boolean {
+    const prev = findPrevShot(sb)
+    if (!prev) return true
+    const cur = sb?.scene_id ?? sb?.sceneId ?? null
+    const pre = prev.scene_id ?? prev.sceneId ?? null
+    if (cur === null || pre === null) return true
+    return Number(cur) === Number(pre)
+  }
+
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
   // 2026-09-18 fix: 加 excludeFirstFrame 参数, 重新生成 first_frame 时不引用旧 first_frame
   //   (避免把"待替换的旧图"作为参考让 LLM 复制旧图的错误)
-  function buildShotReferenceAssets(sb: any, excludeFirstFrame = false) {
+  function buildShotReferenceAssets(sb: any, excludeFirstFrame = false, out?: { dropped?: any[] }) {
     // ① 先收集候选 (带优先级), 后面统一排序取前 N 张
     const candidates: Array<{ asset: any; priority: number }> = []
     const pushAsset = (asset: any, priority: number) => {
@@ -158,7 +176,15 @@ export function useImageGeneration(deps: Deps) {
     const kept = sorted.slice(0, SHOT_REFERENCE_LIMIT)
     const dropped = sorted.slice(SHOT_REFERENCE_LIMIT)
     if (dropped.length) {
-      console.warn('[shot-reference] 超出上限被丢弃:', dropped.map(d => d.asset.kind + ':' + (d.asset.label || '')))
+      // ★ Sprint 28 fix_2 (PM msg-20261028-129): 被丢弃的清单要 (a) 回传给调用方 (进 flow-log + toast),
+      //   (b) 不再只 console 直打 stdout (用户看不到)。
+      const droppedList = dropped.map(d => ({
+        kind: d.asset.kind,
+        label: d.asset.label || d.asset.kind,
+        characterName: d.asset.characterName || null,
+      }))
+      if (out) out.dropped = droppedList
+      console.warn('[shot-reference] 超出上限被丢弃:', droppedList.map(d => d.kind + ':' + d.label))
     }
     const relay = kept.filter(c => c.asset.kind === 'prev_shot')
     const rest = kept.filter(c => c.asset.kind !== 'prev_shot')
@@ -218,10 +244,18 @@ export function useImageGeneration(deps: Deps) {
     // ★ Sprint 28 Task A: 接力指引 —— 明确告诉模型这张图是"上一镜的结束画面", 要承接它的空间关系。
     //   光把图塞进参考图数组不够 (模型不知道它是什么), 这句话才是接力的关键。
     if (relayAsset) {
-      sections.push(
-        `连续性: ${relayAsset.imageLabel} 是上一镜的结束画面 —— 本镜的构图必须【承接】它: `
-        + `同一空间/同一机位高度与光线方向/人物位置与视线方向延续, `
-        + `但只承接空间关系, 【不要照抄】它的画面内容与人物动作。`
+      // ★ Sprint 28 fix_1 (PM msg-20261028-129): 同场景 / 跨场景 用不同的措辞。
+      //   跨场景时若还写"必须承接同一空间", 模型会把上一场景的空间元素带进本镜 → 场景污染。
+      //   同场景的措辞保持原样 (不能改弱, 那是接力的主要价值)。
+      const sameScene = isSameSceneAsPrevShot(sb)
+      sections.push(sameScene
+        ? `连续性: ${relayAsset.imageLabel} 是上一镜的结束画面 —— 本镜的构图必须【承接】它: `
+          + `同一空间/同一机位高度与光线方向/人物位置与视线方向延续, `
+          + `但只承接空间关系, 【不要照抄】它的画面内容与人物动作。`
+        : `连续性: ${relayAsset.imageLabel} 是上一镜的结束画面 —— 本镜与上一镜【不在同一空间】, `
+          + `【不要】把它的场景/背景/光线带过来; 只承接与空间无关的连续性: `
+          + `人物的位置与视线方向、运动方向、人物状态的延续; `
+          + `也【不要照抄】它的画面内容与人物动作。`
       )
     }
 
@@ -571,21 +605,20 @@ export function useImageGeneration(deps: Deps) {
       }
       const prompt = buildShotImagePrompt(sb, frameType)
       // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
-      const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame')
+      // ★ Sprint 28 fix_2: 顺手收集【被上限挤掉的参考图】, 后面交给后端记 flow-log + 给用户 toast
+      const droppedBox: { dropped?: any[] } = {}
+      const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame', droppedBox)
       const referenceImages = shotAssets.map(a => a.path)
-      // ★ Sprint 28 Task A: 记录本次用了哪张接力图 (详细清单在 flow-log 的 ImageTask/reference-images 里)
+      // ★ Sprint 28 Task A / fix_2: 用了哪张接力图 —— 改成随请求体传给后端记 flow-log
+      //   (原来只在 console 里, 用户与 QA 都看不到; console 那两行已去掉, 信息没丢)
       const relay = shotAssets.find(a => a.kind === 'prev_shot')
-      if (relay) {
-        console.info('[shot-relay] 使用上一镜末帧作参考', {
-          storyboardId: sb?.id, frameType,
-          prevShotNumber: relay.prevShotNumber,
-          referenceIndex: relay.index,
-          referencePath: relay.path,
-        })
-      } else {
-        console.info('[shot-relay] 本镜没有接力参考 (上一镜末帧尚未生成)', {
-          storyboardId: sb?.id, frameType,
-        })
+      const droppedRefs = droppedBox.dropped || []
+      if (droppedRefs.length) {
+        const droppedChars = droppedRefs.filter(d => d.kind === 'character')
+        toast.warning(
+          `本镜有 ${droppedRefs.length} 张参考图超出上限被丢弃: ${droppedRefs.map(d => d.label).join('、')}`
+          + (droppedChars.length ? ` (含 ${droppedChars.length} 张角色形象图, 脸可能对不上)` : '')
+        )
       }
       const body: Record<string, any> = {
         storyboard_id: sb.id,
@@ -593,6 +626,9 @@ export function useImageGeneration(deps: Deps) {
         prompt,
         frame_type: frameType,
         reference_images: (referenceImages?.length ?? 0) > 0 ? referenceImages : undefined,
+        // ★ Sprint 28 fix_2: 这两个字段后端会记进 flow-log (ImageAPI/relay-reference + ImageAPI/reference-dropped)
+        relay_shot_number: relay?.prevShotNumber ?? null,
+        dropped_references: droppedRefs.length ? droppedRefs : undefined,
       }
       // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
       if (imageConfigIdRef?.value != null) body.config_id = imageConfigIdRef.value
