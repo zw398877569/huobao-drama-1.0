@@ -79,8 +79,66 @@ export function useStoryboardEdit(deps: Deps) {
   // 数据方向 (PM 决策 D3): 中文版 = 【源】(用户手写微调), 英文版 = 翻译产物。
   //   · 中文框【不绑失焦自动保存】, 只认『保存提示词』按钮 (避免改到一半被存成半成品)
   //   · 中文框没被改动时, 后端不触发翻译、也不覆盖英文框 (后端比较"传入值 vs 库里旧值"来判断)
-  const zhPromptText = ref('')
   const savingPrompts = ref(false)
+
+  /**
+   * ★ Sprint 29 follow-up Task D (PM msg-20261102-133): 中文框按【H3 三段】展示。
+   *
+   * 数据源还是【一整段文本】(库里存的就是带段标题的三段, 跟英文框一一对应),
+   *   只是展示时拆成三个框, 保存时再拼回去 —— 老剧集 (general 模板, 库里本来就是
+   *   中文自由文本) 走【自由文本模式】, 一个字都不变。
+   * 段名用英文原名 (detailed_description / overall_soundscape / non_diegetic_music):
+   *   跟上面的英文框长得一样 → 用户一眼知道自己在改哪一段; 后端也按同样的段名拆回去。
+   */
+  const ZH_SECTION_KEYS = ['detailed_description', 'overall_soundscape', 'non_diegetic_music'] as const
+  type ZhSectionKey = typeof ZH_SECTION_KEYS[number]
+  const zhSectionDefs: { key: ZhSectionKey; label: string; placeholder: string }[] = [
+    { key: 'detailed_description', label: '画面与运动（detailed_description）', placeholder: '本镜的画面内容、人物动作、运镜、说话动作' },
+    { key: 'overall_soundscape', label: '环境音（overall_soundscape）', placeholder: '全片环境音与物理声（雨声/脚步/门响）' },
+    { key: 'non_diegetic_music', label: '配乐（non_diegetic_music）', placeholder: '观众才听得到的配乐（配器/速度/动态）' },
+  ]
+  const zhPromptSections = reactive<Record<ZhSectionKey, string>>({
+    detailed_description: '', overall_soundscape: '', non_diegetic_music: '',
+  })
+  /** true = 三段展示模式 (H3); false = 自由文本模式 (general 老剧集 / 本镜没有中文版) */
+  const zhSectionsMode = ref(false)
+  /** 自由文本模式下的内容 */
+  const zhFreeText = ref('')
+
+  /** 当前中文框的完整内容 (三段模式拼回带段标题的整段 / 自由文本原样) */
+  const zhPromptText = computed(() => {
+    if (!zhSectionsMode.value) return zhFreeText.value
+    return ZH_SECTION_KEYS
+      .filter(k => (zhPromptSections[k] || '').trim())
+      .map(k => `${k}:\n${zhPromptSections[k].trim()}`)
+      .join('\n\n')
+  })
+
+  /** 把一段中文拆成 H3 三段 (段标题必须整行独占); 没有段标题 → 当自由文本 */
+  function parseZhSections(text: string): { mode: boolean; sections: Record<ZhSectionKey, string> } {
+    const sections: Record<ZhSectionKey, string> = {
+      detailed_description: '', overall_soundscape: '', non_diegetic_music: '',
+    }
+    const buf: Record<ZhSectionKey, string[]> = {
+      detailed_description: [], overall_soundscape: [], non_diegetic_music: [],
+    }
+    let current: ZhSectionKey | null = null
+    for (const line of String(text || '').split('\n')) {
+      const t = line.trim()
+      const key = t.endsWith(':') ? t.slice(0, -1) : ''
+      if (key && (ZH_SECTION_KEYS as readonly string[]).includes(key)) {
+        current = key as ZhSectionKey
+        continue
+      }
+      if (current) buf[current].push(line)
+    }
+    let hit = 0
+    for (const k of ZH_SECTION_KEYS) {
+      sections[k] = buf[k].join('\n').trim()
+      if (sections[k]) hit++
+    }
+    return { mode: hit > 0, sections }
+  }
 
   function hasNonAscii(v: any): boolean {
     return /[^\x00-\x7F]/.test(String(v || ''))
@@ -97,7 +155,16 @@ export function useStoryboardEdit(deps: Deps) {
   }
 
   watch(selectedSb, (sb) => {
-    zhPromptText.value = zhPromptInitValue(sb)
+    const raw = zhPromptInitValue(sb)
+    const parsed = parseZhSections(raw)
+    zhSectionsMode.value = parsed.mode
+    if (parsed.mode) {
+      for (const k of ZH_SECTION_KEYS) zhPromptSections[k] = parsed.sections[k]
+      zhFreeText.value = ''
+    } else {
+      for (const k of ZH_SECTION_KEYS) zhPromptSections[k] = ''
+      zhFreeText.value = raw
+    }
   }, { immediate: true })
 
   /**
@@ -118,6 +185,7 @@ export function useStoryboardEdit(deps: Deps) {
       const res: any = await storyboardAPI.update(sb.id, {
         image_prompt: sb.image_prompt ?? sb.imagePrompt ?? '',
         video_prompt: sb.video_prompt ?? sb.videoPrompt ?? '',
+        // 三段模式 → computed 里已经把三段拼回带段标题的整段文本 (后端按段名拆回去翻译)
         video_prompt_zh: zhPromptText.value,
         bgm_prompt: sb.bgm_prompt ?? sb.bgmPrompt ?? '',
         sound_effect: sb.sound_effect ?? sb.soundEffect ?? '',
@@ -431,8 +499,9 @@ export function useStoryboardEdit(deps: Deps) {
     RETAKE_UI_SOFT_CAP, RETAKE_COST_CNY_PER_SHOT, RETAKE_DIMENSIONS,
     // field/style helpers
     applyStylePreset, updateField, toCamel,
-    // ★ Sprint 29 Task A/B: 中文版视频提示词 + 显式保存
+    // ★ Sprint 29 Task A/B + follow-up Task D: 中文版视频提示词 (三段展示) + 显式保存
     zhPromptText, savingPrompts, saveShotPrompts,
+    zhPromptSections, zhSectionsMode, zhFreeText, zhSectionDefs,
     // intention
     parseIntention, intentionField, updateIntentionField, analyzeIntention,
     // eval
