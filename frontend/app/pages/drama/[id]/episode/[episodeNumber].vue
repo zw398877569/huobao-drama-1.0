@@ -2383,6 +2383,11 @@ async function savePropAssign() {
     sb.prop_ids = [...propAssignSelected.value]
     propAssignOpen.value = false
     toast.success('已保存道具关联')
+    // ★ Sprint 30 Task D: 参考图变了 → 该镜已有的首帧/尾帧不再反映新关联, 要提示重新生成
+    //   (不自动重生成 —— 批量重生成由用户在生成环节自己决定, 自动跑会烧额度)
+    if (getFirstFrame(sb) || getLastFrame(sb)) {
+      toast.warning('参考图已变化, 需重新生成首帧/尾帧才生效')
+    }
   } catch (e: any) {
     toast.error(`保存失败: ${e?.message || '未知错误'}`)
   } finally {
