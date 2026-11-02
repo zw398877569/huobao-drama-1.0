@@ -95,6 +95,8 @@ export interface ImageGenerationRecord {
 
 export interface VideoGenerationRecord {
   id: number
+  /** ★ Sprint 31: 本镜 id (flow-log 记参考图清单时要能定位到是哪个镜头) */
+  storyboardId?: number | null
   model?: string | null
   prompt?: string | null
   negativePrompt?: string | null
@@ -112,6 +114,13 @@ export interface VideoGenerationRecord {
   audioUrls?: string[] | null
   duration?: number | null
   aspectRatio?: string | null
+  /**
+   * ★ Sprint 31 (PM msg-20261102-136): 本镜【显式关联】的道具图。
+   *   由 video-generation.ts 从 storyboard_props → props.image_url 查出来并归一化,
+   *   【不接受前端传参】(后端是唯一真源)。
+   *   Ref2V 多图参考路径把它们并进 ref_image_N (末尾追加; 首帧仍占 ref_image_0)。
+   */
+  propReferenceImages?: { url: string; name: string }[] | null
   // ... 其他字段
 }
 

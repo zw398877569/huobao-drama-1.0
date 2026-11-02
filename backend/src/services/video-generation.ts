@@ -205,6 +205,8 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
         const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(vRecord.referenceImageUrls)
         // Sprint 14: 配音音频 (口型同步)。自由创作 (source='free') 没 storyboard, 天然拿不到。
         const resolvedAudioUrls = await resolveStoryboardAudioUrls(vRecord.id, vRecord.storyboardId)
+        // ★ Sprint 31 (PM msg-20261102-136): 本镜显式关联的道具图 → 并进 Ref2V 的 ref_image_N
+        const resolvedPropReferenceImages = await resolveStoryboardPropReferenceImages(vRecord.id, vRecord.storyboardId)
         // Sprint 19: 本镜用哪个 prompt 模板 (按 episodes.prompt_template)
         const storyboardEpisodeId = vRecord.storyboardId
           ? (db.select({ episodeId: schema.storyboards.episodeId })
@@ -387,6 +389,8 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
 
         const buildArgs = {
           id: vRecord.id,
+          // ★ Sprint 31: 传给 adapter → flow-log 的参考图清单能定位到是哪个镜头
+          storyboardId: vRecord.storyboardId,
           model: vRecord.model,
           prompt: finalPrompt,
           negativePrompt: vRecord.negativePrompt || null,
@@ -396,6 +400,8 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           firstFrameUrl: resolvedFirstFrameUrl,
           lastFrameUrl: resolvedLastFrameUrl,
           referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
+          // ★ Sprint 31: 本镜显式关联的道具图 (后端从 storyboard_props 查, 前端不传参)
+          propReferenceImages: resolvedPropReferenceImages,
           audioUrls: resolvedAudioUrls,
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
@@ -703,6 +709,65 @@ async function resolveStoryboardAudioUrls(
   if (!raw) return []
   const normalized = await normalizeVideoReferenceUrl(vRecordId, raw, 'audio')
   return normalized ? [normalized] : []
+}
+
+/**
+ * ★ Sprint 31 (PM msg-20261102-136): 本镜【显式关联的道具图】(storyboard_props → props.image_url)。
+ *
+ * 数据来源只认 storyboard_props (用户在【镜头图片】页手工关联的), 不走 3-gram 兜底
+ *   —— 兜底那是生图链路的策略 (collectShotPropAssets), 视频侧只认用户显式勾的。
+ * 没关联 / 道具图还没生成 / 查表失败 → 返回空数组 → 调用方一个字节都不加,
+ *   行为跟改动前逐字一致 (老剧集零回归)。
+ *
+ * 顺序: 按 props.id 升序 (关联表 storyboard_props 只有 (storyboard_id, prop_id) 联合主键,
+ *   没有顺序列, 还原不了用户勾选的先后 —— 与生图侧 (ctx.keyProps 顺序) 保持一致)。
+ */
+async function resolveStoryboardPropReferenceImages(
+  vRecordId: number,
+  storyboardId: number | null | undefined,
+): Promise<{ url: string; name: string }[]> {
+  if (!storyboardId) return []
+  try {
+    const links = db.select({ propId: schema.storyboardProps.propId })
+      .from(schema.storyboardProps)
+      .where(eq(schema.storyboardProps.storyboardId, storyboardId)).all()
+    const ids = links.map(l => l.propId).filter(Boolean)
+    if (!ids.length) return []
+    const rows = db.select({
+      id: schema.props.id,
+      name: schema.props.name,
+      imageUrl: schema.props.imageUrl,
+      localPath: schema.props.localPath,
+    }).from(schema.props).where(inArray(schema.props.id, ids)).all()
+    const out: { url: string; name: string }[] = []
+    for (const r of rows.sort((a, b) => a.id - b.id)) {
+      const name = String(r.name || '').trim()
+      const raw = String(r.imageUrl || r.localPath || '').trim()
+      if (!name || !raw) continue
+      const url = await normalizeVideoReferenceUrl(vRecordId, raw)
+      if (!url) continue
+      out.push({ url, name })
+    }
+    if (out.length) {
+      logTaskProgress('VideoTask', 'prop-refs-resolved', {
+        videoGenId: vRecordId,
+        storyboardId,
+        propCount: out.length,
+        props: out.map(p => p.name),
+        hint: '本镜显式关联的道具图, 会并进 Ref2V 的 ref_image_N (末尾追加)',
+      })
+    }
+    return out
+  } catch (e: any) {
+    // ★ 查表失败【绝不能】连带视频生成失败 → 返回空, 行为跟改动前一致
+    logTaskWarn('VideoTask', 'prop-refs-lookup-failed', {
+      videoGenId: vRecordId,
+      storyboardId,
+      error: e?.message || String(e),
+      hint: '道具关联查询失败, 道具图未进参考图 (不影响本次视频生成)',
+    })
+    return []
+  }
 }
 
 /** 数中文字符个数 —— 用来判断 prompt 到底翻没翻 (翻译 fallback 时 prompt 还是中文) */

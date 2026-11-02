@@ -22,7 +22,7 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
-import { logTaskWarn } from '../../utils/task-logger.js'
+import { logTaskWarn, logTaskProgress } from '../../utils/task-logger.js'
 
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
@@ -124,6 +124,8 @@ Ref2V 多图+多音频 v2 15s 版
 
   /** Ref2V 1-10s 用 v5; 11-15s 自动切到 v5_15s */
   private static readonly REF2V_MAX_SHORT_S = 10
+  /** 平台 ref_image_N 槽位上限 (ref_image_0 ~ ref_image_8) */
+  private static readonly REF2V_MAX_IMAGES = 9
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const { workflowId, body, fallbackReason } = this.buildBodyForRecord(record)
@@ -341,12 +343,66 @@ Ref2V 多图+多音频 v2 15s 版
     if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V) {
       if (firstFrame) body.first_frame = firstFrame
       if (lastFrame) body.last_frame = lastFrame
+      if ((record.propReferenceImages || []).length) {
+        logTaskWarn('VideoTask', 'prop-refs-not-applicable', {
+          videoGenId: record.id,
+          storyboardId: record.storyboardId,
+          workflowId,
+          propCount: (record.propReferenceImages || []).length,
+          hint: '当前 workflow 是 FL2V (first_frame/last_frame 字段), 没有 ref_image_N 槽位 → 道具图未进参考图',
+        })
+      }
     } else if ((AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(workflowId)) {
       // Sprint 14 修 bug: 改前只给 v5 / v5_15s 填 ref_image_N, 用户显式选 zm_u24 / zm_u08 /
       //   image_audio_to_video_v2 时 refs 算了却没进 body → 平台收到一个没有参考图的 Ref2V 请求。
       //   现在所有 Ref2V 变体统一填 (平台上限 9 张)。
+      //
+      // ★ Sprint 31 (PM msg-20261102-136): 本镜【显式关联的道具图】并进 ref_image_N。
+      //   槽位规则 (PM 拍板):
+      //     · 【首帧必须占 ref_image_0】 → 道具图一律【追加在末尾】, 不插到前面
+      //       (插前面会把已有参考图整体后移 → prompt 里 <Picture N> 的编号全错位,
+      //        而 H3 的 subject_definitions 段里就有 <Picture N> 引用 → 人物身份漂移)
+      //     · 已经在 refs 里的道具图【不重复追加】, 直接用它的现有槽位 (避免同一张图发两遍)
+      //     · 9 张上限满了 → 优先丢【普通参考图】给道具图腾位 (道具图是用户显式关联的语义信息)
+      //   ★ single (单图参考) 模式【不加道具图】—— 它的语义是『只填 ref_image_0』,
+      //     工单也说了本单只针对多图参考 (Ref2V 多图) 路径。
+      const propRefs = (mode === 'single')
+        ? []
+        : (record.propReferenceImages || []).filter(p => p && p.url && p.name)
+      let propSlots: { name: string; slot: number }[] = []
+      let droppedRefs: string[] = []
+      if (propRefs.length) {
+        const merged = this.mergePropRefsIntoSlots(refs, propRefs)
+        refs = merged.refs
+        propSlots = merged.propSlots
+        droppedRefs = merged.dropped
+      }
       refs.slice(0, 9).forEach((url, i) => {
         body[`ref_image_${i}`] = url
+      })
+      // ★ prompt 里说明每张道具图是干嘛的 —— 跟生图侧同语义 ('Image N is the xxx prop reference ...'),
+      //   不说明的话模型不知道这张图是道具参考, 会当成又一个人物/场景。
+      //   ★ 编号 = 槽位 + 1 (H3 约定: <Picture N> = ref_image_{N-1}) → 这里跟实际发出的槽位自洽。
+      if (propSlots.length) {
+        const notes = propSlots.map(sl =>
+          `Image ${sl.slot + 1} is the ${sl.name} prop reference and governs its on-screen appearance.`,
+        )
+        body.prompt = `${body.prompt}\n${notes.join('\n')}`
+      }
+      // 参考图清单进 flow-log —— 事后能核对"这次到底发了哪几张、分别是什么、道具图排第几"
+      logTaskProgress('VideoTask', 'video-ref-slots', {
+        videoGenId: record.id,
+        storyboardId: record.storyboardId,
+        workflowId,
+        total: Math.min(refs.length, 9),
+        propCount: propSlots.length,
+        slots: refs.slice(0, 9).map((url, i) => ({
+          slot: i,
+          isProp: propSlots.some(sl => sl.slot === i),
+          name: propSlots.find(sl => sl.slot === i)?.name || null,
+        })),
+        droppedRefs,
+        hint: '槽位清单: slot = ref_image_N; 道具图排在末尾, 首帧仍是 ref_image_0',
       })
       // ref_audio_0/1/2 — H3 多图多音频工作流的口型同步入口 (Sprint 14 核心)
       if (this.isAudioWorkflow(workflowId)) {
@@ -373,6 +429,52 @@ Ref2V 多图+多音频 v2 15s 版
       return AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S
     }
     return AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V
+  }
+
+  /**
+   * ★ Sprint 31 (PM msg-20261102-136): 把本镜【显式关联的道具图】并进参考图槽位。
+   *
+   * 规则 (PM 拍板 + 平台语义):
+   *   · 【首帧必须占 ref_image_0】→ 道具图一律【追加在末尾】, 不插到前面
+   *     (插前面会把已有参考图整体后移 → prompt 里 <Picture N> 编号全错位,
+   *      而 H3 的 subject_definitions 段里就有 <Picture N> 引用 → 人物身份漂移)
+   *   · 已经在 refs 里的道具图【不重复追加】→ 用它现有的槽位 (同一张图不能发两遍)
+   *   · 9 张上限满了 → 优先丢【普通参考图】给道具图腾位
+   *     (道具图是用户显式关联的语义信息, 比历史参考图值钱)
+   */
+  private mergePropRefsIntoSlots(
+    refs: string[],
+    propRefs: { url: string; name: string }[],
+  ): { refs: string[]; propSlots: { name: string; slot: number }[]; dropped: string[] } {
+    const MAX = AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES
+    type Slot = { url: string; isProp: boolean; name?: string }
+    const slots: Slot[] = refs.map(url => {
+      const p = propRefs.find(x => x.url === url)
+      return p ? { url, isProp: true, name: p.name } : { url, isProp: false }
+    })
+    // 不在 refs 里的道具图 → 追加到末尾
+    for (const p of propRefs) {
+      if (slots.some(s => s.url === p.url)) continue
+      slots.push({ url: p.url, isProp: true, name: p.name })
+    }
+    const dropped: string[] = []
+    // 超上限 → 优先丢普通参考图给道具图腾位
+    //   ★ index 0 【不能删】—— 那是首帧 (PM 拍板: 首帧必须占 ref_image_0)。
+    //     宁可砍道具图也不能砍首帧 (首帧是画面连续性的地基)。
+    for (let i = slots.length - 1; i >= 0 && slots.length > MAX; i--) {
+      if (i === 0) continue
+      if (slots[i]!.isProp) continue
+      dropped.push(slots[i]!.url)
+      slots.splice(i, 1)
+    }
+    // 还是超 (全是道具图) → 砍掉末尾的
+    if (slots.length > MAX) {
+      for (const s of slots.slice(MAX)) dropped.push(s.url)
+      slots.length = MAX
+    }
+    const propSlots: { name: string; slot: number }[] = []
+    slots.forEach((s, i) => { if (s.isProp && s.name) propSlots.push({ name: s.name, slot: i }) })
+    return { refs: slots.map(s => s.url), propSlots, dropped }
   }
 
   private parseRefImages(json?: string | null): string[] {
