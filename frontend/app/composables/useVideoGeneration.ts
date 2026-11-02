@@ -99,9 +99,14 @@ export function useVideoGeneration(deps: Deps) {
   }
 
   async function genVid(sb: any, configId?: number | string | null) {
-    // ★ Sprint 29 Task B (PM msg-20261028-129): 【中文版优先】—— 中文是源, 英文是翻译产物。
-    //   中文版为空 → 用英文版, 行为与改动前逐字一致 (硬性零回归要求)。
-    let prompt = sb.video_prompt_zh || sb.videoPromptZh || sb.video_prompt || sb.videoPrompt || ''
+    // ★ Sprint 29 follow-up Task C (PM msg-20261102-133): 【只取英文版】—— 不再重复翻译。
+    //   数据方向 (PM 决策 D1): 中文版 = 源, 英文版 = 翻译产物; 翻译【只在保存时发生一次】。
+    //   以前这里取中文版 → 后端 video-generation 再翻一次 → 每镜多一次 LLM 调用
+    //   (2500~3000 字符 in + 同样多 out, 18 镜多花 3~5 分钟), 而且用户看到的英文
+    //   跟实际送进模型的英文不是同一份 (两次翻译结果不同) → 微调没有依据。
+    //   现在直接送库里那份英文 (用户保存中文时已经翻好写回了) → 所见即所得, 省一次翻译。
+    //   ★ 零回归: 中文版为空时 (老剧集), 这里取到的跟改动前逐字一致。
+    let prompt = sb.video_prompt || sb.videoPrompt || ''
     // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
     const first = getFirstFrame(sb)
     const last = getLastFrame(sb)
