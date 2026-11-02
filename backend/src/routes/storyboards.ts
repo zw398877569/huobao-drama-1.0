@@ -12,7 +12,7 @@ import { evaluateStoryboard, averageEvalScore } from '../services/evaluation.js'
 import { retakeStoryboard, RETAKE_HARD_LIMIT, estimateRetakeCostCNY, RETAKE_DIMENSIONS } from '../services/retake.js'
 // ★ Sprint 29 Task B (PM msg-20261028-129): 中文版视频提示词 → 翻译回写英文
 import { getEpisodeTemplate } from '../prompt-templates/index.js'
-import { translateZhVideoPrompt, getStoryboardSpeakerNames } from '../utils/zh-video-prompt.js'
+import { translateZhVideoPrompt, translateH3ZhVideoPrompt, getStoryboardSpeakerNames } from '../utils/zh-video-prompt.js'
 import { autoFillSpeakerFromScript, normalizeDialogueForStorage, parseDialogueSegments } from '../utils/dialogue-parser.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 
@@ -223,14 +223,28 @@ app.put('/:id', async (c) => {
         const tpl = getEpisodeTemplate(storyboard.episodeId)
         const contract = (tpl?.generation as any)?.videoTranslate
         const speakerNames = getStoryboardSpeakerNames(id)
-        const english = await translateZhVideoPrompt(zh, contract, speakerNames)
+        // ★ Sprint 29 follow-up Task B (PM msg-20261102-133): H3 模板走【四段保真翻译】——
+        //   翻译器只吃【中文三段】, 英文的 subject_definitions 段原样拼回 →
+        //   ① 写回后仍是完整四段 (injectH3 定位得到, 不会出现 h3-section-not-found)
+        //   ② subject_definitions 逐字不变 (用户看不到也改不到它, 不能被 LLM 改写措辞)
+        //   general 模板保持原样 (它的 video_prompt 本来就是中文三段式, 不套 H3 的四段逻辑)
+        const isH3 = tpl?.id === 'minimax-h3'
+          || ((contract?.sectionHeaders || []) as string[]).some(h => /subject_definitions/i.test(h))
+        const english = isH3
+          ? await translateH3ZhVideoPrompt(zh, contract, speakerNames, String(storyboard.videoPrompt || ''))
+          : await translateZhVideoPrompt(zh, contract, speakerNames)
         updates.videoPrompt = english
         zhTranslate = { translated: true }
         logTaskProgress('StoryboardAPI', 'zh-prompt-translated', {
           storyboardId: id,
           templateId: tpl?.id,
+          mode: isH3 ? 'h3-four-section' : 'plain',
           zhChars: zh.length,
           enChars: english.length,
+          sections: isH3
+            ? ['subject_definitions', 'detailed_description', 'overall_soundscape', 'non_diegetic_music']
+                .filter(h => english.includes(`${h}:`))
+            : undefined,
         })
       } catch (e: any) {
         logTaskWarn('StoryboardAPI', 'zh-prompt-translate-failed', {

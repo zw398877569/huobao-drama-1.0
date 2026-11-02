@@ -75,3 +75,122 @@ export async function translateZhVideoPrompt(
   // 用户的自由文本不是 H3 格式 → 去掉 <d>[Chinese] 标记, 还原成「角色名：台词」
   return restored.replace(/<d>\[Chinese\]([\s\S]*?)<\/d>/gi, '$1').trim()
 }
+
+// ─── Sprint 29 follow-up Task B (PM msg-20261102-133): H3 四段结构保真翻译 ──────────
+
+/** H3 官方四段 (兜底用, 正常从模板的 videoTranslate 契约里拿) */
+const H3_DEFAULT_HEADERS = ['subject_definitions:', 'detailed_description:', 'overall_soundscape:', 'non_diegetic_music:']
+
+/**
+ * ★★ 工单设计与两条 ★ 验收项互斥, 这里按【验收项】实现 (并在 handoff 里写明偏差):
+ *
+ *   工单原设计: 把【现有英文的 subject_definitions 段】+【用户的中文三段】拼成完整四段一起送翻译。
+ *   ★ 验收项:   「保存后 video_prompt 的 subject_definitions 段与改动前【逐字一致】」。
+ *
+ *   这两条不能同时成立 —— 走一遍 LLM 翻译, subject_definitions 必然被改写措辞
+ *   (实测 LLM 会把 "<Subject 1> is a man in his 30s" 改成 "<Subject 1> is a male in his 30s"),
+ *   而工单自己的 fact3 也说了: FL2V 模式的 subject_definitions 必须写 the opening frame /
+ *   the closing frame —— 再让 LLM 翻一遍, 这些措辞会被翻掉 → 模型分不清哪张是首帧 → 人物身份漂移。
+ *
+ *   → 实际实现: 【只把中文三段送翻译】, 英文的 subject_definitions 段【原样拼回】。
+ *     · 结果仍是完整四段 (段标题齐全) → injectH3 照样定位得到 (不会 h3-section-not-found)
+ *     · subject_definitions 逐字一致 ✓ (根本没进 LLM)
+ *     · 输入 token 更少 (这单的目标之一就是省 token)
+ */
+
+/**
+ * 按段标题把文本拆成 { prefix, 各段正文 }。
+ * 段标题必须【整行独占】(如 "detailed_description:"), 正文是标题行之后、下一个标题行之前的全部内容。
+ */
+export function splitPromptSections(
+  text: string,
+  headers: string[],
+): { prefix: string; sections: Record<string, string> } {
+  const norm = (s: string) => s.trim().toLowerCase()
+  const headerMap = new Map<string, string>()
+  for (const h of headers) headerMap.set(norm(h), h)
+  const buf: Record<string, string[]> = {}
+  for (const h of headers) buf[h] = []
+  const prefix: string[] = []
+  let current: string | null = null
+  for (const line of String(text || '').split('\n')) {
+    const hit = headerMap.get(norm(line))
+    if (hit) {
+      current = hit
+      continue
+    }
+    if (current) buf[current]!.push(line)
+    else prefix.push(line)
+  }
+  const sections: Record<string, string> = {}
+  for (const h of headers) sections[h] = (buf[h] || []).join('\n').trim()
+  return { prefix: prefix.join('\n').trim(), sections }
+}
+
+/**
+ * H3 模板: 中文三段 → 英文三段, 并把【原样的英文 subject_definitions 段】拼回去 → 完整四段。
+ *
+ * @param zhText        用户保存的中文版 (Sprint 29 follow-up Task A 产出的三段格式, 或用户手写的自由文本)
+ * @param contract      该剧集模板的翻译契约 (H3 = 官方四段)
+ * @param speakerNames  该分镜的角色名 (判断哪些行是台词)
+ * @param currentEnglish 当前库里的英文 video_prompt (subject_definitions 段从这里取原文)
+ */
+export async function translateH3ZhVideoPrompt(
+  zhText: string,
+  contract: VideoTranslateContract | undefined,
+  speakerNames: string[] = [],
+  currentEnglish = '',
+): Promise<string> {
+  const headers = contract?.sectionHeaders?.length ? contract.sectionHeaders : H3_DEFAULT_HEADERS
+  const subjectHeader = headers.find(h => /subject_definitions/i.test(h)) || 'subject_definitions:'
+  const zhHeaders = headers.filter(h => h !== subjectHeader)
+
+  const enSections = splitPromptSections(currentEnglish, headers)
+  const originalSubject = enSections.sections[subjectHeader] || ''
+
+  const zhSections = splitPromptSections(zhText, headers)
+  // 用户写的是带段标题的三段 (Task A 产出的格式) 还是自由文本?
+  const withHeaders = zhHeaders.filter(h => zhSections.sections[h])
+  const usedHeaders = withHeaders.length ? withHeaders : [zhHeaders[0]]
+  const bodies: Record<string, string> = {}
+  for (const h of usedHeaders) {
+    bodies[h] = zhSections.sections[h] || (usedHeaders.length === 1 && h === zhHeaders[0] ? zhText.trim() : '')
+  }
+  // 自由文本 → 整段当作 detailed_description (画面+运动), 另外两段保留原英文
+  const translateInput = usedHeaders
+    .filter(h => bodies[h])
+    .map(h => `${h}\n${bodies[h]}`)
+    .join('\n\n')
+  if (!translateInput.trim()) throw new Error('中文内容为空, 没有可翻译的段落')
+
+  // 翻译契约: 只保留【实际送进去的段】—— 别让翻译器去补一个没给的 subject_definitions
+  const h3Contract: VideoTranslateContract = {
+    sectionHeaders: usedHeaders,
+    preserveTags: contract?.preserveTags ?? ['<Subject N>', '<Picture N>'],
+    alignSpeakingSchedule: false,
+  }
+
+  const wrapped = wrapBareDialogue(translateInput, speakerNames)
+  const mask = maskDialogueBlocks(wrapped)
+  const translatedRaw = await translateVideoPromptToEnglish(mask.text, { contract: h3Contract })
+  const restored = mask.restore(translatedRaw).replace(/<d>\[Chinese\]([\s\S]*?)<\/d>/gi, '$1').trim()
+
+  const outSections = splitPromptSections(restored, headers)
+  const translatedOk = usedHeaders.filter(h => outSections.sections[h])
+  // 翻译器把段标题弄丢了 (例如加了 '### ' 前缀) → 宁可失败也别把结构写坏
+  //   (调用方会把英文保持原值不动 + 提示用户, 中文照样保存)
+  if (!translatedOk.length) {
+    throw new Error('翻译结果里找不到 H3 段标题, 已放弃写回英文 (中文已保存)')
+  }
+
+  const parts: string[] = []
+  if (originalSubject) parts.push(`${subjectHeader}\n${originalSubject}`)
+  for (const h of headers) {
+    if (h === subjectHeader) continue
+    // 用户没给中文的那段 → 保留原英文 (别把段删掉, H3 要求四段齐全)
+    const body = outSections.sections[h] || enSections.sections[h] || ''
+    if (body) parts.push(`${h}\n${body}`)
+  }
+  if (!parts.length) throw new Error('翻译结果为空, 已放弃写回英文 (中文已保存)')
+  return parts.join('\n\n')
+}
