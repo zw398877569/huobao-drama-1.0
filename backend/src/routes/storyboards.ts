@@ -34,6 +34,43 @@ function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) 
   }
 }
 
+/**
+ * ★ Sprint 30 Task A (PM msg-20261029-132): 道具关联同步 (全量覆盖语义, 跟角色那条路一致)
+ *   —— 传进来的集合 = 该镜最终关联 (原来有、这次没传的会被删掉)。
+ */
+function syncStoryboardProps(storyboardId: number, propIds: number[]) {
+  db.delete(schema.storyboardProps)
+    .where(eq(schema.storyboardProps.storyboardId, storyboardId))
+    .run()
+
+  const uniqueIds = [...new Set((propIds || []).filter(Boolean))]
+  if (!uniqueIds.length) return
+
+  for (const propId of uniqueIds) {
+    db.insert(schema.storyboardProps).values({
+      storyboardId,
+      propId,
+    }).run()
+  }
+}
+
+/** 该集道具清单里的 prop_id 集合 (关联只允许指向本集的道具) */
+function getEpisodePropIds(episodeId: number): Set<number> {
+  return new Set(
+    db.select({ propId: schema.episodeProps.propId })
+      .from(schema.episodeProps)
+      .where(eq(schema.episodeProps.episodeId, episodeId))
+      .all()
+      .map(r => r.propId)
+  )
+}
+
+function getStoryboardPropIds(storyboardId: number): number[] {
+  return db.select().from(schema.storyboardProps)
+    .where(eq(schema.storyboardProps.storyboardId, storyboardId)).all()
+    .map(r => r.propId)
+}
+
 function getStoryboardCharacterIds(storyboardId: number) {
   return db.select().from(schema.storyboardCharacters)
     .where(eq(schema.storyboardCharacters.storyboardId, storyboardId)).all()
@@ -208,6 +245,27 @@ app.put('/:id', async (c) => {
     }
   }
 
+  // ★ Sprint 30 Task A (PM msg-20261029-132): 道具关联 —— 全量覆盖语义
+  //   (传进来的集合 = 该镜最终关联; 原来有、这次没传的会被删掉), 跟角色那条路一致。
+  //   prop_id 必须属于【本集】的道具清单 (episode_props) —— 不能关联到别的集/别的剧的道具。
+  let savedPropIds: number[] | null = null
+  if ('prop_ids' in body) {
+    const episodePropIds = getEpisodePropIds(storyboard.episodeId)
+    const requested = [...new Set(((body.prop_ids || []) as any[]).filter(Boolean).map(Number))]
+    const invalid = requested.filter(pid => !episodePropIds.has(pid))
+    if (invalid.length) {
+      logTaskWarn('StoryboardAPI', 'prop-assign-rejected', {
+        storyboardId: id,
+        episodeId: storyboard.episodeId,
+        invalid,
+        hint: '道具不属于本集, 已拒绝',
+      })
+      return badRequest(c, `道具不属于本集: ${invalid.join(', ')}`)
+    }
+    syncStoryboardProps(id, requested)
+    savedPropIds = requested
+  }
+
   db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, id)).run()
   if ('character_ids' in body) syncStoryboardCharacters(id, body.character_ids || [])
   logTaskSuccess('StoryboardAPI', 'update', {
@@ -220,6 +278,8 @@ app.put('/:id', async (c) => {
   return success(c, {
     video_prompt: (updates.videoPrompt ?? storyboard.videoPrompt ?? '') as string,
     zh_translate: zhTranslate,
+    // ★ Sprint 30 Task A: 回传最终关联的道具 id (前端要回填勾选状态)
+    prop_ids: savedPropIds ?? getStoryboardPropIds(id),
   })
 })
 

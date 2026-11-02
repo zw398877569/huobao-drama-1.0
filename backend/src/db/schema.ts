@@ -229,6 +229,24 @@ export const storyboardCharacters = sqliteTable('storyboard_characters', {
   pk: primaryKey({ columns: [table.storyboardId, table.characterId] }),
 }))
 
+/**
+ * ★ Sprint 30 Task A (PM msg-20261029-132): 道具↔分镜 显式关联表。
+ *
+ * 结构完全对标 storyboard_characters (联合主键 + 2 个索引)。
+ * ★ 为什么需要它: 项目里原来【只有 episode_props 按集关联】, storyboards 表没有 props 字段
+ *   → 无法知道"哪个道具出现在哪个镜"。上一版用【道具名 3-gram 命中镜头文本】近似,
+ *   实测误判严重 (ep19: 5~6 个假阳性 + 7 个假阴性) → 不相关的道具图占参考图名额,
+ *   该进的道具图又进不来, 而且 legend 里写着本镜根本没有的道具 → 模型把别的道具画进画面。
+ *
+ * 一个 prop_id 出现在多个 storyboard_id 行里 = 一个道具关联多个分镜, 天然成立。
+ */
+export const storyboardProps = sqliteTable('storyboard_props', {
+  storyboardId: integer('storyboard_id').notNull(),
+  propId: integer('prop_id').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.storyboardId, table.propId] }),
+}))
+
 export const aiServiceConfigs = sqliteTable('ai_service_configs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   serviceType: text('service_type').notNull(),

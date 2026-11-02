@@ -158,6 +158,17 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_storyboard_characters_character_id
     ON storyboard_characters (character_id);
 
+  -- Sprint 30 Task A (PM msg-20261029-132): 道具↔分镜 显式关联表 (对标 storyboard_characters)
+  CREATE TABLE IF NOT EXISTS storyboard_props (
+    storyboard_id INTEGER NOT NULL,
+    prop_id INTEGER NOT NULL,
+    PRIMARY KEY (storyboard_id, prop_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_storyboard_props_storyboard_id
+    ON storyboard_props (storyboard_id);
+  CREATE INDEX IF NOT EXISTS idx_storyboard_props_prop_id
+    ON storyboard_props (prop_id);
+
   CREATE TABLE IF NOT EXISTS ai_service_configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     service_type TEXT NOT NULL,

@@ -288,6 +288,15 @@ app.get('/:episode_id/storyboards', async (c) => {
     charIdsByStoryboard.set(link.storyboardId, arr)
   }
 
+  // ★ Sprint 30 Task A: 每镜已关联的道具 (前端要显示已关联状态)
+  const propLinks = db.select().from(schema.storyboardProps).all()
+  const propIdsByStoryboard = new Map<number, number[]>()
+  for (const link of propLinks) {
+    const arr = propIdsByStoryboard.get(link.storyboardId) || []
+    arr.push(link.propId)
+    propIdsByStoryboard.set(link.storyboardId, arr)
+  }
+
   const episodeCharIds = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
     .map(link => link.characterId)
@@ -297,6 +306,8 @@ app.get('/:episode_id/storyboards', async (c) => {
   return success(c, rows.map((row) => ({
     ...toSnakeCase(row),
     character_ids: charIdsByStoryboard.get(row.id) || [],
+    // ★ Sprint 30 Task A: 该镜已关联的道具 id
+    prop_ids: propIdsByStoryboard.get(row.id) || [],
     characters: allChars
       .filter(ch => (charIdsByStoryboard.get(row.id) || []).includes(ch.id))
       .map(ch => toSnakeCase(ch)),
