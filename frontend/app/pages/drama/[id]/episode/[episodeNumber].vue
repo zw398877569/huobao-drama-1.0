@@ -1169,6 +1169,51 @@
             </div>
 
             <!-- Sprint 18 Task C: 台词编辑弹窗 (解析预览走后端, 前端不自己解析) -->
+            <!-- ★ Sprint 30 Task B: 关联道具弹窗 (本集道具清单, 多选, 缩略图+名称) -->
+            <div v-if="propAssignOpen" class="modal-overlay" @click.self="closePropAssign">
+              <div class="modal" style="max-width:620px">
+                <div class="modal-head">
+                  <div class="modal-title">
+                    关联道具 · 镜头 #{{ String(propAssignShot?.storyboard_number || propAssignShot?.storyboardNumber || 0).padStart(2, '0') }}
+                  </div>
+                  <button class="btn btn-sm btn-ghost" @click="closePropAssign">关闭</button>
+                </div>
+                <div class="modal-body">
+                  <div class="dim" style="font-size:12px;margin-bottom:10px">
+                    勾选本镜里【实际出现】的道具 —— 生成首帧/尾帧时, 只有勾选的道具图会作为参考图。
+                    (没勾选的道具图一律不进, 避免模型把别的道具画进画面)
+                  </div>
+                  <div v-if="!propAssignList.length" class="dim" style="font-size:12px">
+                    本集还没有道具 —— 先到『道具图片』页提取并生成道具图。
+                  </div>
+                  <div v-else class="prop-assign-list">
+                    <label
+                      v-for="p in propAssignList"
+                      :key="p.id"
+                      class="prop-assign-item"
+                      :class="{ selected: propAssignSelected.includes(Number(p.id)) }"
+                    >
+                      <input type="checkbox" :checked="propAssignSelected.includes(Number(p.id))" @change="togglePropAssign(Number(p.id))" />
+                      <img v-if="p.image_url || p.imageUrl" :src="'/' + (p.image_url || p.imageUrl)" class="prop-assign-thumb" />
+                      <div v-else class="prop-assign-thumb prop-assign-thumb-empty">无图</div>
+                      <div class="prop-assign-meta">
+                        <span class="prop-assign-name">{{ p.name }}</span>
+                        <span v-if="propShotNumbers(Number(p.id)).length" class="prop-assign-badge">
+                          已关联 镜{{ propShotNumbers(Number(p.id)).join('、镜') }}
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+                <div class="modal-foot">
+                  <button class="btn" @click="closePropAssign">取消</button>
+                  <button class="btn btn-primary" :disabled="propAssignSaving" @click="savePropAssign">
+                    {{ propAssignSaving ? '保存中…' : '保存' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div v-if="editTarget" class="modal-overlay" @click.self="closeEditDialog">
               <div class="modal">
                 <div class="modal-head">
@@ -1344,6 +1389,20 @@
                         <span :class="['dot', getLastFrame(sb) && 'ok', isPendingShotFrame(sb.id, 'last_frame') && 'pending']" />
                         <span class="dim" style="font-size:11px">尾帧</span>
                       </span>
+                      <!-- ★ Sprint 30 Task B: 本镜关联道具 (道具图只在生图时被消费 → 入口放【镜头图片】页) -->
+                      <button
+                        class="btn btn-sm prop-assign-btn"
+                        :class="{ 'has-props': propIdsOf(sb).length }"
+                        :title="'为本镜关联道具图 (生成首帧/尾帧时会作为参考图)'"
+                        @click.stop="openPropAssign(sb)"
+                      >
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12"/></svg>
+                        {{ propIdsOf(sb).length ? `道具 ×${propIdsOf(sb).length}` : '关联道具' }}
+                      </button>
+                    </div>
+                    <!-- 已关联的道具名 (用户一眼看出哪些镜配过道具) -->
+                    <div v-if="propIdsOf(sb).length" class="prop-tags">
+                      <span v-for="pid in propIdsOf(sb)" :key="pid" class="prop-tag">{{ propName(pid) }}</span>
                     </div>
                   </div>
                   <!-- Thumbnails -->
@@ -2253,6 +2312,83 @@ const {
   ctx: { sbs, chars, scenes },
   refresh,
 })
+
+// ★ Sprint 30 Task B/D (PM msg-20261029-132): 道具↔分镜 手动关联
+//   入口在【镜头图片】页 (道具图只在生图时被消费, 放视频生成页会让用户以为对视频生效)
+const propAssignOpen = ref(false)
+const propAssignShot = ref<any>(null)
+const propAssignSelected = ref<number[]>([])
+const propAssignSaving = ref(false)
+
+/** 该镜已关联的 prop_id 集合 */
+function propIdsOf(sb: any): number[] {
+  return Array.isArray(sb?.prop_ids) ? sb.prop_ids.map(Number).filter(Boolean) : []
+}
+function propById(id: number) {
+  return (keyProps.value || []).find((p: any) => Number(p.id) === Number(id))
+}
+function propName(id: number): string {
+  return propById(id)?.name || `道具#${id}`
+}
+
+/** 该道具已关联的镜号 (升序) —— 用来排序 + 显示徽标 */
+function propShotNumbers(propId: number): number[] {
+  return (sbs.value || [])
+    .filter((sb: any) => propIdsOf(sb).includes(Number(propId)))
+    .map((sb: any) => Number(sb.storyboard_number ?? sb.storyboardNumber ?? 0))
+    .filter((n: number) => n > 0)
+    .sort((a: number, b: number) => a - b)
+}
+
+/**
+ * 弹窗里的道具排序 (PM 决策 D6):
+ *   主排序键 = 该道具已关联的【最小镜号】, 有关联的排在前面; 未关联的按道具 id 排 (≈ 剧本提及顺序)。
+ *   ★ 不用 props.first_storyboard_number (实测是噪声字段)。
+ */
+const propAssignList = computed(() => {
+  const props = [...(keyProps.value || [])]
+  const minShot = (p: any) => {
+    const nums = propShotNumbers(Number(p.id))
+    return nums.length ? nums[0] : 99999
+  }
+  return props.sort((a: any, b: any) => {
+    const sa = minShot(a), sb2 = minShot(b)
+    if (sa !== sb2) return sa - sb2
+    return Number(a.id) - Number(b.id)
+  })
+})
+
+function openPropAssign(sb: any) {
+  propAssignShot.value = sb
+  propAssignSelected.value = [...propIdsOf(sb)]
+  propAssignOpen.value = true
+}
+function closePropAssign() {
+  propAssignOpen.value = false
+  propAssignShot.value = null
+  propAssignSelected.value = []
+}
+function togglePropAssign(id: number) {
+  const i = propAssignSelected.value.indexOf(id)
+  if (i >= 0) propAssignSelected.value.splice(i, 1)
+  else propAssignSelected.value.push(id)
+}
+
+async function savePropAssign() {
+  const sb = propAssignShot.value
+  if (!sb?.id) return
+  propAssignSaving.value = true
+  try {
+    await storyboardAPI.update(sb.id, { prop_ids: [...propAssignSelected.value] })
+    sb.prop_ids = [...propAssignSelected.value]
+    propAssignOpen.value = false
+    toast.success('已保存道具关联')
+  } catch (e: any) {
+    toast.error(`保存失败: ${e?.message || '未知错误'}`)
+  } finally {
+    propAssignSaving.value = false
+  }
+}
 
 // Drama 风格正向 token — 来自 useStylePresets 解析, 注入 buildShotImagePrompt
 // 跟后端 9 宫格 (runGenerateShotPrompts) 同步, 保证同部剧 9 宫格 vs 首尾帧风格一致
@@ -5018,6 +5154,20 @@ onMounted(() => { refresh() })
 
 /* Sprint 18 Task C: 台词编辑弹窗 —— 样式照抄 components/VideoSchedulePlan.vue 的 modal 段
    (那边是 scoped style, 跨组件用不了, 这里复制一份) */
+/* ★ Sprint 30 Task B: 关联道具 */
+.prop-assign-btn { margin-left:auto; font-size:10px; padding:2px 7px; }
+.prop-assign-btn.has-props { border-color: var(--accent); color: var(--accent); }
+.prop-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.prop-tag { font-size:10px; padding:1px 6px; border-radius:3px; background: var(--bg-2); border:1px solid var(--border); color: var(--text-3); }
+.prop-assign-list { display:flex; flex-direction:column; gap:6px; max-height:52vh; overflow:auto; }
+.prop-assign-item { display:flex; align-items:center; gap:8px; padding:6px; border:1px solid var(--border); border-radius:var(--radius); cursor:pointer; }
+.prop-assign-item.selected { border-color: var(--accent); background: var(--bg-2); }
+.prop-assign-thumb { width:40px; height:40px; object-fit:cover; border-radius:3px; flex-shrink:0; background: var(--bg-2); }
+.prop-assign-thumb-empty { display:flex; align-items:center; justify-content:center; font-size:9px; color: var(--text-3); }
+.prop-assign-meta { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.prop-assign-name { font-size:12px; color: var(--text-1); }
+.prop-assign-badge { font-size:10px; color: var(--accent); }
+
 .modal-overlay {
   position: fixed;
   inset: 0;
