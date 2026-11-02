@@ -139,13 +139,43 @@ export function useImageGeneration(deps: Deps) {
    *     既有五类(接力>角色>场景>本镜首尾>杂项)的相对顺序不变。
    */
   function collectShotPropAssets(sb: any): Array<{ asset: any; priority: number }> {
+    const props = (ctx.keyProps?.value || [])
+    const out: Array<{ asset: any; priority: number }> = []
+    const explicitPropIds = Array.isArray(sb?.prop_ids) ? sb.prop_ids.map(Number).filter(Boolean) : []
+
+    // ★ Sprint 30 Task C (PM msg-20261029-132): 该镜【有显式关联】→ 只进关联的道具图,
+    //   【关联外的一张都不进】(连下面的 3-gram 兜底也不要)。
+    //   原因: legend 里写着本镜根本没有的道具 → 模型有概率把别的道具画进画面 (这单要治的病)。
+    //   关联的道具沿用"相关道具"那一档优先级 (场景之后, 本镜首尾帧之前)。
+    if (explicitPropIds.length) {
+      for (const pr of props) {
+        const pid = Number(pr?.id)
+        if (!explicitPropIds.includes(pid)) continue
+        const path = pr?.image_url || pr?.imageUrl
+        const name = String(pr?.name || '').trim()
+        if (!path || !name) continue
+        out.push({
+          asset: {
+            path,
+            kind: 'prop',
+            label: `${name}道具图(画面里的该道具以这张图为准)`,
+            propName: name,
+          },
+          priority: 3,
+        })
+      }
+      return out
+    }
+
+    // ★ 该镜【完全没有显式关联】→ 走现有的 3-gram 兜底, 行为与改动前逐字一致。
+    //   老剧集没有关联数据 (PM 决策 D3: 不回填) → 一律按兜底走 → 老剧集零回归。
+    //   ⚠️ 边界 (PM 决策 D4 的字面语义): 用户把某镜的关联【全部取消】后, 该镜也会回到兜底路径。
     const text = [
       sb?.description || '', sb?.image_prompt || sb?.imagePrompt || '',
       sb?.action || '', sb?.dialogue || '', sb?.result || '', sb?.atmosphere || '',
     ].join(' ').toLowerCase()
-    if (!text.trim()) return []
-    const out: Array<{ asset: any; priority: number }> = []
-    for (const pr of (ctx.keyProps?.value || [])) {
+    if (!text.trim()) return out
+    for (const pr of props) {
       const path = pr?.image_url || pr?.imageUrl
       const name = String(pr?.name || '').trim()
       if (!path || !name) continue
