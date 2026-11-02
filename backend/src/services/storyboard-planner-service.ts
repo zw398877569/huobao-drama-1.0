@@ -805,6 +805,10 @@ export async function runStep3(opts: {
         //   embedDialogueInline 内部带「已有 开口: 就跳过」保护: Step2 prompt (sprint-15-a)
         //   已经要求 LLM 自己把台词写进 video_prompt_plot_state, LLM 照做了就不会重复嵌。
         videoPrompt: assembled.videoPrompt,
+        // ★ Sprint 29 follow-up Task A (PM msg-20261102-133): 中文版视频提示词 (用户手写的源)
+        //   · 只有 H3 模板会产出 (general 模板的 video_prompt 本来就是中文 → 这里留 null, 行为不变)
+        //   · 拿不到中文 → null (前端中文框退回自由文本模式, 老剧集初值不变)
+        videoPromptZh: assembled.videoPromptZh || null,
         imagePromptPlotState: assembled.imagePromptPlotState,
         videoPromptPlotState: assembled.videoPromptPlotState,
         // Sprint 11 Task A: H3 声音两列落库 (下游消费路径 — Task F 本期不做真实音频生成,

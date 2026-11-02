@@ -63,6 +63,11 @@ export interface ShotDetailsItem {
   detailed_description?: string
   overall_soundscape?: string
   non_diegetic_music?: string
+  // ── Sprint 29 follow-up Task A (PM msg-20261102-133): H3 中文三段 (可选) ──
+  //   subject_definitions 【没有中文版】—— 官方要求英文写法, 翻回英文会翻掉 the opening frame 之类的措辞。
+  detailed_description_zh?: string
+  overall_soundscape_zh?: string
+  non_diegetic_music_zh?: string
 }
 
 // ─── 模板接口 ────────────────────────────────────────────────────────────
@@ -99,6 +104,12 @@ export interface AssembleOutput {
   videoPrompt: string
   imagePromptPlotState: string | null
   videoPromptPlotState: string | null
+  /**
+   * ★ Sprint 29 follow-up Task A (PM msg-20261102-133): 中文版视频提示词 (用户手写的源)。
+   *   只有 H3 模板会产出 (三段, 各带自己的英文段标题 → 前端能跟英文框对上);
+   *   general 模板不产出 (它的 video_prompt 本来就是中文) → 留 null。
+   */
+  videoPromptZh?: string | null
 }
 
 /** 平台实际收到的参考图形态 (video-generation 层从 adapter 的 body 判断) */

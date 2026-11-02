@@ -89,6 +89,13 @@ export const H3ShotDetailsItemSchema = z.object({
   detailed_description: textOrLines,
   overall_soundscape: textOrLines,
   non_diegetic_music: textOrLines,
+  // ── Sprint 29 follow-up Task A (PM msg-20261102-133): 中文三段 (给用户看的源) ──
+  //   · 【可选】: LLM 没给就留空 —— 绝不能因为缺中文段让整轮拆解失败 (工单硬要求)。
+  //   · 【subject_definitions 不出中文版】: 官方要求英文写法, FL2V 还要写 the opening frame /
+  //     the closing frame —— 翻回英文会把这些措辞翻掉 → 模型分不清哪张是首帧 → 人物身份漂移。
+  detailed_description_zh: textOrLines.optional(),
+  overall_soundscape_zh: textOrLines.optional(),
+  non_diegetic_music_zh: textOrLines.optional(),
 })
 
 export const H3Step2Schema = z.object({
@@ -195,6 +202,16 @@ H3 官方四段 (这四个字段是本模板的核心输出):
         "Keep the initial frame's composition consistent..." 这种镜头指令)。
       ★ 这两段里【不要重复写对白】。
 
+中文版三段 (给用户看的源, 只影响『中文视频提示词』框, 【不影响】最终送给模型的英文):
+  detailed_description_zh  (string) 上面 detailed_description 的中文版 —— 语义一致、详细程度相当,
+      用中文写清画面内容 + 人物动作 + 相机运动 + 说话动作 (谁在说、什么表情)。
+      ★ 【不要写对白原文】(英文版也不写, 对白由代码层注入, 保证一字不差);
+      ★ 【不要写 <Subject N> / <Picture N> 这类编号】—— 中文版是给人看的, 编号由系统生成。
+  overall_soundscape_zh   (string) 上面 overall_soundscape 的中文版; 本镜没有环境音就写 "无"。
+  non_diegetic_music_zh   (string) 上面 non_diegetic_music 的中文版; 本镜没有配乐就写 "无"。
+  ★ 【英文四段照常写, 一个字都不许因为要写中文版而改变】—— 英文版才是最终送进模型的, 中文版只是给人看的副本。
+  ★ 中文版拿不准怎么写时, 宁可写得简略一点, 也绝不能因此改写或省略英文四段。
+
 ## 老路径的影视规则 (必须遵守)
 1. 道具时序: 角色身上的"情节道具"只能在所属 scene 的 description 里被显式提到时才出现在本镜;
    角色描述里的剧情瞬间 (例如"前爪按红色按钮")不算固有道具, 严禁带进本镜。
@@ -244,11 +261,27 @@ function assembleH3(input: AssembleInput): AssembleOutput {
     `non_diegetic_music:\n${(shot.non_diegetic_music || 'N/A').trim()}`,
   ].join('\n\n')
 
+  // ★ Sprint 29 follow-up Task A (PM msg-20261102-133): 中文三段 (给用户看的源)
+  //   · 段标题用【英文原名】(detailed_description: / overall_soundscape: / non_diegetic_music:)
+  //     → 跟上面的英文四段一一对应, 用户一眼能对上; 保存时后端也按同样的段名拆回去。
+  //   · 【subject_definitions 不出中文版】(官方要求英文写法, FL2V 的 the opening frame / the closing frame
+  //     翻回英文会被翻掉 → 人物身份漂移) —— 用户也看不到它, 它由系统按角色档案生成。
+  //   · 三段都拿不到 → 留空 (老剧集 / LLM 没给) —— 绝不允许产出半截中文。
+  const zhParts: string[] = []
+  const zhDetailed = String(shot.detailed_description_zh || '').trim()
+  const zhSoundscape = String(shot.overall_soundscape_zh || '').trim()
+  const zhMusic = String(shot.non_diegetic_music_zh || '').trim()
+  if (zhDetailed) zhParts.push(`detailed_description:\n${zhDetailed}`)
+  if (zhSoundscape) zhParts.push(`overall_soundscape:\n${zhSoundscape}`)
+  if (zhMusic) zhParts.push(`non_diegetic_music:\n${zhMusic}`)
+  const videoPromptZh = zhParts.join('\n\n')
+
   return {
     imagePrompt,
     videoPrompt,
     imagePromptPlotState: plotStateText || null,
     videoPromptPlotState: shot.video_prompt_plot_state || null,
+    videoPromptZh: videoPromptZh || null,
   }
 }
 
