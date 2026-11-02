@@ -1720,11 +1720,7 @@
 
           <!-- Production Navigator -->
         </template>
-        <!-- ★ Sprint 30 追加单 (PM msg-20261027-134): 关联道具 / 台词编辑 两个弹窗【移出 tab 分支】 -->
-             原先它们挂在 prodTab === 'dubbing' 分支里, 但【关联道具】的入口按钮在 prodTab === 'shots' 分支
-             → 在镜头图片页点按钮时 dubbing 分支根本不渲染 → 弹窗没挂载 → 点了像没反应 (P0, 132 单的核心交互不可用)。
-             现在挂在 production 面板层 (所有 prodTab 分支之外) → 任何 tab 打开都正常。
-             ★ 别再把它们挪回某个 tab 分支里 —— 入口和挂载点必须分开看。 -->
+        <!-- ★ Sprint 30 追加单 (PM msg-20261027-134): 关联道具 / 台词编辑 两个弹窗【移出 tab 分支】 —— 原先它们挂在 prodTab === 'dubbing' 分支里, 但【关联道具】的入口按钮在 prodTab === 'shots' 分支 → 在镜头图片页点按钮时 dubbing 分支根本不渲染 → 弹窗没挂载 → 点了像没反应 (P0, 132 单的核心交互不可用)。现在挂在 production 面板层 (所有 prodTab 分支之外) → 任何 tab 打开都正常。★ 别再把它们挪回某个 tab 分支里 —— 入口和挂载点必须分开看。 -->
         <!-- Sprint 18 Task C: 台词编辑弹窗 (解析预览走后端, 前端不自己解析) -->
         <!-- ★ Sprint 30 Task B: 关联道具弹窗 (本集道具清单, 多选, 缩略图+名称) -->
         <div v-if="propAssignOpen" class="modal-overlay" @click.self="closePropAssign">
