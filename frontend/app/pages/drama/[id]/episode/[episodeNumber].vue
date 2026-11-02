@@ -1178,86 +1178,6 @@
               </div>
             </div>
 
-            <!-- Sprint 18 Task C: 台词编辑弹窗 (解析预览走后端, 前端不自己解析) -->
-            <!-- ★ Sprint 30 Task B: 关联道具弹窗 (本集道具清单, 多选, 缩略图+名称) -->
-            <div v-if="propAssignOpen" class="modal-overlay" @click.self="closePropAssign">
-              <div class="modal" style="max-width:620px">
-                <div class="modal-head">
-                  <div class="modal-title">
-                    关联道具 · 镜头 #{{ String(propAssignShot?.storyboard_number || propAssignShot?.storyboardNumber || 0).padStart(2, '0') }}
-                  </div>
-                  <button class="btn btn-sm btn-ghost" @click="closePropAssign">关闭</button>
-                </div>
-                <div class="modal-body">
-                  <div class="dim" style="font-size:12px;margin-bottom:10px">
-                    勾选本镜里【实际出现】的道具 —— 生成首帧/尾帧时, 只有勾选的道具图会作为参考图。
-                    (没勾选的道具图一律不进, 避免模型把别的道具画进画面)
-                  </div>
-                  <div v-if="!propAssignList.length" class="dim" style="font-size:12px">
-                    本集还没有道具 —— 先到『道具图片』页提取并生成道具图。
-                  </div>
-                  <div v-else class="prop-assign-list">
-                    <label
-                      v-for="p in propAssignList"
-                      :key="p.id"
-                      class="prop-assign-item"
-                      :class="{ selected: propAssignSelected.includes(Number(p.id)) }"
-                    >
-                      <input type="checkbox" :checked="propAssignSelected.includes(Number(p.id))" @change="togglePropAssign(Number(p.id))" />
-                      <img v-if="p.image_url || p.imageUrl" :src="'/' + (p.image_url || p.imageUrl)" class="prop-assign-thumb" />
-                      <div v-else class="prop-assign-thumb prop-assign-thumb-empty">无图</div>
-                      <div class="prop-assign-meta">
-                        <span class="prop-assign-name">{{ p.name }}</span>
-                        <span v-if="propShotNumbers(Number(p.id)).length" class="prop-assign-badge">
-                          已关联 镜{{ propShotNumbers(Number(p.id)).join('、镜') }}
-                        </span>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-                <div class="modal-foot">
-                  <button class="btn" @click="closePropAssign">取消</button>
-                  <button class="btn btn-primary" :disabled="propAssignSaving" @click="savePropAssign">
-                    {{ propAssignSaving ? '保存中…' : '保存' }}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="editTarget" class="modal-overlay" @click.self="closeEditDialog">
-              <div class="modal">
-                <div class="modal-head">
-                  <div class="modal-title">编辑台词 · 镜头 #{{ String(editTarget.storyboard_number || editTarget.storyboardNumber || editTarget.id).padStart(2, '0') }}</div>
-                  <button class="btn btn-sm btn-ghost" @click="closeEditDialog">关闭</button>
-                </div>
-                <div class="modal-body">
-                  <div class="form-row">
-                    <label>每行一段对白, 格式: 角色名：台词。多个角色请分行。</label>
-                    <textarea class="textarea" v-model="editText" rows="7" placeholder="林达：您……您姓什么？&#10;王秀兰：王秀兰，八三年的。" @input="scheduleEditPreview" />
-                  </div>
-                  <div class="preview-box">
-                    <div class="preview-head">
-                      <span>解析预览</span>
-                      <span v-if="editPreviewing" class="dim">解析中…</span>
-                      <span v-else-if="editPreview" class="dim">{{ editPreview.segments.length }} 段</span>
-                      <button v-if="editPreview && editPreview.changed" class="btn btn-sm ml-auto" @click="applyNormalizedDialogue">应用建议格式</button>
-                    </div>
-                    <div v-if="editPreview && editPreview.suspect" class="tag-warning" style="padding:6px 10px; border-radius:6px; font-size:12px;">
-                      只解析出 1 段, 但文本里还有别的角色名 —— 多角色可能没分开, 建议手动分行
-                    </div>
-                    <div v-for="(seg, i) in (editPreview ? editPreview.segments : [])" :key="i" class="preview-row">
-                      <span class="preview-speaker">{{ seg.speaker }}</span>
-                      <span class="preview-text">{{ seg.text }}</span>
-                    </div>
-                    <div v-if="editPreview && !editPreview.segments.length" class="dim" style="font-size:12px;">解析不出对白 (会被当成没有台词, 不会生成配音)</div>
-                  </div>
-                </div>
-                <div class="modal-foot">
-                  <button class="btn" @click="closeEditDialog">取消</button>
-                  <button class="btn btn-primary" :disabled="editSaving" @click="saveEditDialog">{{ editSaving ? '保存中…' : '保存' }}</button>
-                </div>
-              </div>
-            </div>
           </div>
 
           <!-- Sub: Shots -->
@@ -1800,6 +1720,91 @@
 
           <!-- Production Navigator -->
         </template>
+        <!-- ★ Sprint 30 追加单 (PM msg-20261027-134): 关联道具 / 台词编辑 两个弹窗【移出 tab 分支】 -->
+             原先它们挂在 prodTab === 'dubbing' 分支里, 但【关联道具】的入口按钮在 prodTab === 'shots' 分支
+             → 在镜头图片页点按钮时 dubbing 分支根本不渲染 → 弹窗没挂载 → 点了像没反应 (P0, 132 单的核心交互不可用)。
+             现在挂在 production 面板层 (所有 prodTab 分支之外) → 任何 tab 打开都正常。
+             ★ 别再把它们挪回某个 tab 分支里 —— 入口和挂载点必须分开看。 -->
+        <!-- Sprint 18 Task C: 台词编辑弹窗 (解析预览走后端, 前端不自己解析) -->
+        <!-- ★ Sprint 30 Task B: 关联道具弹窗 (本集道具清单, 多选, 缩略图+名称) -->
+        <div v-if="propAssignOpen" class="modal-overlay" @click.self="closePropAssign">
+          <div class="modal" style="max-width:620px">
+            <div class="modal-head">
+              <div class="modal-title">
+                关联道具 · 镜头 #{{ String(propAssignShot?.storyboard_number || propAssignShot?.storyboardNumber || 0).padStart(2, '0') }}
+              </div>
+              <button class="btn btn-sm btn-ghost" @click="closePropAssign">关闭</button>
+            </div>
+            <div class="modal-body">
+              <div class="dim" style="font-size:12px;margin-bottom:10px">
+                勾选本镜里【实际出现】的道具 —— 生成首帧/尾帧时, 只有勾选的道具图会作为参考图。
+                (没勾选的道具图一律不进, 避免模型把别的道具画进画面)
+              </div>
+              <div v-if="!propAssignList.length" class="dim" style="font-size:12px">
+                本集还没有道具 —— 先到『道具图片』页提取并生成道具图。
+              </div>
+              <div v-else class="prop-assign-list">
+                <label
+                  v-for="p in propAssignList"
+                  :key="p.id"
+                  class="prop-assign-item"
+                  :class="{ selected: propAssignSelected.includes(Number(p.id)) }"
+                >
+                  <input type="checkbox" :checked="propAssignSelected.includes(Number(p.id))" @change="togglePropAssign(Number(p.id))" />
+                  <img v-if="p.image_url || p.imageUrl" :src="'/' + (p.image_url || p.imageUrl)" class="prop-assign-thumb" />
+                  <div v-else class="prop-assign-thumb prop-assign-thumb-empty">无图</div>
+                  <div class="prop-assign-meta">
+                    <span class="prop-assign-name">{{ p.name }}</span>
+                    <span v-if="propShotNumbers(Number(p.id)).length" class="prop-assign-badge">
+                      已关联 镜{{ propShotNumbers(Number(p.id)).join('、镜') }}
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn" @click="closePropAssign">取消</button>
+              <button class="btn btn-primary" :disabled="propAssignSaving" @click="savePropAssign">
+                {{ propAssignSaving ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="editTarget" class="modal-overlay" @click.self="closeEditDialog">
+          <div class="modal">
+            <div class="modal-head">
+              <div class="modal-title">编辑台词 · 镜头 #{{ String(editTarget.storyboard_number || editTarget.storyboardNumber || editTarget.id).padStart(2, '0') }}</div>
+              <button class="btn btn-sm btn-ghost" @click="closeEditDialog">关闭</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-row">
+                <label>每行一段对白, 格式: 角色名：台词。多个角色请分行。</label>
+                <textarea class="textarea" v-model="editText" rows="7" placeholder="林达：您……您姓什么？&#10;王秀兰：王秀兰，八三年的。" @input="scheduleEditPreview" />
+              </div>
+              <div class="preview-box">
+                <div class="preview-head">
+                  <span>解析预览</span>
+                  <span v-if="editPreviewing" class="dim">解析中…</span>
+                  <span v-else-if="editPreview" class="dim">{{ editPreview.segments.length }} 段</span>
+                  <button v-if="editPreview && editPreview.changed" class="btn btn-sm ml-auto" @click="applyNormalizedDialogue">应用建议格式</button>
+                </div>
+                <div v-if="editPreview && editPreview.suspect" class="tag-warning" style="padding:6px 10px; border-radius:6px; font-size:12px;">
+                  只解析出 1 段, 但文本里还有别的角色名 —— 多角色可能没分开, 建议手动分行
+                </div>
+                <div v-for="(seg, i) in (editPreview ? editPreview.segments : [])" :key="i" class="preview-row">
+                  <span class="preview-speaker">{{ seg.speaker }}</span>
+                  <span class="preview-text">{{ seg.text }}</span>
+                </div>
+                <div v-if="editPreview && !editPreview.segments.length" class="dim" style="font-size:12px;">解析不出对白 (会被当成没有台词, 不会生成配音)</div>
+              </div>
+            </div>
+            <div class="modal-foot">
+              <button class="btn" @click="closeEditDialog">取消</button>
+              <button class="btn btn-primary" :disabled="editSaving" @click="saveEditDialog">{{ editSaving ? '保存中…' : '保存' }}</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ===== EXPORT PANEL ===== -->
