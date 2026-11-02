@@ -4,6 +4,8 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
+// ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护
+import { hasScreenText } from '../utils/screen-text.js'
 import { joinProviderUrl } from './adapters/url.js'
 
 export type ServiceType = 'text' | 'image' | 'video' | 'audio' | 'sanitizer'
@@ -557,12 +559,20 @@ async function requestPromptLLM(
  * (2026-09-18 bug report) — 拆函数后两边 system prompt 各管各的, 不会再误触发 reasoning。
  */
 export async function translateImagePromptToEnglish(prompt: string): Promise<string> {
+  // ★ Sprint 31 追加 (PM msg-20261102-137): <screen_text> 块里是【画面里要显示的文字】
+  //   (订单备注 / 门牌号) —— 它必须留在【原语言】, 否则画面上的中文线索读不出来。
+  //   这是 'Do NOT preserve any Chinese' 的唯一例外。
+  //   ★ 只有 prompt 里真的有 <screen_text> 块时才追加 → 其余 prompt 的 system prompt 逐字不变。
+  const screenRule = hasScreenText(prompt)
+    ? ' EXCEPTION: any [[SCREENTEXTn]] placeholder marks ON-SCREEN TEXT — keep that placeholder token EXACTLY as given; do NOT translate it, do NOT renumber it, do NOT drop it, and do NOT invent replacement text for it.'
+    : ''
   const systemPrompt = (
     'You are translating an AI image generation prompt into fluent English. '
     + 'Preserve all concrete visual details: face / appearance / outfit / scene / lighting / color '
     + '/ camera angle / style tokens (cinematic, anamorphic, shallow DOF, etc.). '
     + 'Output ONLY the English translation — no commentary, no explanation, no thinking blocks. '
     + 'Do NOT preserve any Chinese in the output; the entire result should be English.'
+    + screenRule
   )
   return callTextLLMForPrompt(prompt, systemPrompt)
 }

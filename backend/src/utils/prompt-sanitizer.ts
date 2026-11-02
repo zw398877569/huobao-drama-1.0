@@ -14,6 +14,8 @@
  * 整个函数永不抛出,任何异常都会被吞掉并降级到下一档,确保生图流程不被打断。
  */
 import { getActiveConfig, getTextChatCompletionsUrl } from '../services/ai.js'
+// ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护
+import { hasScreenText } from './screen-text.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { logTaskError, logTaskProgress, logTaskWarn } from './task-logger.js'
 import { DEFAULT_IMAGE_SAFETY_SUFFIX } from '../services/image-generation.js'
@@ -409,9 +411,18 @@ const SYSTEM_INSTRUCTION_BASE = [
 ]
 
 /** 按 kind 拼 system prompt —— 基础安全规则 + 该 kind 的语义分支规则 */
-function buildSystemInstruction(kind: ImagePromptKind): string {
+/**
+ * ★ Sprint 31 追加 (PM msg-20261102-137): <screen_text> 块是【画面里要显示的文字】,
+ *   必须在改写里原样保留 (rule F 'Output IN ENGLISH' 的唯一例外)。
+ *   ★ 只有 prompt 里真的有 <screen_text> 块时才追加这条 —— 没块的 prompt
+ *     system prompt 逐字不变 (角色图 / 场景图 / 旧数据零回归)。
+ */
+const SCREEN_TEXT_INSTRUCTION = 'H. Any [[SCREENTEXTn]] placeholder marks ON-SCREEN TEXT that must appear verbatim in the image. Keep that placeholder token EXACTLY as written — do NOT translate it, do NOT renumber it, do NOT drop it, and do NOT invent replacement text for it. (This is the only exception to rule F.)'
+
+function buildSystemInstruction(kind: ImagePromptKind, hasScreenTextBlock = false): string {
   const extra = KIND_INSTRUCTIONS[kind] || []
-  return [...SYSTEM_INSTRUCTION_BASE, ...extra].join('\n')
+  const screenRule = hasScreenTextBlock ? [SCREEN_TEXT_INSTRUCTION] : []
+  return [...SYSTEM_INSTRUCTION_BASE, ...extra, ...screenRule].join('\n')
 }
 
 function extractPromptFromLLM(raw) {
@@ -780,7 +791,8 @@ async function sanitizeImagePromptLLM(rawPrompt, kind: ImagePromptKind = 'shot')
     return null
   }
   const result = await runSanitizerCandidates(rawPrompt, candidates, attemptSanitizerLLM, {
-    systemPrompt: buildSystemInstruction(kind),
+    // ★ Sprint 31: 只有含 <screen_text> 的 prompt 才追加「原样保留」规则 (其余逐字不变)
+    systemPrompt: buildSystemInstruction(kind, hasScreenText(String(rawPrompt || ''))),
   })
   return result.ok ? (result.text as string) : null
 }

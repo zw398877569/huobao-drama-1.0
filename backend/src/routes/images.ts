@@ -5,6 +5,8 @@ import { success, created, now, badRequest } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
+// ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护 (引号内容 → <screen_text>)
+import { wrapQuotedAsScreenText, maskScreenText, restoreScreenText } from '../utils/screen-text.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -68,7 +70,21 @@ app.post('/', async (c) => {
     //   character_id  → 角色设定稿 (中性背景约束) / scene_id → 场景 (空场景约束)
     const imageKind = body.storyboard_id ? 'shot'
       : (body.character_id ? 'character' : (body.scene_id ? 'scene' : 'shot'))
-    const safePrompt = await sanitizeImagePrompt(body.prompt, { kind: imageKind })
+    // ★ Sprint 31 追加 (PM msg-20261102-137): 首尾帧 prompt 里【引号包的内容】是画面里要显示的文字
+    //   (订单备注 / 门牌号), 生图链路的两道 LLM 工序 (rule F 改写 + 英文翻译) 会把它翻成英文
+    //   → 手机屏上的中文线索读不出来。用 <screen_text> 包住 → 两道工序都绕开它。
+    //   ★ 只对首尾帧生效 —— 角色图 / 场景图 的引号内容不是画面文字, 不动 (零回归)。
+    const isShotFrame = body.frame_type === 'first_frame' || body.frame_type === 'last_frame'
+    //   ★ 用【占位符】而不是标签去过 sanitizer —— LLM 改写时保住一个短 ASCII token
+    //     比保住整个 <screen_text>…</screen_text> 块稳得多; 改写完再还原成标签存库。
+    let safePrompt: string
+    if (isShotFrame) {
+      const masked = maskScreenText(wrapQuotedAsScreenText(body.prompt))
+      const sanitized = await sanitizeImagePrompt(masked.text, { kind: imageKind })
+      safePrompt = restoreScreenText(sanitized, masked.items)
+    } else {
+      safePrompt = await sanitizeImagePrompt(body.prompt, { kind: imageKind })
+    }
     const id = await generateImage({
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,

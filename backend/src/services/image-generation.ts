@@ -7,6 +7,8 @@ import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl, truncateForLog } from '../utils/task-logger.js'
 import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
+// ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护 (mask / restore / 去标签)
+import { maskScreenText, restoreScreenText, stripScreenTextTags } from '../utils/screen-text.js'
 
 // 默认图片生成安全后缀：把"角色/场景"提示词从"剧情重现"重新框架为"电影概念艺术"，
 // 以降低 Agnes 等内容审核服务的命中率。后缀里的关键词都是正向艺术语言，
@@ -119,15 +121,21 @@ async function processImageGeneration(id: number, config: AIConfig) {
         // 跟 video-generation.ts:113 同模式;失败 non-fatal,fallback 到原文。
         let finalPrompt = genRecord.prompt
         if (finalPrompt && hasNonEnglishChars(finalPrompt)) {
+          // ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字 (<screen_text> 块) 先换成 ASCII 占位符,
+          //   翻译完再还原 —— 否则手机屏上的「501，王阿姨…」会被翻成英文, 剧情线索读不出来。
+          const maskedScreen = maskScreenText(finalPrompt)
           try {
             logTaskProgress('ImageTask', 'translating-prompt', { id, original: truncateForLog(finalPrompt) })
-            finalPrompt = await translateImagePromptToEnglish(finalPrompt)
+            finalPrompt = await translateImagePromptToEnglish(maskedScreen.text)
+            finalPrompt = restoreScreenText(finalPrompt, maskedScreen.items)
             logTaskProgress('ImageTask', 'translated-prompt', { id, translated: truncateForLog(finalPrompt) })
           } catch (err: any) {
             logTaskWarn('ImageTask', 'translation-failed', { id, error: err.message })
             // translation failure is non-fatal, fall through with original prompt
           }
         }
+        // ★ Sprint 31: 去掉 <screen_text> 标签, 只留中文原文发给图片模型 (模型看到的是干净的文字, 不是标签)
+        if (finalPrompt) finalPrompt = stripScreenTextTags(finalPrompt)
 
         const resolvedReferenceImages = await normalizeReferenceImages(genRecord.referenceImages)
         const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
