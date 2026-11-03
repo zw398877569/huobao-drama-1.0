@@ -25,19 +25,47 @@ export const ShotPlanItemSchema = z.object({
 })
 
 export const Step1Schema = z.object({
-  // Sprint 11 QA msg-20261016-067 Bug-C: 上限 30 → 50
-  //   修前: drama 13「雨夜」step1 第一次跑 zod-validation-failed code='too_big' maximum=30
-  //         (LLM 生成 >30 镜), 用户手动重跑第二次 12 秒才成功 — UX 差且白烧一次 LLM。
-  //   修后: 上限放宽到 50, 配合下面 prompt 强化 (明确写 ≤50 + 精简合并指引)。
-  //   下限 5 不变 (少于 5 镜的剧本信息量不足, 仍应拦)。
-  //   注意: VIDEO_MAX_DURATION=15 是 H3 单镜硬上限 (跟本项无关, 那是单镜时长不是镜数)。
-  shot_plan: z.array(ShotPlanItemSchema).min(5).max(50),
-  // Sprint 11 QA msg-20261016-067 Bug-C: 300 → 750
-  //   镜数上限放到 50 后, 50 镜 × VIDEO_MAX_DURATION 15s = 750s 是理论上限。
-  //   修前 total_duration max 300 会先于 shot_plan max 30 撞墙 (30×15=450 > 300),
-  //   导致"镜数没超但总时长超"也被 zod fail, 且错误信息指向 total_duration 让人误判。
-  total_duration: z.number().min(10).max(750),
+  // ★ Sprint 33 T2 (PM msg-20261103-140): 数组长度【不再直接限 5-50】——
+  //   过渡镜不参与主体预算, zod 的 .max(50)/.min(5) 检的是【数组长度】,
+  //   表达不了『非过渡镜计数 ≤ 50 / ≥ 5』→ 改成下面的 superRefine 按【主体镜】判定。
+  //   (上限 50 的由来: Sprint 11 QA msg-20261016-067 Bug-C, 30 → 50;
+  //    下限 5 的原意: 少于 5 镜的剧本信息量不足 —— 两条都保留, 只是口径换成主体镜。)
+  shot_plan: z.array(ShotPlanItemSchema),
+  //   total_duration = 成片真实总长 (主体 Σ + 过渡镜 Σ) → 不再卡 max(750);
+  //   750 的上限改在 superRefine 里用【主体 Σ】判定 (见下)。
+  //   (原来 300 → 750 的由来: Sprint 11 QA msg-20261016-067 Bug-C ——
+  //    50 镜 × VIDEO_MAX_DURATION 15s = 750s 是理论上限;
+  //    VIDEO_MAX_DURATION=15 是 H3 单镜硬上限, 跟本项无关。)
+  total_duration: z.number().min(10),
   scene_distribution: z.record(z.string(), z.number()),
+}).superRefine((val, ctx) => {
+  // ★ 主体 = 不是过渡镜的镜头 (is_transition 不为 true)
+  const main = val.shot_plan.filter(s => s.is_transition !== true)
+  const transitionCount = val.shot_plan.length - main.length
+  if (main.length > 50) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['shot_plan'],
+      message: `主体镜头 ${main.length} 个 > 上限 50 (过渡镜 ${transitionCount} 个不计入预算) — 会被 zod 拒绝整轮重跑`,
+    })
+  }
+  // ★ 下限也按主体口径: 3 个主体镜 + 2 个过渡镜 = 数组 5 个能过数组长度, 但主体只有 3 镜,
+  //   违反『少于 5 镜信息量不足』的原意 → 必须拦住。
+  if (main.length < 5) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['shot_plan'],
+      message: `主体镜头只有 ${main.length} 个 < 下限 5 (过渡镜 ${transitionCount} 个不计入) — 少于 5 镜信息量不足`,
+    })
+  }
+  const mainSum = main.reduce((a, s) => a + (Number(s.duration) || 0), 0)
+  if (mainSum > 750) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['total_duration'],
+      message: `主体镜头总时长 ${mainSum}s > 上限 750s (过渡镜 ${transitionCount} 个不计入)`,
+    })
+  }
 })
 
 /**

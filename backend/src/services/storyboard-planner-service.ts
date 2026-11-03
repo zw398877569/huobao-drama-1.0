@@ -45,6 +45,8 @@ import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
 import { applyDurationPolicy } from './shot-duration.js'
 import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
+// ★ Sprint 33 T2 (PM msg-20261103-140): 过渡镜的校验层后处理 (纯函数)
+import { normalizeTransitionPlan } from '../utils/transition-shot.js'
 import { stripReasoningBlocks } from './ai.js'
 
 // Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
@@ -451,14 +453,19 @@ export async function runStep1(opts: {
     },
   })
 
+  // ★ Sprint 33 T2 (PM msg-20261103-140): 校验层后处理 ——
+  //   过渡镜 duration 强制 2s (不靠 LLM) + shot_number 连续 1..N + total_duration 重算成片真实总长。
+  //   ★ 没有过渡镜时原样返回 → 老剧集拆解产出与改动前逐字一致 (零回归)。
+  const normalized = normalizeTransitionPlan(result)
+
   await savePlanningData(episodeId, {
     step1_done_at: now(),
-    step1_plan: result.shot_plan,
+    step1_plan: normalized.shot_plan,
   })
   logTaskSuccess('StoryboardPlanner', 'step1-done', {
-    episodeId, shotCount: result.shot_plan.length, totalDuration: result.total_duration,
+    episodeId, shotCount: normalized.shot_plan.length, totalDuration: normalized.total_duration,
   })
-  return result
+  return normalized
 }
 
 // ─── Step 2: shot_details (V3 zod enum 强约束) ──────────────────────

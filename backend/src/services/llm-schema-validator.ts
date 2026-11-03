@@ -431,6 +431,22 @@ export function salvageShotPlanItem(
     (n): n is number => typeof n === 'number' && Number.isInteger(n),
   )
 
+  // ★ Sprint 33 T2 (PM msg-20261103-140): 透传过渡镜标记 ——
+  //   LLM 漏给 is_transition / transition_kind 时, salvage 补出来的项会静默变成 false,
+  //   过渡镜【无声消失】且没有任何告警。这里必须原样带过去。
+  const is_transition = obj.is_transition === true ? true : undefined
+  const transitionKindRaw = typeof obj.transition_kind === 'string' ? obj.transition_kind : ''
+  const transition_kind = (transitionKindRaw === 'space' || transitionKindRaw === 'character_entry')
+    ? transitionKindRaw
+    : undefined
+  if (is_transition && !transition_kind) {
+    logTaskWarn('LLMSchemaValidator', 'transition-kind-missing', {
+      episodeId: ctx.episodeId,
+      shotNumber: shot_number,
+      hint: '过渡镜缺 transition_kind (space/character_entry) —— 按未知类型处理',
+    })
+  }
+
   const result: {
     shot_number: number
     scene_id: number
@@ -438,6 +454,8 @@ export function salvageShotPlanItem(
     intent_function: string
     action: string
     character_ids?: number[]
+    is_transition?: boolean
+    transition_kind?: 'space' | 'character_entry'
   } = {
     shot_number,
     scene_id,
@@ -446,6 +464,8 @@ export function salvageShotPlanItem(
     action,
   }
   if (character_ids.length) result.character_ids = character_ids
+  if (is_transition) result.is_transition = true
+  if (transition_kind) result.transition_kind = transition_kind
 
   return result
 }
