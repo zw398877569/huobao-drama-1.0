@@ -262,6 +262,22 @@ H3 官方四段 (这四个字段是本模板的核心输出):
  * image_prompt 【保持 general 的做法】(工单 B 明确要求): 生图走 nano-banana 那条链,
  * 不该被 H3 模板影响 —— 决策 9 保留 image_prompt_permanent 就是为了这个。
  */
+/**
+ * ★ Sprint 33 追加单3 (PM msg-20261103-150): 纯环境空镜的 subject_definitions 兜底。
+ *
+ * 背景: H3 的四段必填, subject_definitions 段必须有正文 → LLM 在纯环境空镜
+ *   (character_ids=[]) 上没给 subject_definitions 时, 组装出的 video_prompt 是空壳 →
+ *   validateAssembled fail fast → 【整个 step3 中止, 一镜都不落库】。
+ *   而 prompt 里从来没教过 LLM 无角色镜该怎么写 (ep19 是它自己编出来的, 属运气)。
+ *
+ * ★ 只在【LLM 没给】且【本镜没有角色】时兜底:
+ *   · LLM 自己写了 → 原样保留, 一个字节都不改
+ *   · 有角色的镜缺这一段 → 仍然空 → validateAssembled 照旧 fail fast (不掩盖真问题)
+ * ★ 措辞照 PM 拍板 (ep19 已实机验证可行的那个写法), 不描述任何人物 (画面里没有人)。
+ */
+const EMPTY_SHOT_SUBJECT_DEFINITION_FALLBACK =
+  '<Subject 1> is absent from this environment-only shot, derived from the opening frame, preserving the environment and composition of <Picture 1>'
+
 function assembleH3(input: AssembleInput): AssembleOutput {
   const { shot, cleanedPermanent } = input
   // ★ Sprint 33 T5 (PM msg-20261103-140): character_entry 类过渡镜 → 画面里【没有人】→
@@ -275,8 +291,18 @@ function assembleH3(input: AssembleInput): AssembleOutput {
   const plotStateText = `${shot.image_prompt_plot_state?.trim() || ''}${cleanedPermanent.plotState ? (shot.image_prompt_plot_state ? ' | ' : '') + cleanedPermanent.plotState : ''}`
   const imagePrompt = [permanentText, shot.description || '', plotStateText].filter(Boolean).join('。')
 
+  // ★ Sprint 33 追加单3 (PM msg-20261103-150): 纯环境空镜 (character_ids 为空) 且 LLM 没给
+  //   subject_definitions 时, 代码层补一段兜底 —— 否则 H3 四段必填的自检会 fail fast,
+  //   【整个 step3 中止, 一镜都不落库】(本集 19 镜就是这么全丢的)。
+  //   ★ LLM 自己写了 → 原样保留, 一个字节都不改;
+  //   ★ 有角色的镜缺这一段 → 仍然留空 → validateAssembled 照旧 fail fast (不掩盖真问题)。
+  //   ★ 措辞照 PM 拍板 (ep19 已实机验证可用的写法), 不描述任何人物 —— 画面里本来就没人。
+  const subjectDefinitionsRaw = String(shot.subject_definitions || '').trim()
+  const subjectDefinitions = subjectDefinitionsRaw
+    || ((shot.character_ids || []).length === 0 ? EMPTY_SHOT_SUBJECT_DEFINITION_FALLBACK : '')
+
   const videoPrompt = [
-    `subject_definitions:\n${(shot.subject_definitions || '').trim()}`,
+    `subject_definitions:\n${subjectDefinitions}`,
     `detailed_description:\n${(shot.detailed_description || '').trim()}`,
     `overall_soundscape:\n${(shot.overall_soundscape || 'N/A').trim()}`,
     `non_diegetic_music:\n${(shot.non_diegetic_music || 'N/A').trim()}`,
