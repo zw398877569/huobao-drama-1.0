@@ -47,6 +47,9 @@ export function useVideoGeneration(deps: Deps) {
   const videoFallbackNotes = ref<Record<number, string>>({})
 
   const FALLBACK_NOTE_TEXT: Record<string, string> = {
+    // ★ Sprint 34 (PM msg-20261103-144): 用户选了一个【我们没接入】的模型 id → 自动路由到别的工作流。
+    //   这跟『mode 不匹配』是两种问题, 提示要区分开 (前者是 id 写错/没接入, 后者是模式选错)。
+    model_not_supported: '所选模型未接入（已自动改用其它工作流），请检查设置里的模型 id 是否正确',
     mode_mismatch_ref2v: '模式不匹配·已转多图参考',
     mode_mismatch_no_images: '无参考图·已转文生视频',
   }

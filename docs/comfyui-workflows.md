@@ -95,6 +95,20 @@
 - **场景**: 长镜头（11-15s）需要音频驱动
 - **注意**: 同 audio v2 的限制
 
+### 9. `minimax_h3_803` — Ref2V 九图三音 15s 画质增强版
+
+- **用途**: 九图参考 + 三段音频 + 15 秒 + 高分辨率档（性价比最优）
+- **时长**: 1-15s
+- **分辨率**: 480p / 768p / **1088p** / 1440p（横竖都支持）
+  ★ ★ 与其它工作流不同: 803 的分辨率字面量【带分辨率数字】——
+  `768p竖(768*1376)` / `1088p竖(1088*1920)` / `1088p横(1920*1088)` / `1440p竖(1440*2560)` / `1440p横(2560*1440)`
+  （其它工作流是裸名 `768p竖` / `1080p横`）→ 字面量发错平台直接报参数错
+- **默认档**: 1088p（¥0.060/秒，5s 一镜 ¥0.30 —— 比 v5 的 1080p ¥0.100/秒 = ¥0.50 便宜 40% 且更清晰）
+- **输入**: `prompt` + 最多 9 张参考图 + 多段音频（ref_audio_0~2）
+- **触发条件**: 用户显式选了 `minimax_h3_803`
+- **注意**: 它是【音频工作流】—— 本镜没有配音时按既有 `no_audio_fallback` 规则退普通 Ref2V (v5)，也就用不到 1088p 档
+- **mode 字段**: 本期不传（平台默认即高质模式）
+
 ## 路由速查
 
 adapter 按以下优先级自动选工作流（无显式选择时）：
@@ -112,7 +126,7 @@ referenceMode = none 且没有 first/last frame
   └→ T2V: minimax_h3_lightx2v_no_pic (1-10s)
 ```
 
-用户显式选了 `zm_u24 / zm_u08 / image_audio_to_video_v2 / image_audio_to_video_v2_15s` 时：
+用户显式选了 `zm_u24 / zm_u08 / image_audio_to_video_v2 / image_audio_to_video_v2_15s / minimax_h3_803` 时：
 - mode 必须是 `multiple` 或 `single`，否则静默 fallback
 - fallback 时写 `task-logger` 的 `model-mode-mismatch` 日志，按 videoGenId 可查
 
@@ -121,7 +135,7 @@ referenceMode = none 且没有 first/last frame
 | 工作流 | 时长上限 |
 |--------|---------|
 | T2V / FL2V / Ref2V v5 / image_audio v2 | 1-10s |
-| Ref2V v5_15s / zm_u24 / zm_u08 / image_audio v2_15s | 1-15s |
+| Ref2V v5_15s / zm_u24 / zm_u08 / image_audio v2_15s / 803 | 1-15s |
 
 超过上限的 duration 会被 adapter 截断到上限，不报错。
 
@@ -132,8 +146,11 @@ referenceMode = none 且没有 first/last frame
 | T2V / FL2V | 480p竖/横、768p竖/横 |
 | Ref2V v5 / v5_15s / image_audio v2 | 480p竖/横、768p竖/横、**1080p竖/横** |
 | zm_u24 / zm_u08 / image_audio v2_15s | 480p竖/横、768p竖/横 |
+| 803 (九图三音 15s) | 480p / 768p / **1088p** / 1440p —— ★ 字面量【带分辨率数字】(`1088p竖(1088*1920)` / `1088p横(1920*1088)`) |
 
 adapter 通过 `aspectRatio` 自动映射（9:16/3:2→竖，16:9/4:3→横），不支持的纵横比 fallback 到 768p竖。
+★ Sprint 34 起: 分辨率【按工作流】取（adapter 的 `RESOLUTION_PROFILES`），不再全局只有 4 个字面量。
+  每个工作流一份合法档位 + 默认档；803 的默认档 = 1088p, 其它工作流的默认档与之前逐字一致。
 
 ## 维护规则
 

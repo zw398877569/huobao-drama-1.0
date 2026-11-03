@@ -15,6 +15,8 @@ export const AUTODL_COMFYUI_MODEL_LABELS: Record<string, string> = {
   minimax_h3_zm_u08: 'Ref2V 高速版 zm_u08（1-15s）',
   minimax_h3_image_audio_to_video_v2: 'Ref2V 多图+多音频 v2（1-10s）',
   minimax_h3_image_audio_to_video_v2_15s: 'Ref2V 多图+多音频 v2（1-15s）',
+  // ★ Sprint 34 (PM msg-20261103-144): 九图三音 15s 画质增强版 (默认 1088p, 比 v5 的 1080p 便宜 40%)
+  minimax_h3_803: 'Ref2V 九图三音 15s 画质增强版（1-15s）',
 }
 
 /**
@@ -117,6 +119,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
           'minimax_h3_zm_u08',                                 // Ref2V  高速版 (zm_u08)                 1-15s   480p/768p
           'minimax_h3_image_audio_to_video_v2',                // Ref2V  多图+多音频（口型/配乐驱动）     1-10s   480p/768p/1080p
           'minimax_h3_image_audio_to_video_v2_15s',            // Ref2V  多图+多音频 15s 长版            1-15s   480p/768p
+          'minimax_h3_803',                                    // Ref2V  九图三音 15s 画质增强版           1-15s   480p/768p/1088p/1440p
           // 详细中文说明见 backend/src/services/adapters/autodl-comfyui-workflow.ts 的 JSDoc 与 docs/comfyui-workflows.md
         ],
       },
