@@ -98,6 +98,17 @@ Ref2V 多图+多音频 v2 15s 版
 注意：同 audio v2 的限制
 */
   static readonly WORKFLOW_REF2V_AUDIO_15S = 'minimax_h3_image_audio_to_video_v2_15s'
+  /**
+Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
+时长 1-15s，分辨率 480p/768p/1088p/1440p（横竖都支持）
+输入：prompt + 最多 9 张参考图 + 多段音频（ref_audio_0~2）
+路由：用户显式选择
+场景：性价比 + 清晰度兼顾 —— 默认 1088p 档 ¥0.060/秒 (5s 一镜 ¥0.30),
+      比 v5 的 1080p (¥0.100/秒 = 5s ¥0.50) 便宜 40% 且更清晰
+注意：★ 分辨率字面量【带分辨率数字】('1088p竖(1088*1920)'), 与其它工作流的裸名 ('1080p竖') 不同
+      —— 平台枚举逐字要求, 发错就报参数错。详见 RESOLUTION_PROFILES。
+*/
+  static readonly WORKFLOW_REF2V_803 = 'minimax_h3_803'
 
   /** 所有 Ref2V 变体 — record.model 显式选择时识别 */
   private static readonly REF2V_VARIANTS = [
@@ -107,6 +118,7 @@ Ref2V 多图+多音频 v2 15s 版
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
   ]
 
   /**
@@ -119,6 +131,7 @@ Ref2V 多图+多音频 v2 15s 版
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
   ]
 
   /** 音频参考最多 3 段 (ref_audio_0/1/2)，平台硬上限 */
@@ -128,6 +141,71 @@ Ref2V 多图+多音频 v2 15s 版
   private static readonly REF2V_MAX_SHORT_S = 10
   /** 平台 ref_image_N 槽位上限 (ref_image_0 ~ ref_image_8) */
   private static readonly REF2V_MAX_IMAGES = 9
+
+  /**
+   * ★ Sprint 34 (PM msg-20261103-144): 工作流 → 分辨率档位。
+   *
+   * ★ 字面量必须与平台枚举【逐字一致】—— 写法随工作流变:
+   *   · 已支持的 8 个用裸名 ('768p竖' / '1080p横')
+   *   · minimax_h3_803 系列用带分辨率数字 ('1088p竖(1088*1920)')
+   *   发错格式平台直接报参数错, 不会静默降级。
+   *
+   * · levels*: 该工作流合法的档位 (高→低), 供以后做分辨率选择 UI 用
+   * · default*: 默认档 (竖/横各一)
+   * · fallbackVert: 无 aspectRatio / 不支持的纵横比时用 (老工作流 = '768p竖', 与改动前逐字一致)
+   */
+  private static readonly RESOLUTION_PROFILES: Record<string, {
+    levelsVert: string[]
+    levelsHor: string[]
+    defaultVert: string
+    defaultHor: string
+    fallbackVert: string
+  }> = {
+    // T2V (无参考图)
+    'minimax_h3_lightx2v_no_pic': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
+    // FL2V (首尾帧)
+    'minimax_h3_lightx2v': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
+    // Ref2V v5 / v5_15s → 支持 1080p
+    'minimax_h3_lightx2v_v5': { levelsVert: ['1080p竖', '768p竖'], levelsHor: ['1080p横', '768p横'], defaultVert: '1080p竖', defaultHor: '1080p横', fallbackVert: '768p竖' },
+    'minimax_h3_lightx2v_v5_15s': { levelsVert: ['1080p竖', '768p竖'], levelsHor: ['1080p横', '768p横'], defaultVert: '1080p竖', defaultHor: '1080p横', fallbackVert: '768p竖' },
+    // zm_u24 / zm_u08 → 不支持 1080p
+    'minimax_h3_zm_u24': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
+    'minimax_h3_zm_u08': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
+    // image_audio_to_video_v2 → 支持 1080p; _15s 版 → 不支持
+    'minimax_h3_image_audio_to_video_v2': { levelsVert: ['1080p竖', '768p竖'], levelsHor: ['1080p横', '768p横'], defaultVert: '1080p竖', defaultHor: '1080p横', fallbackVert: '768p竖' },
+    'minimax_h3_image_audio_to_video_v2_15s': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
+    // ★ Sprint 34: 九图三音 15s 画质增强版 —— 分辨率字面量【带分辨率数字】
+    //   默认 1088p (¥0.060/秒, 比 v5 的 1080p 便宜 40% 且更清晰)
+    'minimax_h3_803': {
+      levelsVert: ['1088p竖(1088*1920)', '768p竖(768*1376)', '1440p竖(1440*2560)'],
+      levelsHor: ['1088p横(1920*1088)', '1440p横(2560*1440)'],
+      defaultVert: '1088p竖(1088*1920)',
+      defaultHor: '1088p横(1920*1088)',
+      fallbackVert: '768p竖(768*1376)',
+    },
+  }
+
+  /** 未知工作流时的兜底档位 (与改动前的 '768p竖' 逐字一致) */
+  private static readonly DEFAULT_RESOLUTION_PROFILE = {
+    levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖',
+  }
+
+  /**
+   * ★ Sprint 34: 已知工作流全集 (8 个老的 + 803) ——
+   *   用来识别【用户在前端选了一个我们没接入的模型 id】。
+   *   之前这种情况 fallbackReason=undefined → 一条告警都不留 → 完全无法排查。
+   */
+  private static readonly KNOWN_WORKFLOW_IDS = [
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+  ]
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const { workflowId, body, fallbackReason } = this.buildBodyForRecord(record)
@@ -236,6 +314,11 @@ Ref2V 多图+多音频 v2 15s 版
     const explicitModel = record.model
     const isExplicitRef2V =
       !!explicitModel && (AutoDLComfyUIWorkflowAdapter.REF2V_VARIANTS as readonly string[]).includes(explicitModel)
+    // ★ Sprint 34 (PM msg-20261103-144): 用户选了一个【我们没接入】的模型 id →
+    //   之前这种不设任何 fallbackReason → flow-log 里一条告警都不留 → 完全无法排查。
+    //   这里先识别出来, 最后统一兜底告警 (mode 不匹配的原因码优先, 见下)。
+    const isUnrecognizedModel = !!explicitModel
+      && !(AutoDLComfyUIWorkflowAdapter.KNOWN_WORKFLOW_IDS as readonly string[]).includes(explicitModel)
     const explicitRefs = isExplicitRef2V && (mode === 'multiple' || mode === 'single')
       ? (mode === 'multiple' ? this.parseRefImages(record.referenceImageUrls) : (record.imageUrl ? [record.imageUrl] : []))
       : []
@@ -304,6 +387,18 @@ Ref2V 多图+多音频 v2 15s 版
           ? '音频工作流缺配音, 已自动退普通 Ref2V; 本镜不做口型同步'
           : '模式与所选 Ref2V 变体不匹配, 已自动换 workflow (首/尾帧当 ref_image_N)',
       })
+    } else if (isUnrecognizedModel) {
+      // ★ Sprint 34: 模型 id 【不在已知工作流全集】→ 已按 referenceMode 自动路由, 但必须留痕。
+      //   ★ 与 'mode 不匹配' 分开: 两种问题的排查方向完全不同 (一个是 id 写错了/没接入, 一个是模式选错了)。
+      fallbackReason = 'model_not_supported'
+      logTaskWarn('VideoTask', 'model-not-supported', {
+        videoGenId: record.id,
+        requestedModel: explicitModel,
+        actualWorkflow: workflowId,
+        reason: fallbackReason,
+        referenceMode: mode,
+        hint: '该模型 id 未接入 (不在已知工作流全集里) → 已按 referenceMode 自动路由到上面的 workflow; 请检查设置里的模型 id 是否写对',
+      })
     }
 
     if (audioUrls.length > 0 && !this.isAudioWorkflow(workflowId)) {
@@ -316,11 +411,6 @@ Ref2V 多图+多音频 v2 15s 版
       })
     }
 
-    const supports1080p =
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ||
-      // image_audio_to_video_v2 文档支持 1080p横竖
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO
     const body: any = {
       prompt: record.prompt || '',
     }
@@ -332,15 +422,17 @@ Ref2V 多图+多音频 v2 15s 版
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ||
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY ||
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S ||
+      // ★ Sprint 34: 九图三音 15s 画质增强版 (duration 枚举 min=1 max=15)
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803
     )
     const durationCap = is15s ? 15 : 10
     if (record.duration) {
       body.duration = Math.max(1, Math.min(durationCap, Math.floor(record.duration)))
     }
 
-    // resolution: 纵横比 → autodl 命名
-    body.resolution = this.mapResolution(record.aspectRatio, supports1080p)
+    // resolution: 纵横比 + 工作流 → autodl 命名 (★ 字面量按工作流派, 见 RESOLUTION_PROFILES)
+    body.resolution = this.mapResolution(workflowId, record.aspectRatio)
 
     if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V) {
       if (firstFrame) body.first_frame = firstFrame
@@ -474,13 +566,22 @@ Ref2V 多图+多音频 v2 15s 版
    * 文生视频/首尾帧工作流支持 480p竖/480p横/768p竖/768p横
    * 多图参考工作流(及 15s 版)额外支持 1080p横/1080p竖
    */
-  private mapResolution(aspectRatio?: string | null, supports1080p = false): string {
-    if (!aspectRatio) return '768p竖'
+  /**
+   * ★ Sprint 34 (PM msg-20261103-144): 分辨率按【工作流】取, 不再是全局 4 个值。
+   *   ★ 字面量必须与平台枚举逐字一致 —— 803 系列带分辨率数字, 其它工作流是裸名 (见 RESOLUTION_PROFILES)。
+   *   ★ 零回归: 老工作流的取值与改动前【逐字一致】
+   *     (v5 / v5_15s / image_audio_to_video_v2 = 1080p; zm_u24 / zm_u08 / _15s / no_pic / lightx2v = 768p;
+   *      无 aspectRatio 或 1:1 等不支持的纵横比 → 落到 fallbackVert = '768p竖')
+   */
+  private mapResolution(workflowId: string, aspectRatio?: string | null): string {
+    const profile = AutoDLComfyUIWorkflowAdapter.RESOLUTION_PROFILES[workflowId]
+      || AutoDLComfyUIWorkflowAdapter.DEFAULT_RESOLUTION_PROFILE
+    if (!aspectRatio) return profile.fallbackVert
     const isVert = aspectRatio === '9:16' || aspectRatio === '3:4' || aspectRatio === '2:3' || aspectRatio === '4:5'
     const isHor = aspectRatio === '16:9' || aspectRatio === '4:3' || aspectRatio === '21:9' || aspectRatio === '3:2'
-    if (isVert) return supports1080p ? '1080p竖' : '768p竖'
-    if (isHor) return supports1080p ? '1080p横' : '768p横'
-    // 1:1 等不支持的纵横比, fallback 到 768p竖
-    return '768p竖'
+    if (isVert) return profile.defaultVert
+    if (isHor) return profile.defaultHor
+    // 1:1 等不支持的纵横比 → fallback (竖屏最低档)
+    return profile.fallbackVert
   }
 }
