@@ -13,6 +13,8 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进多图参考的公共逻辑
+import { mergePropRefsIntoSlots, buildPropRefNotes, logPropRefSlots } from './prop-refs.js'
 
 // 合法帧数查找表 (8n+1, <= 441)
 const VALID_NUM_FRAMES = [81, 121, 161, 201, 241, 281, 321, 361, 441]
@@ -49,12 +51,18 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
     if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
-        const validRefs = refs.filter((r: string) => r && (r.startsWith('http') || r.startsWith('data:')))
+        // ★ Sprint 32: 道具图并进 keyframes (末尾追加 → 首帧仍占第 1 位)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        const validRefs = merged.refs.filter((r: string) => r && (r.startsWith('http') || r.startsWith('data:')))
         if (validRefs.length > 0) {
           body.extra_body = {
             image: validRefs,
             mode: 'keyframes',
           }
+        }
+        if (merged.propSlots.length) {
+          body.prompt = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}`
+          logPropRefSlots('agnes', record, validRefs.length, merged.propSlots, merged.dropped)
         }
       } catch {
         // ignore

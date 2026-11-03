@@ -23,6 +23,8 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进多图参考的公共逻辑
+import { mergePropRefsIntoSlots, buildPropRefNotes, logPropRefSlots } from './prop-refs.js'
 
 export class MiniMaxOfficialVideoAdapter implements VideoProviderAdapter {
   readonly provider = 'minimax-official'
@@ -54,11 +56,18 @@ export class MiniMaxOfficialVideoAdapter implements VideoProviderAdapter {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
         if (Array.isArray(refs)) {
-          refs.slice(0, 9).forEach((url: string) => {
+          // ★ Sprint 32: 本镜显式关联的道具图并进 r2va 的 reference_image
+          //   (末尾追加 → 首帧仍占第 1 位; 已有道具图不重复; 上限 9 张与官方 spec 对齐)
+          const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], 9)
+          merged.refs.slice(0, 9).forEach((url: string) => {
             if (typeof url === 'string' && url.length > 0) {
               content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' })
             }
           })
+          if (merged.propSlots.length) {
+            content[0].text = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}`
+            logPropRefSlots('minimax-official', record, merged.refs.slice(0, 9).length, merged.propSlots, merged.dropped)
+          }
         }
       } catch {
         // ignore parse errors

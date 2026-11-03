@@ -23,6 +23,8 @@ import type {
 } from './types'
 import { joinProviderUrl } from './url'
 import { logTaskWarn, logTaskProgress } from '../../utils/task-logger.js'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进参考图的公共逻辑 (与 136 单同一套槽位规则)
+import { mergePropRefsIntoSlots, buildPropRefNotes } from './prop-refs.js'
 
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
@@ -384,10 +386,7 @@ Ref2V 多图+多音频 v2 15s 版
       //   不说明的话模型不知道这张图是道具参考, 会当成又一个人物/场景。
       //   ★ 编号 = 槽位 + 1 (H3 约定: <Picture N> = ref_image_{N-1}) → 这里跟实际发出的槽位自洽。
       if (propSlots.length) {
-        const notes = propSlots.map(sl =>
-          `Image ${sl.slot + 1} is the ${sl.name} prop reference and governs its on-screen appearance.`,
-        )
-        body.prompt = `${body.prompt}\n${notes.join('\n')}`
+        body.prompt = `${body.prompt}\n${buildPropRefNotes(propSlots)}`
       }
       // 参考图清单进 flow-log —— 事后能核对"这次到底发了哪几张、分别是什么、道具图排第几"
       logTaskProgress('VideoTask', 'video-ref-slots', {
@@ -442,39 +441,17 @@ Ref2V 多图+多音频 v2 15s 版
    *   · 9 张上限满了 → 优先丢【普通参考图】给道具图腾位
    *     (道具图是用户显式关联的语义信息, 比历史参考图值钱)
    */
+  /**
+   * ★ Sprint 32 (PM msg-20261103-138): 实现搬到公共模块 services/adapters/prop-refs.ts,
+   *   让 5 个 provider 共用【同一套】槽位规则 (不各写一份 → 以后不会分叉)。
+   *   ★ 算法逐字未变 (末尾追加 / 不重复追加 / index 0 (首帧) 保护 / 超上限优先丢普通参考图),
+   *     136 单的 10 组离线用例用这版重跑全过。
+   */
   private mergePropRefsIntoSlots(
     refs: string[],
     propRefs: { url: string; name: string }[],
   ): { refs: string[]; propSlots: { name: string; slot: number }[]; dropped: string[] } {
-    const MAX = AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES
-    type Slot = { url: string; isProp: boolean; name?: string }
-    const slots: Slot[] = refs.map(url => {
-      const p = propRefs.find(x => x.url === url)
-      return p ? { url, isProp: true, name: p.name } : { url, isProp: false }
-    })
-    // 不在 refs 里的道具图 → 追加到末尾
-    for (const p of propRefs) {
-      if (slots.some(s => s.url === p.url)) continue
-      slots.push({ url: p.url, isProp: true, name: p.name })
-    }
-    const dropped: string[] = []
-    // 超上限 → 优先丢普通参考图给道具图腾位
-    //   ★ index 0 【不能删】—— 那是首帧 (PM 拍板: 首帧必须占 ref_image_0)。
-    //     宁可砍道具图也不能砍首帧 (首帧是画面连续性的地基)。
-    for (let i = slots.length - 1; i >= 0 && slots.length > MAX; i--) {
-      if (i === 0) continue
-      if (slots[i]!.isProp) continue
-      dropped.push(slots[i]!.url)
-      slots.splice(i, 1)
-    }
-    // 还是超 (全是道具图) → 砍掉末尾的
-    if (slots.length > MAX) {
-      for (const s of slots.slice(MAX)) dropped.push(s.url)
-      slots.length = MAX
-    }
-    const propSlots: { name: string; slot: number }[] = []
-    slots.forEach((s, i) => { if (s.isProp && s.name) propSlots.push({ name: s.name, slot: i }) })
-    return { refs: slots.map(s => s.url), propSlots, dropped }
+    return mergePropRefsIntoSlots(refs, propRefs, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES)
   }
 
   private parseRefImages(json?: string | null): string[] {

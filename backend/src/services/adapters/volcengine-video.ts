@@ -12,6 +12,8 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进多图参考的公共逻辑
+import { mergePropRefsIntoSlots, buildPropRefNotes, logPropRefSlots } from './prop-refs.js'
 
 export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   provider = 'volcengine'
@@ -34,8 +36,14 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
-        for (const url of refs) {
+        // ★ Sprint 32: 道具图并进 reference_image (末尾追加 → 首帧仍占第 1 位)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        for (const url of merged.refs) {
           content.push({ type: 'image_url', image_url: { url } })
+        }
+        if (merged.propSlots.length) {
+          content[0].text = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}`
+          logPropRefSlots('volcengine', record, merged.refs.length, merged.propSlots, merged.dropped)
         }
       } catch {}
     }

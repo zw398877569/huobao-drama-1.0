@@ -11,6 +11,8 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进多图参考的公共逻辑
+import { mergePropRefsIntoSlots, buildPropRefNotes, logPropRefSlots } from './prop-refs.js'
 
 export class MiniMaxVideoAdapter implements VideoProviderAdapter {
   provider = 'minimax'
@@ -36,8 +38,15 @@ export class MiniMaxVideoAdapter implements VideoProviderAdapter {
     } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
-        for (const url of refs) {
+        // ★ Sprint 32: 道具图并进 reference_image (末尾追加 → 首帧仍占第 1 位)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        for (const url of merged.refs) {
           content.push({ type: 'image_url', image_url: { url }, role: 'reference_image' })
+        }
+        if (merged.propSlots.length) {
+          // ★ 说明文字插在【参数之前】—— --ratio/--dur 是 chatfire 的命令行参数, 必须在最后
+          content[0].text = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}  --ratio ${record.aspectRatio || '16:9'}  --dur ${duration}`
+          logPropRefSlots('minimax', record, merged.refs.length, merged.propSlots, merged.dropped)
         }
       } catch {}
     }

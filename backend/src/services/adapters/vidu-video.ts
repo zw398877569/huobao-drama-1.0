@@ -13,6 +13,8 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 32 (PM msg-20261103-138): 道具图并进多图参考的公共逻辑
+import { mergePropRefsIntoSlots, buildPropRefNotes, logPropRefSlots } from './prop-refs.js'
 
 export class ViduVideoAdapter implements VideoProviderAdapter {
   provider = 'vidu'
@@ -35,7 +37,13 @@ export class ViduVideoAdapter implements VideoProviderAdapter {
     } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
-        body.images.push(...refs)
+        // ★ Sprint 32: 道具图并进 images (末尾追加 → 首帧仍占第 1 位)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        body.images.push(...merged.refs)
+        if (merged.propSlots.length) {
+          body.prompt = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}`
+          logPropRefSlots('vidu', record, merged.refs.length, merged.propSlots, merged.dropped)
+        }
       } catch {}
     }
 

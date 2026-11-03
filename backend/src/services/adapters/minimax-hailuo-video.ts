@@ -69,6 +69,17 @@ export class MiniMaxHailuoVideoAdapter implements VideoProviderAdapter {
             refCount: refs.length,
             fallback: 'used first ref as first_frame_image',
           })
+          // ★ Sprint 32 (PM msg-20261103-138): 本 provider 只吃第一张图 → 道具图进不来。
+          //   单独留一条痕 (别静默丢弃) —— 用户/QA 能查到【为什么道具关联没生效】。
+          const propRefs = record.propReferenceImages || []
+          if (propRefs.length) {
+            logTaskWarn('HailuoV1', 'prop-refs-not-applicable', {
+              storyboardId: (record as any).storyboardId,
+              propCount: propRefs.length,
+              props: propRefs.map(p => p.name),
+              hint: '本 provider (Hailuo V1) 不支持多图参考 —— 只有第一张图被用作 first_frame_image, 道具图未进参考图',
+            })
+          }
         }
       } catch {
         // ignore parse error
