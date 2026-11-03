@@ -114,6 +114,34 @@ export function findMissingTransitions(
 }
 
 /**
+ * ★ Sprint 33 追加单2 (PM msg-20261103-149): 过渡镜豁免全局时长策略 —— duration 强制 2s。
+ *
+ * 背景: applyDurationPolicy (Sprint 11 起的既有机制: 五因子估算 → 钩子保护 → Σ 收敛)
+ *   不认识 is_transition → 会把过渡镜的 2s 重算成 5.5s; 而且它的 clamp 下限是 4s,
+ *   连钩子豁免也救不回来 → 必须在它【之后】覆写。
+ *
+ * ★ 只改过渡镜 —— 非过渡镜的时长计算路径一个字节都不动 (Sprint 11 R1/R2/R3 的设计不碰)。
+ *
+ * @param shots          被原地修改的镜头数组 (applyDurationPolicy 之后)
+ * @param transitionMap  shot_number → { isTransition } (buildTransitionMap 的产物)
+ * @returns 被覆写的镜数
+ */
+export function applyTransitionDurationOverride(
+  shots: Array<{ shot_number?: number; duration?: number }>,
+  transitionMap: Map<number, { isTransition: boolean }>,
+): number {
+  let changed = 0
+  for (const s of shots || []) {
+    if (s?.shot_number == null) continue
+    if (transitionMap.get(s.shot_number)?.isTransition) {
+      s.duration = TRANSITION_DURATION
+      changed++
+    }
+  }
+  return changed
+}
+
+/**
  * step1 结果的后处理: 过渡镜 2s 强制 + shot_number 连续 + total_duration 重算。
  *
  * ★ 没有过渡镜 → 原样返回 (一个字段都不改) —— 老剧集拆解产出与改动前逐字一致。

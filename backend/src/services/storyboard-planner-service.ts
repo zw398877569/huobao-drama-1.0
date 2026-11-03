@@ -46,7 +46,7 @@ import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboa
 import { applyDurationPolicy } from './shot-duration.js'
 import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
 // ★ Sprint 33 T2 (PM msg-20261103-140): 过渡镜的校验层后处理 (纯函数)
-import { normalizeTransitionPlan, buildTransitionMap, findMissingTransitions } from '../utils/transition-shot.js'
+import { normalizeTransitionPlan, buildTransitionMap, findMissingTransitions, applyTransitionDurationOverride } from '../utils/transition-shot.js'
 import { stripReasoningBlocks } from './ai.js'
 
 // Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
@@ -656,6 +656,11 @@ export async function runStep3(opts: {
   //     阶段 2 (整集 R2):     Σ 收敛到自动 target, 钩子镜豁免 + 非钩子镜不低于 4s
   //   VIDEO_MAX=15 是 H3 平台硬上限 (用户 2026-10-16 拍板 D2), 严禁放宽。
   const convergedTotalDuration = applyDurationPolicy(episodeId, validatedDetails)
+  // ★ Sprint 33 追加单2 (PM msg-20261103-149): 过渡镜豁免全局时长策略 —— duration 强制 2s。
+  //   applyDurationPolicy 是 Sprint 11 起的既有机制 (五因子估算 → 钩子保护 → Σ 收敛), 它不认识
+  //   is_transition → 会把过渡镜的 2s 重算成 5.5s (而且它的 clamp 下限是 4s, 连钩子豁免也救不回)。
+  //   ★ 放在【之后】覆写 → 非过渡镜的时长计算路径一行未动 (Sprint 11 R1/R2/R3 的设计不碰)。
+  const transitionDurationFixed = applyTransitionDurationOverride(validatedDetails as any, transitionMap as any)
   logTaskProgress('StoryboardPlanner', 'duration-policy-applied', {
     episodeId,
     shotCount: validatedDetails.length,
@@ -664,6 +669,7 @@ export async function runStep3(opts: {
       min: Math.min(...validatedDetails.map(d => d.duration ?? 0)),
       max: Math.max(...validatedDetails.map(d => d.duration ?? 0)),
     },
+    transitionDurationFixed,
   })
 
   // ── Sprint 18 Task A (QA msg-20261021-078): 台词角色白名单 ──
