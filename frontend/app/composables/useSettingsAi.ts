@@ -25,14 +25,14 @@ export const AUTODL_COMFYUI_MODEL_LABELS: Record<string, string> = {
  * 数据源: Obsidian/ComfyUi/autodl-workflows-auto.md (AutoDL 官方档案自动同步)。
  *   · 空闲时段 (00:00~08:00) 同档便宜约 20%, 这里只标高峰价 (用户白天生成为主)。
  *   · 括号里是【默认档】—— 价格按档位走, 同一工作流换档价格不同 (如 803: 1088p ¥0.06 / 1440p ¥0.07)。
- *   · ★ v5_15s 标的是 1080p 的价: 代码的默认档就是 1080p (沿用既有行为, 本次未改),
- *     但官方档案的档位表里只列了 480p/768p —— 档位口径以代码为准, 疑点已记 handoff。
+ *   · v5_15s 用 768p: 官方档案的 resolution 枚举里【没有 1080p】(用户 2026-11-03 double check 确认),
+ *     价格表也只有 480p/768p 两档 → 代码原先给它发 1080p竖 是非法值, 已一并修正。
  */
 export const AUTODL_COMFYUI_MODEL_PRICES: Record<string, string> = {
   minimax_h3_lightx2v_no_pic: '¥0.05/秒 (768p)',
   minimax_h3_lightx2v: '¥0.05/秒 (768p)',
   minimax_h3_lightx2v_v5: '¥0.10/秒 (1080p)',
-  minimax_h3_lightx2v_v5_15s: '¥0.10/秒 (1080p)',
+  minimax_h3_lightx2v_v5_15s: '¥0.05/秒 (768p)',
   minimax_h3_zm_u24: '¥0.05/秒 (768p)',
   minimax_h3_zm_u08: '¥0.05/秒 (768p)',
   minimax_h3_image_audio_to_video_v2: '¥0.11/秒 (1080p)',
@@ -139,7 +139,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
           'minimax_h3_lightx2v_no_pic',                       // T2V    文生视频（无参考图）              1-10s   480p/768p
           'minimax_h3_lightx2v',                               // FL2V   首尾帧生视频                    1-10s   480p/768p
           'minimax_h3_lightx2v_v5',                            // Ref2V  多图参考默认版                  1-10s   480p/768p/1080p
-          'minimax_h3_lightx2v_v5_15s',                        // Ref2V  多图参考 15s 长版               1-15s   480p/768p/1080p
+          'minimax_h3_lightx2v_v5_15s',                        // Ref2V  多图参考 15s 长版               1-15s   480p/768p
           'minimax_h3_zm_u24',                                 // Ref2V  画质升级版 (zm_u24)             1-15s   480p/768p
           'minimax_h3_zm_u08',                                 // Ref2V  高速版 (zm_u08)                 1-15s   480p/768p
           'minimax_h3_image_audio_to_video_v2',                // Ref2V  多图+多音频（口型/配乐驱动）     1-10s   480p/768p/1080p

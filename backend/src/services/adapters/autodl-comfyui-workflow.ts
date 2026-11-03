@@ -167,7 +167,10 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     'minimax_h3_lightx2v': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
     // Ref2V v5 / v5_15s → 支持 1080p
     'minimax_h3_lightx2v_v5': { levelsVert: ['1080p竖', '768p竖'], levelsHor: ['1080p横', '768p横'], defaultVert: '1080p竖', defaultHor: '1080p横', fallbackVert: '768p竖' },
-    'minimax_h3_lightx2v_v5_15s': { levelsVert: ['1080p竖', '768p竖'], levelsHor: ['1080p横', '768p横'], defaultVert: '1080p竖', defaultHor: '1080p横', fallbackVert: '768p竖' },
+    // ★ v5_15s 【不支持 1080p】—— 官方档案的 resolution 枚举只有 480p/768p (+1:1),
+    //   价格表也只有这两档 (用户 2026-11-03 double check 确认)。
+    //   改前这里默认档是 1080p (老的 supports1080p 开关含它) → 会发平台不认的 '1080p竖' → 参数错。
+    'minimax_h3_lightx2v_v5_15s': { levelsVert: ['768p竖', '480p竖'], levelsHor: ['768p横', '480p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
     // zm_u24 / zm_u08 → 不支持 1080p
     'minimax_h3_zm_u24': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
     'minimax_h3_zm_u08': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
