@@ -779,13 +779,12 @@
                   <label class="field">
                     <span class="field-label">中文视频提示词（可编辑）</span>
                     <span class="dim" style="font-size:11px">改这里 → 点『保存提示词』→ 自动翻成英文覆盖上面的英文提示词 → 重新生成视频后生效</span>
-                    <span class="dim" style="font-size:11px">角色引用定义（subject_definitions）由系统按角色档案自动生成，不在这里改</span>
                     <!-- ★ Sprint 29 follow-up Task D (PM msg-20261102-133): H3 模板的中文版是三段结构
                          → 按段展示, 用户明确知道自己在改哪一段 (段名跟上面英文框一致 → 一眼对上)。
                          general 老剧集 (库里本来就是中文自由文本) → 走下面的自由文本框, 行为不变。 -->
                     <template v-if="zhSectionsMode">
                       <div v-for="sec in zhSectionDefs" :key="sec.key" style="margin-top:8px">
-                        <span class="dim" style="font-size:11px; display:block; margin-bottom:2px">{{ sec.label }}</span>
+                        <span v-if="!sec.hideLabel" class="dim" style="font-size:11px; display:block; margin-bottom:2px">{{ sec.label }}</span>
                         <textarea v-model="zhPromptSections[sec.key]" class="textarea" rows="4" :placeholder="sec.placeholder" />
                       </div>
                     </template>

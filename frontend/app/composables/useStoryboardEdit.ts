@@ -92,8 +92,10 @@ export function useStoryboardEdit(deps: Deps) {
    */
   const ZH_SECTION_KEYS = ['detailed_description', 'overall_soundscape', 'non_diegetic_music'] as const
   type ZhSectionKey = typeof ZH_SECTION_KEYS[number]
-  const zhSectionDefs: { key: ZhSectionKey; label: string; placeholder: string }[] = [
-    { key: 'detailed_description', label: '画面与运动（detailed_description）', placeholder: '本镜的画面内容、人物动作、运镜、说话动作' },
+  // ★ Sprint 33 追加单2 (PM msg-20261103-149): detailed_description 那一段【不显示段标题】
+  //   (用户 2026-11-03 拍板: 中文视频提示词区只保留第一行操作提示, 段标题只留 环境音/配乐 两个)
+  const zhSectionDefs: { key: ZhSectionKey; label: string; placeholder: string; hideLabel?: boolean }[] = [
+    { key: 'detailed_description', label: '画面与运动（detailed_description）', placeholder: '本镜的画面内容、人物动作、运镜、说话动作', hideLabel: true },
     { key: 'overall_soundscape', label: '环境音（overall_soundscape）', placeholder: '全片环境音与物理声（雨声/脚步/门响）' },
     { key: 'non_diegetic_music', label: '配乐（non_diegetic_music）', placeholder: '观众才听得到的配乐（配器/速度/动态）' },
   ]
