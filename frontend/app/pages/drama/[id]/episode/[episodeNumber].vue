@@ -1313,6 +1313,17 @@
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
+                      <!-- ★ Sprint 33 T7 (PM msg-20261103-140): 过渡镜标记 ——
+                           用户一眼看出哪些镜是【垫的】(接缝处的桥镜), 也方便对上『总觉得多了几个镜』 -->
+                      <span
+                        v-if="isTransitionShot(sb)"
+                        class="tag transition-tag"
+                        :title="transitionKindOf(sb) === 'space'
+                          ? '过渡镜 · 空间切换 (一个镜头内完成从旧空间到新空间的切换)'
+                          : (transitionKindOf(sb) === 'character_entry'
+                            ? '过渡镜 · 人物入场 (一个镜头内完成人物入画)'
+                            : '过渡镜 (一个镜头内完成状态切换)')"
+                      >过渡镜{{ transitionKindOf(sb) === 'space' ? '·空间' : (transitionKindOf(sb) === 'character_entry' ? '·入场' : '') }}</span>
                       <span :class="['dot', getFirstFrame(sb) && 'ok', isPendingShotFrame(sb.id, 'first_frame') && 'pending']" />
                       <span class="dim" style="font-size:11px">首帧</span>
                       <span v-if="frameMode === 'first_last'" style="display:flex;align-items:center;gap:4px">
@@ -2260,6 +2271,8 @@ import { useImageGeneration } from '~/composables/useImageGeneration'
 import { useVideoGeneration } from '~/composables/useVideoGeneration'
 import { useGridTool } from '~/composables/useGridTool'
 import { useStoryboardEdit } from '~/composables/useStoryboardEdit'
+// ★ Sprint 33 T7 (PM msg-20261103-140): 过渡镜标记 (is_transition / transition_kind 两种字段名都兼容)
+import { isTransitionShot, transitionKindOf } from '~/utils/transition'
 import { useEpisodePipeline } from '~/composables/useEpisodePipeline'
 import { useStoryboardPlanner } from '~/composables/useStoryboardPlanner'
 import { useConfigLoading } from '~/composables/useConfigLoading'
@@ -5173,6 +5186,11 @@ onMounted(() => { refresh() })
    (那边是 scoped style, 跨组件用不了, 这里复制一份) */
 /* ★ Sprint 30 Task B: 关联道具 */
 .prop-assign-btn { margin-left:auto; font-size:10px; padding:2px 7px; }
+/* ★ Sprint 33 T7: 过渡镜标记 (橙色调, 一眼能认出是垫的桥镜) */
+.transition-tag {
+  font-size:10px; padding:1px 6px; border-radius:6px; white-space:nowrap;
+  background:rgba(232, 150, 40, 0.14); color:#a35b08; border:1px solid rgba(232, 150, 40, 0.34);
+}
 .prop-assign-btn.has-props { border-color: var(--accent); color: var(--accent); }
 .prop-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
 .prop-tag { font-size:10px; padding:1px 6px; border-radius:3px; background: var(--bg-2); border:1px solid var(--border); color: var(--text-3); }
