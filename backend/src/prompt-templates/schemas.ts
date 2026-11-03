@@ -16,6 +16,12 @@ export const ShotPlanItemSchema = z.object({
   intent_function: z.enum(INTENT_FUNCTIONS),
   action: z.string().min(5).max(500),
   character_ids: z.array(z.number().int()).optional(),
+  // ★ Sprint 33 T1 (PM msg-20261103-140): 过渡镜标记 —— 【step1 的输出】。
+  //   step2 不需要再输出这两个字段 (step3 按 shot_number 从 step1_plan 反查回填)。
+  //   · is_transition: 该镜是不是过渡镜 (一个镜头内完成状态切换的桥)
+  //   · transition_kind: space (跨 scene 空间切换) / character_entry (同 scene 人物入场)
+  is_transition: z.boolean().optional(),
+  transition_kind: z.enum(['space', 'character_entry']).optional(),
 })
 
 export const Step1Schema = z.object({

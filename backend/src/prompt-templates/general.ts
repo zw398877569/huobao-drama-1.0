@@ -42,7 +42,26 @@ export const GENERAL_STEP1_SYSTEM_PROMPT = `你是资深影视分镜师 + 短剧
   - shot_plan 数组长度 5-50 个镜头 (硬上限 50)。⚠️ 严禁超过 50 个 — 会被 zod 拒绝整轮重跑。
     剧情复杂/场景多时, 优先【合并同类镜头】(同场景同功能的连续动作合并成一镜) 而不是无脑加镜数。
     短剧单集 15-30 镜是正常密度, 超过 40 镜通常说明拆分粒度过细。
-输出: 严格 JSON { shot_plan: [{shot_number, scene_id, duration, intent_function, action, character_ids}], total_duration: number, scene_distribution: {scene_id_str: count} }`
+
+轴 T · 过渡镜 (可选 —— 用来消除镜头交界处的突兀跳变):
+  在下面两类边界上, 可以在前后两镜之间【插入一个过渡镜】, 用一个镜头把状态切换【拍出来】:
+    ① space —— 相邻两镜的 scene_id 不同 (空间切换)。过渡镜完成『从旧空间到新空间』这件事
+       (例: 楼道 → 501 室内, 过渡镜拍推门进屋)。
+    ② character_entry —— 同一 scene 内, 前一镜 character_ids 为空 (纯环境空镜) 而后一镜 character_ids 非空。
+       过渡镜完成『人物入画』(例: 空楼道全景 → 林达在楼梯上, 过渡镜拍林达走进画面)。
+  写法要求:
+    · 一个镜头内【完整完成】整个状态切换 —— 不要把切换拆成两镜, 也不要用跳切/叠化代替。
+    · 景别: 过渡镜的景别 = 【后一镜的景别】(这样它自己的首尾帧同景别, 运动最干净)。
+    · duration = 2 (短镜头, 只承担过渡这件事)。
+    · 每个边界【最多插 1 个】过渡镜, 不要连续插多个。
+    · 过渡镜【不计入】总镜数与总时长预算 (targetDuration 对齐的是主体镜头)。
+    · 镜头本来就少 (5-8 镜) 或剧情简单时, 不要加过渡镜 —— 宁缺勿滥。
+  输出字段 (只有过渡镜才带这两个字段, 主体镜【不要】带):
+    is_transition: true
+    transition_kind: "space" | "character_entry"
+输出: 严格 JSON { shot_plan: [{shot_number, scene_id, duration, intent_function, action, character_ids, is_transition?, transition_kind?}], total_duration: number, scene_distribution: {scene_id_str: count} }
+  total_duration = 成片真实总长 (主体镜头 Σ duration + 过渡镜 Σ duration);
+  对齐 targetDuration ±10% 的是【主体镜头】的 Σ duration (过渡镜不计入)。`
 
 // ─── Step2 prompt (原 storyboard-planner-service.ts runStep2, 逐字符搬过来) ────
 export const GENERAL_STEP2_SYSTEM_PROMPT = `你是资深影视分镜师。
