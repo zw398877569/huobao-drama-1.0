@@ -768,6 +768,9 @@ export async function runStep3(opts: {
           role: c.role,
         })),
       cleanedPermanent: cleaned,
+      // ★ Sprint 33 T5: 过渡镜标记 → assemble 据此决定要不要剔掉 permanent 里的角色外貌
+      isTransition: transitionMap.get(det.shot_number)?.isTransition || false,
+      transitionKind: transitionMap.get(det.shot_number)?.kind || null,
     }
     const assembled = tpl.assemble(assembleInput)
 

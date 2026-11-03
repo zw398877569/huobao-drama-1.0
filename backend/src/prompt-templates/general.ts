@@ -186,9 +186,14 @@ plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动�
 function assembleGeneral(input: AssembleInput): AssembleOutput {
   const { shot, prevShot, dialogue, characters, cleanedPermanent } = input
 
-  const permanentText = cleanedPermanent.imagePromptPermanent
-    ? permanentToText(cleanedPermanent.imagePromptPermanent)
-    : ''
+  // ★ Sprint 33 T5 (PM msg-20261103-140): character_entry 类过渡镜 → 画面里【没有人】→
+  //   把 permanent 里的【角色外貌】剔掉 (只留场景氛围/景别/机位)。
+  //   ★ permanent 列本身【不改】(只改拼进 image_prompt 的那份) → 角色档案信息不丢。
+  const isCharEntryTransition = input.isTransition === true && input.transitionKind === 'character_entry'
+  const permanentForPrompt = (isCharEntryTransition && cleanedPermanent.imagePromptPermanent)
+    ? { ...cleanedPermanent.imagePromptPermanent, character_traits: [] }
+    : cleanedPermanent.imagePromptPermanent
+  const permanentText = permanentForPrompt ? permanentToText(permanentForPrompt) : ''
   const plotStateText = `${shot.image_prompt_plot_state?.trim() || ''}${cleanedPermanent.plotState ? (shot.image_prompt_plot_state ? ' | ' : '') + cleanedPermanent.plotState : ''}`
 
   // Sprint 17 Task A/B/C: 角色外貌 / 承接上一镜 / 本镜收尾 / 戏型节奏 4 个注入块

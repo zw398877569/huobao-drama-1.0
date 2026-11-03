@@ -1,4 +1,6 @@
 import { toast } from 'vue-sonner'
+// ★ Sprint 33 T5 (PM msg-20261103-140): 过渡镜工具 (接力跳过 / 首帧参考图规则)
+import { isTransitionShot, isCharacterEntryTransition } from '~/utils/transition'
 import { characterAPI, sceneAPI, propsAPI, imageAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
@@ -86,10 +88,19 @@ export function useImageGeneration(deps: Deps) {
   function findPrevShot(sb: any) {
     const num = Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? 0)
     if (!num) return null
-    return ctx.sbs.value.find((s: any) => {
-      const n = Number(s?.storyboard_number ?? s?.storyboardNumber ?? 0)
-      return n === num - 1
-    }) || null
+    // ★ Sprint 33 T5 (PM msg-20261103-140): 【跳过过渡镜】——
+    //   过渡镜的尾帧 = 后一镜的首帧 (同一张图, 保证接缝连续) → 如果后一镜的首帧再参考
+    //   过渡镜的尾帧就成环了 (自己参考自己)。所以往回找【第一个非过渡镜】。
+    //   ★ 对过渡镜自己也没影响: 过渡镜的上一镜一定不是过渡镜 (每个边界至多 1 个)。
+    for (let n = num - 1; n >= 1; n--) {
+      const found = ctx.sbs.value.find((s: any) => {
+        const sn = Number(s?.storyboard_number ?? s?.storyboardNumber ?? 0)
+        return sn === n
+      })
+      if (!found) return null          // 中间缺号 → 没有上一镜
+      if (!isTransitionShot(found)) return found
+    }
+    return null
   }
 
   /**
@@ -220,7 +231,12 @@ export function useImageGeneration(deps: Deps) {
       }, 0)
     }
 
-    const sceneId = sb?.scene_id || sb?.sceneId
+    // ★ Sprint 33 T5: 过渡镜的首帧还在【前一镜那个空间】里 (人还没进新空间)
+    //   → 场景图要取【前一镜的 scene】, 不是本镜的 (本镜 scene_id 指向新空间)。
+    const prevShotForScene = findPrevShot(sb)
+    const sceneId = isTransitionShot(sb) && prevShotForScene
+      ? (prevShotForScene.scene_id || prevShotForScene.sceneId)
+      : (sb?.scene_id || sb?.sceneId)
     const scene = ctx.scenes.value.find(item => item.id === sceneId)
     if (scene?.image_url || scene?.imageUrl) {
       pushAsset({
@@ -231,7 +247,12 @@ export function useImageGeneration(deps: Deps) {
     }
 
     const charIds = sb?.character_ids || sb?.characterIds || []
-    for (const charId of charIds) {
+    // ★ Sprint 33 T5: character_entry 类过渡镜【不传角色形象图】——
+    //   本镜画面里【没有人】(人物尚未入画); 传了角色立绘, 模型一上来就把人画完整
+    //   → 『尚未入画』就实现不了。人物一致性由尾帧(=后一镜首帧, 里面有人)保证。
+    //   space 类过渡镜【照常传】(人本来就在前一镜那个空间里, PM 决策 D4)。
+    const skipCharacterRefs = isCharacterEntryTransition(sb)
+    for (const charId of (skipCharacterRefs ? [] : charIds)) {
       const char = ctx.chars.value.find(item => item.id === charId)
       const path = char?.image_url || char?.imageUrl
       if (!path) continue

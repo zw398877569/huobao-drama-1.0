@@ -1,4 +1,6 @@
 import { toast } from 'vue-sonner'
+// ★ Sprint 33 T5 (PM msg-20261103-140): 过渡镜 —— 尾帧复用后一镜的首帧
+import { isTransitionShot } from '~/utils/transition'
 import { videoAPI, composeAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
@@ -98,6 +100,18 @@ export function useVideoGeneration(deps: Deps) {
     return failedComposeMessages.value[id]
   }
 
+  /**
+   * 后一镜 (同 episode 内 storyboard_number = 当前 + 1) —— 过渡镜的尾帧来源。
+   */
+  function findNextShot(sb: any) {
+    const num = Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? 0)
+    if (!num) return null
+    return ctx.sbs.value.find((s: any) => {
+      const n = Number(s?.storyboard_number ?? s?.storyboardNumber ?? 0)
+      return n === num + 1
+    }) || null
+  }
+
   async function genVid(sb: any, configId?: number | string | null) {
     // ★ Sprint 29 follow-up Task C (PM msg-20261102-133): 【只取英文版】—— 不再重复翻译。
     //   数据方向 (PM 决策 D1): 中文版 = 源, 英文版 = 翻译产物; 翻译【只在保存时发生一次】。
@@ -109,7 +123,12 @@ export function useVideoGeneration(deps: Deps) {
     let prompt = sb.video_prompt || sb.videoPrompt || ''
     // 有首帧时自动附加首帧一致性约束（Pavo AI 的镜头运动要求）
     const first = getFirstFrame(sb)
-    const last = getLastFrame(sb)
+    // ★ Sprint 33 T5 (PM msg-20261103-140): 过渡镜的【尾帧】= 【后一镜的首帧】(同一个 URL,
+    //   不额外生成) → 过渡镜→后一镜 那一刀是同一张图 = 100% 连续, 不靠参考逼近。
+    //   ★ 过渡镜【没有自己的尾帧】—— 它的尾帧就是后一镜的首帧。
+    const nextShot = isTransitionShot(sb) ? findNextShot(sb) : null
+    const nextFirstFrame = nextShot ? getFirstFrame(nextShot) : null
+    const last = isTransitionShot(sb) ? nextFirstFrame : getLastFrame(sb)
     const refs = getRefs(sb)
     if (first && prompt) {
       prompt += '；保持首帧画面构图一致，镜头运动从首帧状态开始'
@@ -125,6 +144,20 @@ export function useVideoGeneration(deps: Deps) {
     if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
     else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
     else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
+    // ★ Sprint 33 T5: 过渡镜要等【后一镜的首帧】出来才能提交 (它就是本镜的尾帧)。
+    //   没等就提交 → 只能降级成 single/multiple → 接缝处又变成硬切, 本单白做。
+    if (isTransitionShot(sb) && nextShot && first && !nextFirstFrame) {
+      const nextNum = Number(nextShot.storyboard_number ?? nextShot.storyboardNumber ?? 0)
+      toast.info(`正在等待后一镜#${nextNum}的首帧 (本镜的尾帧), 以保证接缝连续...`)
+      await watchAsyncResult(() => {
+        const cur = ctx.sbs.value.find((s: any) => s.id === nextShot.id)
+        return !!getFirstFrame(cur)
+      }, 100, 3000)
+      const cur = ctx.sbs.value.find((s: any) => s.id === nextShot.id)
+      if (!getFirstFrame(cur)) {
+        toast.warning(`后一镜#${nextNum}的首帧还没生成好, 本镜无法桥接 —— 建议先生成它的首帧`)
+      }
+    }
     try {
       delete failedVideoMessages.value[sb.id]
       applyFallbackReason(sb.id, null)  // Sprint 14: 重新生成前先清掉上一轮的降级 tag

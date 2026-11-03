@@ -99,6 +99,14 @@ export interface AssembleInput {
   characters: TemplateCharacter[]
   /** salvageImagePromptPermanent 的结果 (通用层算好) */
   cleanedPermanent: SalvageResult
+  /**
+   * ★ Sprint 33 T5 (PM msg-20261103-140): 过渡镜标记 (step3 按 shot_number 从 step1_plan 反查回填)。
+   *   character_entry 类 (同 scene 人物入场) → 首帧画面里【没有人】→
+   *   assemble 要把 permanent 里的【角色外貌】剔掉, 否则模型会照着外貌把人画完整,
+   *   『人物尚未入画』就实现不了。
+   */
+  isTransition?: boolean
+  transitionKind?: 'space' | 'character_entry' | null
 }
 
 /** assemble 的输出 —— 直接进 DB 的那几个 prompt 字段 */
