@@ -46,7 +46,7 @@ import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboa
 import { applyDurationPolicy } from './shot-duration.js'
 import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
 // ★ Sprint 33 T2 (PM msg-20261103-140): 过渡镜的校验层后处理 (纯函数)
-import { normalizeTransitionPlan, buildTransitionMap } from '../utils/transition-shot.js'
+import { normalizeTransitionPlan, buildTransitionMap, findMissingTransitions } from '../utils/transition-shot.js'
 import { stripReasoningBlocks } from './ai.js'
 
 // Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
@@ -457,6 +457,18 @@ export async function runStep1(opts: {
   //   过渡镜 duration 强制 2s (不靠 LLM) + shot_number 连续 1..N + total_duration 重算成片真实总长。
   //   ★ 没有过渡镜时原样返回 → 老剧集拆解产出与改动前逐字一致 (零回归)。
   const normalized = normalizeTransitionPlan(result)
+
+  // ★ Sprint 33 T6 (PM msg-20261103-140): 该有却没有过渡镜的边界 → 只告警不拦截
+  //   (与 checkSceneOpensWithWideShot 同口径: LLM 漏加过渡镜时拆解仍然成功)
+  const missingTransitions = findMissingTransitions(normalized.shot_plan as any)
+  if (missingTransitions.length) {
+    logTaskWarn('StoryboardPlanner', 'missing-transition-shot', {
+      episodeId,
+      count: missingTransitions.length,
+      boundaries: missingTransitions,
+      hint: '这些边界该有过渡镜但没有 (跨 scene / 人物入场) —— 接缝处会突兀; 不影响本次拆解成功',
+    })
+  }
 
   await savePlanningData(episodeId, {
     step1_done_at: now(),

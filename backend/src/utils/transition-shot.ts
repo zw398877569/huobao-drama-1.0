@@ -51,6 +51,69 @@ export function buildTransitionMap(
 }
 
 /**
+ * ★ Sprint 33 T6 (PM msg-20261103-140): 扫出【该有却没有】过渡镜的边界 (只告警, 不拦截)。
+ *
+ * 两类边界 (与 step1 的轴 T 一致):
+ *   ① space —— 相邻两镜 scene_id 不同 (跨 scene 空间切换)
+ *   ② character_entry —— 同 scene 内, 前一镜 character_ids 为空 (纯环境空镜) 而后一镜非空
+ *
+ * 只 warn 不拦截 (与 checkSceneOpensWithWideShot 同口径): LLM 漏加过渡镜时拆解仍然成功。
+ */
+export function findMissingTransitions(
+  plan: Array<{
+    shot_number?: number
+    scene_id?: number
+    character_ids?: number[] | null
+    is_transition?: boolean | null
+  }> | null | undefined,
+): Array<{
+  kind: 'space' | 'character_entry'
+  prevShotNumber: number
+  curShotNumber: number
+  prevSceneId: number | null
+  curSceneId: number | null
+}> {
+  const list = (plan || []).filter(p => p && typeof p.shot_number === 'number')
+  const missing: Array<{
+    kind: 'space' | 'character_entry'
+    prevShotNumber: number
+    curShotNumber: number
+    prevSceneId: number | null
+    curSceneId: number | null
+  }> = []
+  for (let i = 1; i < list.length; i++) {
+    const prev = list[i - 1]!
+    const cur = list[i]!
+    // 边界上已经有过渡镜 (过渡镜自己就在 prev 或 cur 的位置) → 不用报
+    if (isTransitionShot(prev) || isTransitionShot(cur)) continue
+    const prevScene = prev.scene_id ?? null
+    const curScene = cur.scene_id ?? null
+    const prevChars = prev.character_ids || []
+    const curChars = cur.character_ids || []
+    if (prevScene !== null && curScene !== null && prevScene !== curScene) {
+      missing.push({
+        kind: 'space',
+        prevShotNumber: prev.shot_number!,
+        curShotNumber: cur.shot_number!,
+        prevSceneId: prevScene,
+        curSceneId: curScene,
+      })
+      continue
+    }
+    if (prevScene === curScene && prevChars.length === 0 && curChars.length > 0) {
+      missing.push({
+        kind: 'character_entry',
+        prevShotNumber: prev.shot_number!,
+        curShotNumber: cur.shot_number!,
+        prevSceneId: prevScene,
+        curSceneId: curScene,
+      })
+    }
+  }
+  return missing
+}
+
+/**
  * step1 结果的后处理: 过渡镜 2s 强制 + shot_number 连续 + total_duration 重算。
  *
  * ★ 没有过渡镜 → 原样返回 (一个字段都不改) —— 老剧集拆解产出与改动前逐字一致。
