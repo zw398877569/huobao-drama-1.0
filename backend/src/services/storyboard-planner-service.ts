@@ -46,7 +46,7 @@ import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboa
 import { applyDurationPolicy } from './shot-duration.js'
 import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
 // ★ Sprint 33 T2 (PM msg-20261103-140): 过渡镜的校验层后处理 (纯函数)
-import { normalizeTransitionPlan } from '../utils/transition-shot.js'
+import { normalizeTransitionPlan, buildTransitionMap } from '../utils/transition-shot.js'
 import { stripReasoningBlocks } from './ai.js'
 
 // Sprint 11 QA msg-20261016-067 Bug-D: 默认 max_tokens 32768 → 49152
@@ -596,6 +596,11 @@ export async function runStep3(opts: {
   const details = shotDetailsOverride || planningData.step2_details
   if (!details || !details.length) throw new Error('No step2 details found, run step2 first')
 
+  // ★ Sprint 33 T3 (PM msg-20261103-140): 过渡镜标记 —— 按 shot_number 从 step1_plan 反查回填。
+  //   ★ 不透传给 step2 LLM, 也不靠 step2 复述 (LLM 复述会漂/会漏) → 统一在这一层回填。
+  //   step1_plan 已经在这里可取 (planningData.step1_plan)。
+  const transitionMap = buildTransitionMap(planningData.step1_plan as any)
+
   // Task B (PM msg-20261010-003 task_B): 用 V3 zod 再次校验 (防 step2→step3 之间数据被改 / wizard 模式下用户编辑过的 details override)
   //   失败 throw 出去, 不进 DB 事务, 主流程返回 4xx
   //
@@ -827,6 +832,9 @@ export async function runStep3(opts: {
           : null,
         sceneId: det.scene_id || null,
         duration: det.duration || 10,
+        // ★ Sprint 33 T3: 过渡镜标记 (从 step1_plan 按 shot_number 反查回填; 老数据/无标记 → 0 / NULL)
+        isTransition: transitionMap.get(det.shot_number)?.isTransition ? 1 : 0,
+        transitionKind: transitionMap.get(det.shot_number)?.kind ?? null,
         createdAt: now(),
         updatedAt: now(),
       },
@@ -893,6 +901,21 @@ export async function runStep3(opts: {
     step3_done_at: now(),
     step3_storyboard_ids: createdStoryboardIds,
   })
+  // ★ Sprint 33 T3: 过渡镜落库留痕 (flow-log 里能 grep 到是哪几镜 + 什么类型)
+  const persistedTransitions = insertPayloads
+    .filter(p => (p.insertValues as any).isTransition)
+    .map(p => ({
+      shotNumber: (p.insertValues as any).storyboardNumber,
+      kind: (p.insertValues as any).transitionKind,
+    }))
+  if (persistedTransitions.length) {
+    logTaskProgress('StoryboardPlanner', 'transition-shots-persisted', {
+      episodeId,
+      count: persistedTransitions.length,
+      shots: persistedTransitions,
+      hint: '过渡镜 (is_transition=1) 已落库; kind = space(跨 scene) / character_entry(人物入场)',
+    })
+  }
   logTaskSuccess('StoryboardPlanner', 'step3-done', {
     episodeId, clearedCount, createdCount: createdStoryboardIds.length,
   })

@@ -30,6 +30,27 @@ export interface TransitionPlanItem {
 }
 
 /**
+ * ★ Sprint 33 T3 (PM msg-20261103-140): 从 step1_plan 建【shot_number → 过渡镜标记】的映射。
+ *   step3 用它反查回填 (不透传给 step2 LLM, 也不靠 step2 复述)。
+ *   抽成纯函数 → 能用 mock plan 离线断言, 不必真跑一次 LLM。
+ */
+export function buildTransitionMap(
+  plan: Array<{ shot_number?: number; is_transition?: boolean | null; transition_kind?: string | null }> | null | undefined,
+): Map<number, { isTransition: boolean; kind: 'space' | 'character_entry' | null }> {
+  const map = new Map<number, { isTransition: boolean; kind: 'space' | 'character_entry' | null }>()
+  for (const item of plan || []) {
+    if (!item || typeof item.shot_number !== 'number') continue
+    map.set(item.shot_number, {
+      isTransition: item.is_transition === true,
+      kind: item.transition_kind === 'space' || item.transition_kind === 'character_entry'
+        ? item.transition_kind
+        : null,
+    })
+  }
+  return map
+}
+
+/**
  * step1 结果的后处理: 过渡镜 2s 强制 + shot_number 连续 + total_duration 重算。
  *
  * ★ 没有过渡镜 → 原样返回 (一个字段都不改) —— 老剧集拆解产出与改动前逐字一致。

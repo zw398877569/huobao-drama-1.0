@@ -499,6 +499,10 @@ ensureColumn('storyboards', 'image_prompt_plot_state', 'TEXT')
 // ★ Sprint 29 Task B (PM msg-20261028-129): 中文版视频提示词列 (加列时已有行填 NULL = 没中文版)
 ensureColumn('storyboards', 'video_prompt_zh', 'TEXT')
 ensureColumn('storyboards', 'video_prompt_plot_state', 'TEXT')
+// ★ Sprint 33 T3 (PM msg-20261103-140): 过渡镜标记两列
+//   老数据 is_transition 默认 0 (= 不是过渡镜) / transition_kind 为 NULL → 行为与改动前一致
+ensureColumn('storyboards', 'is_transition', 'INTEGER')
+ensureColumn('storyboards', 'transition_kind', 'TEXT')
 
 // 2026-10-10 V3 治本 (PM msg-20261010-002) — storyboards 加 image_prompt_permanent 列
 //   存结构化 5 维 enum JSON (character_traits / scene_aesthetic / shot_type_ref / angle / movement),

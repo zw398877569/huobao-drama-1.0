@@ -217,6 +217,12 @@ export const storyboards = sqliteTable('storyboards', {
   // (2026-08-29 removed: P1 状态门控 schema 字段 observed_final_state/observed_final_state_at。
   //  跨镜头连续性靠 storyboard_breaker agent prompt 自身的 vault-aligned 规则实现,
   //  不再走 "抽最后一帧 + vision LLM 描述" 这条路径。旧 DB 的两列会保留但不再写入。)
+  // ★ Sprint 33 T3 (PM msg-20261103-140): 过渡镜标记 (拆解层垫的『桥镜』)
+  //   · isTransition: 该镜是不是过渡镜 (一个镜头内完成状态切换) —— 老数据默认 0 (不是过渡镜)
+  //   · transitionKind: space (跨 scene 空间切换) / character_entry (同 scene 人物入场); 非过渡镜为 NULL
+  //   值由 step3 按 shot_number 从 step1_plan 反查回填 (不透传给 step2 LLM, 也不靠 step2 复述)
+  isTransition: integer('is_transition').default(0),
+  transitionKind: text('transition_kind'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
