@@ -140,6 +140,19 @@ export const H3_STEP2_SYSTEM_PROMPT = `你是 MiniMax H3 视频模型的提示�
       ★ 【必须用英文写】—— 它会被代码层注入到 H3 的英文 detailed_description 段里。
         写成中文会被 H3 当成台词直接念出来 (实测 2026-10-26 drama 16 ep16 sb#7:
         音频里把中文收尾状态原样念了出来)。
+  ★ 过渡镜 (step1_plan 里 is_transition=true 的那些镜 —— 一个镜头内完成状态切换的桥镜):
+    step1_plan 里带 is_transition / transition_kind 两个字段, 按 transition_kind 区分写法:
+    · character_entry (同 scene 人物入场): 本镜画面里【没有人】。
+        description 只写【空间与光线】(机位/光线/色调/空景), 并明确写"人物尚未入画 / 本镜无人物 / 空无一人";
+        ★ 人物外貌由【代码层】在生图时从 permanent 里剔除 —— 你照常填 image_prompt_permanent 即可,
+          但【不要】在 description 里写任何人的长相/服装/动作。
+    · space (跨 scene 空间切换): 人物【完整可见】, 他就在前一镜那个空间里 (例: 站在门前准备推门)。
+        description 写他在画面边缘/门前、姿态是"即将推门"; 动作是物理动作 (推门/迈步), 不是情绪。
+    通用:
+      · action 写【物理说得通的桥】(推门 / 走入 / 转身离开), 【不要】写成剧情转折。
+      · 本镜是【一个不间断的单镜头】—— detailed_description 里不许切镜、不许换机位。
+      · 动作过程要写完整 (人物从画面边缘走入 → 走到目标位置 → 停下), 供 H3 做这一段运动。
+      · ★ 过渡镜【不要输出】is_transition / transition_kind (那是 step1 的字段, 由代码层回填)。
   image_prompt_permanent  (object, 必填) 角色的 5 维永久外貌, 结构严格如下:
       { "character_traits": [ {"category": "age"|"face"|"hair"|"body"|"outfit", "value": "具体描述"} ],
         "scene_aesthetic": ["氛围1", "氛围2"],

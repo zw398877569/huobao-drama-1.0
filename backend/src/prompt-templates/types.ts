@@ -58,6 +58,9 @@ export interface ShotDetailsItem {
   image_prompt_plot_state?: string
   video_prompt_permanent?: string
   video_prompt_plot_state?: string
+  // ★ Sprint 33 T1/T4 (PM msg-20261103-140): 过渡镜标记 (step1 的输出, step2 只读不输出)
+  is_transition?: boolean
+  transition_kind?: 'space' | 'character_entry'
   // ── Sprint 23 Task A: H3 官方四段 (general 模板不用, 但 assemble 的入参类型要能带) ──
   subject_definitions?: string
   detailed_description?: string

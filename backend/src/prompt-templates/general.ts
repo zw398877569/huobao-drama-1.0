@@ -159,6 +159,19 @@ V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 en
   ★ 情绪景别 (轴2): 情绪越强 → 景别越近 + 运镜越慢 (ECU > CU > MS > MLS > WS)
   ★ 节奏控制 (轴3): 动静结合, 关键处制造停顿 —— 不要"全程加速", 用停顿/慢推替代连切
 plot_state 段 (image_prompt_plot_state): 自由 string, 允许剧情瞬时动作/表情/物件状态。
+  ★ 过渡镜 (step1_plan 里 is_transition=true 的那些镜 —— 一个镜头内完成状态切换的桥镜):
+    step1_plan 里带 is_transition / transition_kind 两个字段, 按 transition_kind 区分写法:
+    · character_entry (同 scene 人物入场): 本镜画面里【没有人】。
+        description 只写【空间与光线】(机位/光线/色调/空景), 并明确写"人物尚未入画 / 本镜无人物 / 空无一人";
+        ★ 人物外貌由【代码层】在生图时从 permanent 里剔除 —— 你照常填 image_prompt_permanent 即可,
+          但【不要】在 description 里写任何人的长相/服装/动作。
+    · space (跨 scene 空间切换): 人物【完整可见】, 他就在前一镜那个空间里 (例: 站在门前准备推门)。
+        description 写他在画面边缘/门前、姿态是"即将推门"; 动作是物理动作 (推门/迈步), 不是情绪。
+    通用:
+      · action 写【物理说得通的桥】(推门 / 走入 / 转身离开), 【不要】写成剧情转折。
+      · 本镜是【一个不间断的单镜头】—— 画面描述里不许切镜、不许换机位。
+      · 动作过程要写完整 (人物从画面边缘走入 → 走到目标位置 → 停下), 供视频模型做这一段运动。
+      · ★ 过渡镜【不要输出】is_transition / transition_kind (那是 step1 的字段, 由代码层回填)。
 输出: 严格 JSON { shot_details: [{shot_number, scene_id, character_ids, shot_type, angle, movement, location, time, duration, action, dialogue, description, result, atmosphere, intent_function, image_prompt_permanent, image_prompt_plot_state, video_prompt_permanent, video_prompt_plot_state, sound_effect, bgm_prompt}] }`
 
 /**
