@@ -20,15 +20,40 @@ export const AUTODL_COMFYUI_MODEL_LABELS: Record<string, string> = {
 }
 
 /**
+ * ★ 各工作流【实际会用的默认档】的价格 (元/秒, 高峰时段 08:00~24:00)。
+ *
+ * 数据源: Obsidian/ComfyUi/autodl-workflows-auto.md (AutoDL 官方档案自动同步)。
+ *   · 空闲时段 (00:00~08:00) 同档便宜约 20%, 这里只标高峰价 (用户白天生成为主)。
+ *   · 括号里是【默认档】—— 价格按档位走, 同一工作流换档价格不同 (如 803: 1088p ¥0.06 / 1440p ¥0.07)。
+ *   · ★ v5_15s 标的是 1080p 的价: 代码的默认档就是 1080p (沿用既有行为, 本次未改),
+ *     但官方档案的档位表里只列了 480p/768p —— 档位口径以代码为准, 疑点已记 handoff。
+ */
+export const AUTODL_COMFYUI_MODEL_PRICES: Record<string, string> = {
+  minimax_h3_lightx2v_no_pic: '¥0.05/秒 (768p)',
+  minimax_h3_lightx2v: '¥0.05/秒 (768p)',
+  minimax_h3_lightx2v_v5: '¥0.10/秒 (1080p)',
+  minimax_h3_lightx2v_v5_15s: '¥0.10/秒 (1080p)',
+  minimax_h3_zm_u24: '¥0.05/秒 (768p)',
+  minimax_h3_zm_u08: '¥0.05/秒 (768p)',
+  minimax_h3_image_audio_to_video_v2: '¥0.11/秒 (1080p)',
+  minimax_h3_image_audio_to_video_v2_15s: '¥0.05/秒 (768p)',
+  // ★ 九图三音 15s 画质增强版: 默认 1088p, 比 v5 的 1080p 便宜 40% 且更清晰
+  minimax_h3_803: '¥0.06/秒 (1088p)',
+}
+
+/**
  * 给前端 dropdown / 弹窗展示用的模型标签
- * - autodl-comfyui provider 走上面的中文映射
+ * - autodl-comfyui provider 走上面的中文映射 (+ 价格, 让用户选之前就知道花多少钱)
  * - 其他 provider（MiniMax-Hailuo、Vidu、火山等）的 model id 本身已经是产品友好名，直接返回
  * - 没匹配上的 id 也直接返回，避免误显示
  */
 export function getModelLabel(id: string, provider?: string): string {
   if (provider === 'autodl-comfyui') {
     const zh = AUTODL_COMFYUI_MODEL_LABELS[id]
-    if (zh) return `${zh} · ${id}`
+    if (zh) {
+      const price = AUTODL_COMFYUI_MODEL_PRICES[id]
+      return price ? `${zh} · ${price} · ${id}` : `${zh} · ${id}`
+    }
   }
   return id
 }
