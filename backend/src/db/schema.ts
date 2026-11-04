@@ -221,7 +221,14 @@ export const storyboards = sqliteTable('storyboards', {
   //   · isTransition: 该镜是不是过渡镜 (一个镜头内完成状态切换) —— 老数据默认 0 (不是过渡镜)
   //   · transitionKind: space (跨 scene 空间切换) / character_entry (同 scene 人物入场); 非过渡镜为 NULL
   //   值由 step3 按 shot_number 从 step1_plan 反查回填 (不透传给 step2 LLM, 也不靠 step2 复述)
-  isTransition: integer('is_transition').default(0),
+  // ★ Sprint 33 追加单4 (PM msg-20261104-152): 用 { mode: 'boolean' } —— Drizzle 读取时把
+  //   INTEGER 的 0/1 自动映射成 false/true (与同文件 isDefault / isActive 写法一致)。
+  //   ★ 修前是裸 integer → 接口返回数字 1, 而前端严格比较 === true → 永远 false
+  //     → T5 生图层桥接的 4 处行为 (接力跳过过渡镜 / 场景图取前一镜 / character_entry 不传角色图 /
+  //       视频侧尾帧=后一镜首帧) 全部失效, 且镜卡片上的『过渡镜』标记也显示不出来。
+  //   ★ 不改表结构 (列本来就是 INTEGER; mode 只影响【读取】时的类型映射),
+  //     老数据 is_transition=0 → 读成 false → 仍判为非过渡镜 (零影响)。
+  isTransition: integer('is_transition', { mode: 'boolean' }).default(false),
   transitionKind: text('transition_kind'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),

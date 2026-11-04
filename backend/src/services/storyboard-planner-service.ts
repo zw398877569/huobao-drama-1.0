@@ -854,7 +854,8 @@ export async function runStep3(opts: {
         sceneId: det.scene_id || null,
         duration: det.duration || 10,
         // ★ Sprint 33 T3: 过渡镜标记 (从 step1_plan 按 shot_number 反查回填; 老数据/无标记 → 0 / NULL)
-        isTransition: transitionMap.get(det.shot_number)?.isTransition ? 1 : 0,
+        // ★ Sprint 33 追加单4: schema 改成 boolean mode 后这里要写 true/false (Drizzle 写库时自动转 1/0)
+        isTransition: transitionMap.get(det.shot_number)?.isTransition === true,
         transitionKind: transitionMap.get(det.shot_number)?.kind ?? null,
         createdAt: now(),
         updatedAt: now(),
