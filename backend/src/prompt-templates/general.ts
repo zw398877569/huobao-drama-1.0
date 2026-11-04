@@ -204,7 +204,15 @@ function assembleGeneral(input: AssembleInput): AssembleOutput {
   //   把 permanent 里的【角色外貌】剔掉 (只留场景氛围/景别/机位)。
   //   ★ permanent 列本身【不改】(只改拼进 image_prompt 的那份) → 角色档案信息不丢。
   const isCharEntryTransition = input.isTransition === true && input.transitionKind === 'character_entry'
-  const permanentForPrompt = (isCharEntryTransition && cleanedPermanent.imagePromptPermanent)
+  // ★ Sprint 33 追加单5 (PM msg-20261104-153): 【纯环境空镜】(character_ids 为空) 也要剔外貌 ——
+  //   画面里没有人, 却塞着完整人物外貌 → 生图模型会凭空画出一个陌生人物
+  //   (既不是主角也不是配角: 该镜 character_ids 空 → 不传角色形象图 → 模型没有参考图可对)。
+  //   ★ 只改【拼进 image_prompt 的那份】, permanent 列本身不改 → 角色档案信息不丢、可追溯。
+  //   ★ character_ids 非空的镜 → character_traits 原样保留, 一个字节都不改。
+  //   ★ 只判『明确传了空数组』的镜 (没传 characterIds 的调用方按原行为处理, 不误剔)。
+  const isEmptyShot = Array.isArray(input.characterIds) && input.characterIds.length === 0
+  const stripCharacterTraits = isCharEntryTransition || isEmptyShot
+  const permanentForPrompt = (stripCharacterTraits && cleanedPermanent.imagePromptPermanent)
     ? { ...cleanedPermanent.imagePromptPermanent, character_traits: [] }
     : cleanedPermanent.imagePromptPermanent
   const permanentText = permanentForPrompt ? permanentToText(permanentForPrompt) : ''

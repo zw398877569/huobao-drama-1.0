@@ -324,18 +324,18 @@ export function resolveEffectiveCharacterIds(opts: {
   /** 本镜的 description + action + dialogue —— 用来按角色名反查 */
   mentionText: string
   characters: Array<{ id: number; name: string }>
-}): { effectiveIds: number[]; recovered: number[]; needsReview: boolean } {
+}): { effectiveIds: number[]; recovered: number[]; needsReview: boolean; mentionedAnyName: boolean } {
   const declared = opts.declaredIds || []
-  if (declared.length > 0) return { effectiveIds: declared, recovered: [], needsReview: false }
+  if (declared.length > 0) return { effectiveIds: declared, recovered: [], needsReview: false, mentionedAnyName: false }
   // 没填 character_ids —— 只有【画了角色】时才反查 (纯环境空镜用空数组是对的, 不能乱补)
-  if (opts.traitCount <= 0) return { effectiveIds: [], recovered: [], needsReview: false }
-  const recovered = opts.characters
+  if (opts.traitCount <= 0) return { effectiveIds: [], recovered: [], needsReview: false, mentionedAnyName: false }
+  const nameMatched = opts.characters
     // 角色名太短 (1 个字) 容易误命中 (比如名字叫"王"而正文里有"王朝"), 跳过
     .filter((c) => c.name && c.name.length >= 2 && opts.mentionText.includes(c.name))
-    .map((c) => c.id)
+  const recovered = nameMatched.map((c) => c.id)
   if (recovered.length === 0) {
     // 画了角色却一个名字都对不上 → 人工确认画面里到底有没有角色
-    return { effectiveIds: [], recovered: [], needsReview: true }
+    return { effectiveIds: [], recovered: [], needsReview: true, mentionedAnyName: false }
   }
-  return { effectiveIds: recovered, recovered, needsReview: false }
+  return { effectiveIds: recovered, recovered, needsReview: false, mentionedAnyName: true }
 }

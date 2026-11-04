@@ -107,6 +107,13 @@ export interface AssembleInput {
    */
   isTransition?: boolean
   transitionKind?: 'space' | 'character_entry' | null
+  /**
+   * ★ Sprint 33 追加单5 (PM msg-20261104-153): 本镜【实际生效】的 character_ids
+   *   (含 resolveEffectiveCharacterIds 的反查补齐结果)。
+   *   为空 = 纯环境空镜 → 拼进 image_prompt 的 character_traits 一律剔掉
+   *   (画面里没有人, 却塞着完整人物外貌 → 生图模型会凭空画出一个陌生人物)。
+   */
+  characterIds?: number[]
 }
 
 /** assemble 的输出 —— 直接进 DB 的那几个 prompt 字段 */

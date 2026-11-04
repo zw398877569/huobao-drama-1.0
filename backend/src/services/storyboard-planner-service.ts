@@ -711,12 +711,29 @@ export async function runStep3(opts: {
         hint: '本镜画了角色但 character_ids 为空, 已按正文里的角色名反查补齐 (老路径 character_ids 必填规则)',
       })
     } else if (charIdResult.needsReview) {
-      logTaskWarn('StoryboardPlanner', 'character-ids-empty-but-traits', {
-        episodeId,
-        shotNumber: det.shot_number,
-        traitCount,
-        hint: '本镜 character_traits 非空 (画了角色) 但 character_ids 为空 且正文里找不到角色名 —— 人工确认画面里到底有没有角色',
-      })
+      // ★ Sprint 33 追加单5 (PM msg-20261104-153): 告警语义升级 + 两种情况必须分开:
+      //   ① 【真空镜】(正文里一个角色名都没有) → 常态, 代码层已自动剔除外貌 → 只需留痕
+      //   ② 【正文里出现了角色名, 但 character_ids 空且反查补不齐】→ LLM 漏填了 id (不是空镜)
+      //      → 必须继续提示人工确认, 不能一律说成『已自动处理』, 那样就把真问题盖住了。
+      const strippedTraitCategories = (cleaned.imagePromptPermanent?.character_traits || [])
+        .map((t: any) => t?.category).filter(Boolean)
+      if (charIdResult.mentionedAnyName) {
+        logTaskWarn('StoryboardPlanner', 'character-ids-empty-but-traits', {
+          episodeId,
+          shotNumber: det.shot_number,
+          traitCount,
+          strippedTraitCategories,
+          hint: '★ 本镜正文里出现了角色名, 但 character_ids 为空且反查补不齐 —— 需要人工确认画面里到底有没有角色 (外貌描述已自动剔除)',
+        })
+      } else {
+        logTaskWarn('StoryboardPlanner', 'character-traits-stripped-for-empty-shot', {
+          episodeId,
+          shotNumber: det.shot_number,
+          traitCount,
+          strippedTraitCategories,
+          hint: '本镜 character_ids 为空 (纯环境空镜) 但 character_traits 非空 → 拼进 image_prompt 的外貌描述已自动剔除 (画面里应该没有人)',
+        })
+      }
     }
 
     // ── Sprint 17 Task F①: 道具时序 (老路径 轴5) ──
@@ -789,6 +806,9 @@ export async function runStep3(opts: {
       // ★ Sprint 33 T5: 过渡镜标记 → assemble 据此决定要不要剔掉 permanent 里的角色外貌
       isTransition: transitionMap.get(det.shot_number)?.isTransition || false,
       transitionKind: transitionMap.get(det.shot_number)?.kind || null,
+      // ★ Sprint 33 追加单5: 本镜【实际生效】的 character_ids (含反查补齐) →
+      //   为空 = 纯环境空镜 → assemble 剔掉 permanent 里的角色外貌 (画面里本来没人)
+      characterIds: characterIds,
     }
     const assembled = tpl.assemble(assembleInput)
 
