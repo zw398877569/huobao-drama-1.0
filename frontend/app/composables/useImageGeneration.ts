@@ -215,7 +215,13 @@ export function useImageGeneration(deps: Deps) {
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
   // 2026-09-18 fix: 加 excludeFirstFrame 参数, 重新生成 first_frame 时不引用旧 first_frame
   //   (避免把"待替换的旧图"作为参考让 LLM 复制旧图的错误)
-  function buildShotReferenceAssets(sb: any, excludeFirstFrame = false, out?: { dropped?: any[] }) {
+  /**
+   * 收集本镜的参考图。
+   * @param excludeFirstFrame 排除【本镜自己的旧首帧】(重新生成首帧时用)
+   * @param out              被上限挤掉的参考图清单 (flow-log + toast 用)
+   * @param excludeLastFrame  排除【本镜自己的旧尾帧】(Sprint 34 追加单2)
+   */
+  function buildShotReferenceAssets(sb: any, excludeFirstFrame = false, out?: { dropped?: any[] }, excludeLastFrame = false) {
     // ① 先收集候选 (带优先级), 后面统一排序取前 N 张
     const candidates: Array<{ asset: any; priority: number }> = []
     const pushAsset = (asset: any, priority: number) => {
@@ -280,8 +286,15 @@ export function useImageGeneration(deps: Deps) {
 
     // 重新生成 first_frame 时跳过 first_frame 引用 (避免参考待替换的旧图)
     // last_frame 引用 first_frame 仍合法 (保持视觉连贯)
+    //
+    // ★ Sprint 34 追加单2 (PM msg-20261106-142): 本镜【自己的旧尾帧】一律不进参考图 ——
+    //   旧尾帧是【上一轮自己的产物】(可能带无关道具图 / 旧内容), 拿它当参考 → 模型把老内容
+    //   继承回来 → 用户点【重新生成】却看到跟上一版一样的东西 → 越修越乱。
+    //   ★ 只排除【本镜自己】的旧尾帧; 【跨镜接力】(上一镜的末帧, 来自 findPrevShot) 原样保留 ——
+    //     那条是设计要的 (镜#3 首帧 ← 镜#2 尾帧), 不能一起排掉。
+    //   ★ 生成尾帧时【保留】本镜已生成的首帧 (首尾连贯靠它) —— 只排自己的旧尾帧。
     const first = excludeFirstFrame ? null : getFirstFrame(sb)
-    const last = getLastFrame(sb)
+    const last = excludeLastFrame ? null : getLastFrame(sb)
     if (first) pushAsset({ path: first, kind: 'first_frame', label: '已生成首帧' }, 4)
     if (last) pushAsset({ path: last, kind: 'last_frame', label: '已生成尾帧' }, 4)
 
@@ -336,7 +349,9 @@ export function useImageGeneration(deps: Deps) {
     // ★ Sprint 28 Task A: 与 genShotFrame 用【同一份】assets (excludeFirstFrame 口径一致)
     //   —— 原来两边口径不同 (prompt 的 legend 带 excludeFirstFrame=false 的列表, 实际发的是 true 的列表)
     //   → 重新生成首帧时 legend 的编号跟实际 images 数组会错位一格。
-    const assets = buildShotReferenceAssets(sb, frameType === 'first_frame')
+    // ★ 与 genShotFrame 的实际请求【同一套排除参数】—— legend 必须与实际参考图一致
+    //   (历史上出过 legend 编号与 images 数组错位一格的问题)
+    const assets = buildShotReferenceAssets(sb, frameType === 'first_frame', undefined, true)
     const characterAssets = assets.filter(a => a.kind === 'character')
     const relayAsset = assets.find(a => a.kind === 'prev_shot')
 
@@ -725,7 +740,8 @@ export function useImageGeneration(deps: Deps) {
       // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
       // ★ Sprint 28 fix_2: 顺手收集【被上限挤掉的参考图】, 后面交给后端记 flow-log + 给用户 toast
       const droppedBox: { dropped?: any[] } = {}
-      const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame', droppedBox)
+      // ★ 最后一个参数 excludeLastFrame=true: 本镜自己的旧尾帧不进参考图 (Sprint 34 追加单2)
+      const shotAssets = buildShotReferenceAssets(sb, frameType === 'first_frame', droppedBox, true)
       const referenceImages = shotAssets.map(a => a.path)
       // ★ Sprint 28 Task A / fix_2: 用了哪张接力图 —— 改成随请求体传给后端记 flow-log
       //   (原来只在 console 里, 用户与 QA 都看不到; console 那两行已去掉, 信息没丢)
