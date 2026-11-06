@@ -137,6 +137,26 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
   /** 音频参考最多 3 段 (ref_audio_0/1/2)，平台硬上限 */
   private static readonly REF2V_MAX_AUDIO = 3
 
+  /**
+   * ★ Sprint 35 (PM msg-20261106-149): 【平台规定 ref_audio 必填】的工作流白名单 ——
+   *   只有在这里列出的工作流, 『本镜没配音』才允许降级 workflow。
+   *
+   * ★ 为什么改 (原 D2 是无条件降级):
+   *   平台文档 (Obsidian/ComfyUi/autodl-workflow详解.md + autodl-workflows-auto.md) 实测:
+   *     minimax_h3_zm_u24                   → ref_audio_0 选填
+   *     minimax_h3_zm_u08                   → ref_audio_0 选填
+   *     minimax_h3_image_audio_to_video_v2    → ref_audio_0 选填
+   *     minimax_h3_image_audio_to_video_v2_15s → ref_audio_0 选填
+   *     minimax_h3_803                       → ref_audio_0~2 全选填
+   *     (唯一 ref_audio_0 必填的 minimax_h3_image_audio_to_video 我们【不支持】)
+   *   → 『没配音』不构成降级理由。而降级的代价很大:
+   *     803 的 1088p ¥0.060/秒 被换成 v5 的 1080p ¥0.100/秒 → 【贵 67% 且画质降一档】,
+   *     zm_u24 的『升级画质』也一并丢掉。
+   *   → 现在没配音时: 照常跑用户选的那个工作流, 只是【不传】ref_audio_0/1/2 (平台侧选填)。
+   *   ★ 若将来某个工作流的平台文档写明 ref_audio 必填, 把它加进这个白名单即可恢复降级。
+   */
+  private static readonly AUDIO_REQUIRED_WORKFLOWS: readonly string[] = []
+
   /** Ref2V 1-10s 用 v5; 11-15s 自动切到 v5_15s */
   private static readonly REF2V_MAX_SHORT_S = 10
   /** 平台 ref_image_N 槽位上限 (ref_image_0 ~ ref_image_8) */
@@ -320,6 +340,11 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     // ★ Sprint 34 (PM msg-20261103-144): 用户选了一个【我们没接入】的模型 id →
     //   之前这种不设任何 fallbackReason → flow-log 里一条告警都不留 → 完全无法排查。
     //   这里先识别出来, 最后统一兜底告警 (mode 不匹配的原因码优先, 见下)。
+    //   ⚠️ 命名容易绕进去 (QA 2026-11-06 提过): 实际语义是
+    //     『显式给了 model, 且这个 id 不在已知工作流全集里』;
+    //     『没给 model』→ false → 走自动路由, 不算未接入。
+    //     ★ 它与 D1/D2 的 isExplicitRef2V 互斥 (能设上那两者的前提都是 isExplicitRef2V=true),
+    //       所以 144 单那个 model_not_supported 兜底不会被 D1/D2 的 reason 抢走。
     const isUnrecognizedModel = !!explicitModel
       && !(AutoDLComfyUIWorkflowAdapter.KNOWN_WORKFLOW_IDS as readonly string[]).includes(explicitModel)
     const explicitRefs = isExplicitRef2V && (mode === 'multiple' || mode === 'single')
@@ -329,9 +354,13 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     if (explicitRefs.length > 0) {
       workflowId = explicitModel!
       refs = explicitRefs
-      // D2 (用户 2026-10-19 拍板): 选了音频工作流但本镜没配音 → 自动退回普通 Ref2V (v5 / v5_15s)。
-      //   属正常兜底 (没配音就不用做口型同步), 不提示前端, 只 flow-log 记一笔供事后核对。
-      if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)) {
+      // D2 (2026-10-19 拍板 → ★ Sprint 35 修正): 选了音频工作流但本镜没配音时,
+      //   以前无条件退普通 Ref2V (v5 / v5_15s)。但平台规格里这些工作流的 ref_audio 是【选填】,
+      //   → 『没配音』不构成降级理由, 而且代价很大 (803: 1088p ¥0.060/秒 → 1080p ¥0.100/秒, 贵 67% 且降一档)。
+      //   现在: 照常跑用户选的工作流, 只是不传 ref_audio_0/1/2 (平台侧选填)。
+      //   ★ 只有【平台规定 ref_audio 必填】的工作流才降级 (见 AUDIO_REQUIRED_WORKFLOWS, 当前为空)。
+      if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)
+        && (AutoDLComfyUIWorkflowAdapter.AUDIO_REQUIRED_WORKFLOWS as readonly string[]).includes(workflowId)) {
         fallbackReason = 'no_audio_fallback'
         workflowId = this.pickRef2VWorkflowId(record.duration)
       }
@@ -357,8 +386,13 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
         workflowId = explicitModel!
         refs = frameRefs
         fallbackReason = 'mode_mismatch_ref2v'
-        // 同 D2: 再判一次没配音的情况, 但保留更重要的 mode_mismatch_ref2v 原因码
-        if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)) {
+        // ★ Sprint 35: D2 不再无条件降级 → 这里【只有平台规定 ref_audio 必填】的工作流才换 workflow。
+        //   之前这里会把用户选的 zm_u24/803 换成普通 v5, 但 reason 仍记着 mode_mismatch_ref2v
+        //   → flow-log 记的码与真正换 workflow 的原因对不上, 事后排查会被带偏。
+        //   现在没有 D2 这层替换了 → mode_mismatch_ref2v 就是唯一且正确的原因码
+        //   (确实从 FL2V 换成了用户选的 Ref2V 变体, 语义仍然对)。
+        if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)
+          && (AutoDLComfyUIWorkflowAdapter.AUDIO_REQUIRED_WORKFLOWS as readonly string[]).includes(workflowId)) {
           workflowId = this.pickRef2VWorkflowId(record.duration)
         }
       } else if (isExplicitRef2V) {
