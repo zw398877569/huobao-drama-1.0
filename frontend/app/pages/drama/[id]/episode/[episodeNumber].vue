@@ -1648,6 +1648,8 @@
                     <span :class="['dot', hasVid(sb) && 'ok', isPendingVideo(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingVideo(sb.id) ? '视频生成中' : '视频' }}</span>
                   </div>
                   <div v-if="videoFallbackNote(sb.id)" class="prod-fallback-note" :title="'你选的视频模型与该镜头实际用的工作流不一致, 已自动降级 (不会中断生成)。想强制指定请确认该镜头有参考图/配音; 详细原因见 flow-log 的 VideoTask/model-fallback'">{{ videoFallbackNote(sb.id) }}</div>
+                  <!-- ★ Sprint 36 (PM msg-20261106-157): 过渡镜没桥接上的常驻提示 (不是一闪而过的 toast) -->
+                  <div v-if="videoBridgeNote(sb.id)" class="prod-fallback-note" :title="'过渡镜的尾帧 = 后一镜的首帧。缺了它这一刀就是硬切 (视频模型只能自己脑补尾帧)。按提示先生成后一镜首帧, 再重新生成本镜即可无缝。'">{{ videoBridgeNote(sb.id) }}</div>
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
@@ -2460,6 +2462,8 @@ const {
   isPendingVideo, videoFailMessage, isPendingCompose, composeFailMessage,
   // Sprint 14 (PM msg-20261019-074): 降级 tag —— 用户选的模型跟实际跑的 workflow 不一致时提示
   videoFallbackNote, loadVideoFallbackNotes,
+  // ★ Sprint 36 (PM msg-20261106-157): 过渡镜等后一镜首帧 —— 用它判断"正在生成"还是"根本没生成"
+  videoBridgeNote,
   genVid, batchVideos, doCompose, batchCompose, pollVideoGeneration, pollComposeStatus,
 } = useVideoGeneration({
   ctx: { sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
@@ -2470,6 +2474,7 @@ const {
   hasVid,
   watchAsyncResult,
   sleep,
+  isPendingShotFrame,  // ★ Sprint 36: 后一镜首帧正在生成 → 给足等待时间; 没生成 → 不干等
 })
 
 // Grid tool: state + handlers for the宫格图 wizard (load + prompt + generate + assign + split)
