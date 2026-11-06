@@ -145,9 +145,11 @@ export function useImageGeneration(deps: Deps) {
    *   → 只能用【文本相关度】近似: 道具名的 3-gram 命中本镜的描述/提示词文本 → 算相关, 排前面。
    *   (实测 ep19 镜3 的 description 含「订单备注」→ 命中道具「手机订单备注」✓)
    *
-   * 优先级: 相关道具 3 (场景之后) / 不相关道具 5 (本镜首尾帧之后)
-   *   → PM 要求【不能】因为排不上限就整类丢掉 → 相关的必须能进来;
-   *     既有五类(接力>角色>场景>本镜首尾>杂项)的相对顺序不变。
+   * ★ Sprint 34 (PM msg-20261106-141): 兜底路径现在【只进 3-gram 命中的】——
+   *   不相关的道具图【一律不进参考图, 也不在 legend 里出现】(改前是 priority 5 排在后面,
+   *   但名额没满照样进图 → 模型把本镜根本没有的道具画进画面)。
+   *   显式关联的镜【永远优先】于文本相关度, 且关联外的一张都不进 (132 单的核心行为, 未动)。
+   * 优先级: 相关道具 3 (场景之后) —— 既有五类(接力>角色>场景>道具>本镜首尾>杂项)的相对顺序不变。
    */
   function collectShotPropAssets(sb: any): Array<{ asset: any; priority: number }> {
     const props = (ctx.keyProps?.value || [])
@@ -178,8 +180,12 @@ export function useImageGeneration(deps: Deps) {
       return out
     }
 
-    // ★ 该镜【完全没有显式关联】→ 走现有的 3-gram 兜底, 行为与改动前逐字一致。
-    //   老剧集没有关联数据 (PM 决策 D3: 不回填) → 一律按兜底走 → 老剧集零回归。
+    // ★ 该镜【完全没有显式关联】→ 走 3-gram 兜底: 【只进文本命中的道具图】。
+    //   ★★ Sprint 34 (PM msg-20261106-141): 改前这里把【每一个】道具都 push 进 out,
+    //     不相关的只靠 priority 5 排在后面 —— 但 6 张名额没满它照样进图, 而且每张都带
+    //     一句 'xxx道具图(画面里的该道具以这张图为准)' 的 legend → 模型被明确告知
+    //     『这些道具都在画面里』→ 楼道空镜里画出『一碗热气升腾的面』和『501门牌』(实测)。
+    //     现在不相关的【直接不进 out】→ 参考图与 legend 里都不会出现。
     //   ⚠️ 边界 (PM 决策 D4 的字面语义): 用户把某镜的关联【全部取消】后, 该镜也会回到兜底路径。
     const text = [
       sb?.description || '', sb?.image_prompt || sb?.imagePrompt || '',
@@ -190,7 +196,8 @@ export function useImageGeneration(deps: Deps) {
       const path = pr?.image_url || pr?.imageUrl
       const name = String(pr?.name || '').trim()
       if (!path || !name) continue
-      const relevant = hasNgramHit(name, text)
+      // ★ 只有【文本相关】的道具才进参考图 —— 不相关的道具图一律不进 (也不再占名额)
+      if (!hasNgramHit(name, text)) continue
       out.push({
         asset: {
           path,
@@ -199,11 +206,10 @@ export function useImageGeneration(deps: Deps) {
           label: `${name}道具图(画面里的该道具以这张图为准)`,
           propName: name,
         },
-        priority: relevant ? 3 : 5,
+        priority: 3,
       })
     }
-    // 相关的排前面
-    return out.sort((a, b) => a.priority - b.priority)
+    return out
   }
 
   // 写"图片N = 角色X,保持其脸部特征"提示,改善 nano-banana 角色一致性 (2026-08-22)
