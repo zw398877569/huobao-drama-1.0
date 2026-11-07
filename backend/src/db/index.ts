@@ -471,7 +471,10 @@ ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 //     所以 adapter 换了 workflow 之后前端完全看不出来 (「选了 zm_u08 但没口型同步」查不出根因)。
 //   存 adapter 回填的原因码, 已知值:
 //     no_audio_fallback       = 音频工作流缺配音 -> 自动退普通 Ref2V (正常兜底, 前端不提示)
-//     mode_mismatch_ref2v     = 模式不匹配 -> 改跑 Ref2V (前端提示)
+//     mode_mismatch_ref2v     = (历史值) 模式不匹配 -> 改跑 Ref2V。
+//                              ★ Sprint 36 (PM msg-20261106-156) 起【不再写入】:
+//                                D1 其实是「工作流没换」, 弹 tag 会让用户以为模型被换掉了。
+//                                现在只有【工作流真的换了】才写 fallback_reason。
 //     mode_mismatch_no_images = 模式不匹配且无图可参考 -> 只能 T2V (前端提示)
 //   没降级时为 NULL, 老数据 NULL 兼容 (前端 null 时不渲染 tag)。
 //   启动 ensureColumn 自动加列, 无需手动 docker exec / 手动跑 SQL。

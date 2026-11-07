@@ -56,6 +56,8 @@ export function useVideoGeneration(deps: Deps) {
   //   后端 video_generations.fallback_reason 落库, 这里只做「原因码 -> 中文」映射。
   //   注意 no_audio_fallback 故意不展示 —— 那是「本镜没配音所以不做口型同步」的正常兜底,
   //   刷一屏 tag 只会让用户以为出错了 (用户 2026-10-19 拍板)。
+  //   ★ Sprint 36 (PM msg-20261106-156): 后端从 2026-11-06 起只在【工作流真的被换了】时才落 fallback_reason,
+  //   所以这张表里剩下的每一个码都意味着「用户选的模型被换了」→ 弹出来都是事实。
   const videoFallbackNotes = ref<Record<number, string>>({})
 
   // ★ Sprint 36 (PM msg-20261106-157): 过渡镜【没桥接上】的常驻提示 (key = storyboardId)。
@@ -68,7 +70,8 @@ export function useVideoGeneration(deps: Deps) {
     // ★ Sprint 34 (PM msg-20261103-144): 用户选了一个【我们没接入】的模型 id → 自动路由到别的工作流。
     //   这跟『mode 不匹配』是两种问题, 提示要区分开 (前者是 id 写错/没接入, 后者是模式选错)。
     model_not_supported: '所选模型未接入（已自动改用其它工作流），请检查设置里的模型 id 是否正确',
-    mode_mismatch_ref2v: '模式不匹配·已转多图参考',
+    // ★ Sprint 36 (156): mode_mismatch_ref2v 已从后端移除 (D1 根本没换工作流, requestedModel == actualWorkflow)。
+    //   这里也删掉它的文案 → 【历史脏数据】(drama 19 镜#7/镜#8 已落库的 mode_mismatch_ref2v) 同样不再弹 tag。
     mode_mismatch_no_images: '无参考图·已转文生视频',
   }
 

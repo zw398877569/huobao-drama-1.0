@@ -325,6 +325,10 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     let lastFrame: string | undefined
     /** Sprint 14: 实际 workflow 跟用户所选模型不一致时置位, 透传给调用方落库 */
     let fallbackReason: string | undefined
+    /** ★ Sprint 36 (PM msg-20261106-156): D1 (选了 Ref2V 变体 + mode=first_last) —— 工作流【没换】,
+     *  只是首/尾帧改以 ref_image_N 形式传给同一个工作流 → 不落 fallback_reason (前端不弹 tag),
+     *  只在 flow-log 留一条 'model-mode-adapt' 痕迹。 */
+    let modeAdapted = false
 
     // Sprint 14 (PM msg-20261019-074): 配音音频由后端从 storyboards.tts_audio_url 归一化后注入 (前端不传参),
     //   最多 3 段 — 平台 ref_audio_0/1/2 硬上限。
@@ -385,15 +389,21 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       if (isExplicitRef2V && frameRefs.length > 0) {
         workflowId = explicitModel!
         refs = frameRefs
-        fallbackReason = 'mode_mismatch_ref2v'
+        // ★ Sprint 36 (PM msg-20261106-156): 【这里没有换工作流】—— workflowId 仍然是用户选的那个。
+        //   以前这里置 fallbackReason='mode_mismatch_ref2v' → 前端给用户弹橙色 tag
+        //   『模式不匹配·已转多图参考』→ 用户以为自己选的模型被系统换掉了 (149 单的起因就是用户困惑过一次)。
+        //   实测 flow-log: requestedModel == actualWorkflow, 工作流一个都没换, 实际只是把首/尾帧
+        //   以 ref_image_0/1 的形式传给了【同一个】工作流 → 文案与事实不符。
+        //   现在: 工作流没换 → 不落 fallback_reason (前端不弹 tag); 只留 flow-log 痕迹。
+        //   ★ 剩下会落 fallback_reason 的原因码, 每个都意味着【工作流真的被换了】(见下面 model-fallback 块)。
         // ★ Sprint 35: D2 不再无条件降级 → 这里【只有平台规定 ref_audio 必填】的工作流才换 workflow。
-        //   之前这里会把用户选的 zm_u24/803 换成普通 v5, 但 reason 仍记着 mode_mismatch_ref2v
-        //   → flow-log 记的码与真正换 workflow 的原因对不上, 事后排查会被带偏。
-        //   现在没有 D2 这层替换了 → mode_mismatch_ref2v 就是唯一且正确的原因码
-        //   (确实从 FL2V 换成了用户选的 Ref2V 变体, 语义仍然对)。
+        //   (之前这里会把用户选的 zm_u24/803 换成普通 v5, reason 却记着 mode_mismatch_ref2v
+        //    → flow-log 记的码与真正换 workflow 的原因对不上。Sprint 35 已把那层替换去掉。)
+        modeAdapted = true
         if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)
           && (AutoDLComfyUIWorkflowAdapter.AUDIO_REQUIRED_WORKFLOWS as readonly string[]).includes(workflowId)) {
           workflowId = this.pickRef2VWorkflowId(record.duration)
+          fallbackReason = 'no_audio_fallback'   // ★ 这里是真的换了工作流 → 原因码如实记录
         }
       } else if (isExplicitRef2V) {
         workflowId = AutoDLComfyUIWorkflowAdapter.WORKFLOW_T2V
@@ -410,6 +420,19 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       if (isExplicitRef2V) fallbackReason = 'mode_mismatch_no_images'
     }
 
+    // ★ Sprint 36 (PM msg-20261106-156): D1 的痕迹 (工作流没换, 所以没有 fallback_reason 可落库)。
+    //   flow-log 里照样能查到「这镜是把首/尾帧当 ref_image_N 跑的」—— 排查用。
+    if (modeAdapted && !fallbackReason) {
+      logTaskWarn('VideoTask', 'model-mode-adapt', {
+        videoGenId: record.id,
+        requestedModel: explicitModel,
+        actualWorkflow: workflowId,
+        reason: 'mode_mismatch_ref2v',
+        referenceMode: mode,
+        audioCount: audioUrls.length,
+        hint: '模式与所选 Ref2V 变体不匹配: 首/尾帧改以 ref_image_N 形式传给【同一个】workflow (工作流未换) → 不提示用户',
+      })
+    }
     if (fallbackReason) {
       // 降级留痕 — flow-log 里能直接 grep 到「为什么选了 zm_u08 却跑了别的」。
       // fallbackReason 同时回填到 video_generations.fallback_reason 供前端提示。
