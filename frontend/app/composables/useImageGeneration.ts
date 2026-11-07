@@ -1,6 +1,8 @@
 import { toast } from 'vue-sonner'
 // ★ Sprint 33 T5 (PM msg-20261103-140): 过渡镜工具 (接力跳过 / 首帧参考图规则)
 import { isTransitionShot, isCharacterEntryTransition } from '~/utils/transition'
+// ★ Sprint 36 (PM msg-20261106-155): 角色档案里的【剧情道具】剥离 (前后端同语义, 改动要同步)
+import { stripPropsFromAppearance } from '~/utils/prop-guard'
 import { characterAPI, sceneAPI, propsAPI, imageAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
 
@@ -274,7 +276,12 @@ export function useImageGeneration(deps: Deps) {
         label: `${char.name}角色形象`,
         characterName: char.name,
         // V2 治本 (msg-20261010-001): characters.appearance 列被 DROP, 改读 appearance_permanent (snake/camel 双兼容)
-        characterAppearance: ((char as any).appearance_permanent || char.appearancePermanent || char.description || '').trim(),
+        // ★ Sprint 36 (PM msg-20261106-155): 档案里混进的【剧情道具】不能进镜头 prompt ——
+        //   角色形象图已经干净了, 但这里不剥的话 prompt 仍在要求模型「给主角挂个保温箱」→ 画面照样多一个箱子。
+        characterAppearance: stripPropsFromAppearance(
+          ((char as any).appearance_permanent || char.appearancePermanent || char.description || '').trim(),
+          ctx.keyProps?.value || [],
+        ).text,
       }, 1)
     }
 

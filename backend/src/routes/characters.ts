@@ -8,13 +8,35 @@ import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 // Sprint 12 Task B (PM msg-20261017-072): 立绘 prompt 后置保险 — gender 被 LLM 改写丢失时 append 英文兜底词
 import { extractGenderTrait, ensureGenderInPrompt } from '../utils/gender-guard.js'
-import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+// Sprint 36 (PM msg-20261106-155): 角色档案里的【剧情道具】剥离 (保温箱混进 permanent_outfit → 角色图画出箱子 → 每镜多一个道具)
+import { stripPropsFromAppearance } from '../utils/prop-guard.js'
+import { logTaskError, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { getStylePreset } from '../services/negative-prompt-presets.js'
 import { getCharacterAestheticTokens } from '../constants/character-aesthetics.js'
 import { getAgeAnchorTokens } from '../constants/age-anchor.js'
 import { selectForCodeSide, logFewshotSelection } from '../services/face-archive-service.js'
 
 const app = new Hono()
+
+/**
+ * ★ Sprint 36 (PM msg-20261106-155): 角色形象图 prompt 里的角色档案文本 —— 先剥掉【剧情道具】。
+ *   LLM 抽角色时把剧情道具 (drama 19 案例: 保温箱) 写进了 permanent_outfit →
+ *   角色形象图 (三视图, 含背面) 照着画出来 → 这张图进了【每一镜】的参考图 → 画面凭空多一个道具。
+ *   只在这一层过滤: 角色档案原文 / 逐镜 prompt / props 表 一律不动 (角色档案本身仍保留用户可编辑的原文)。
+ */
+function buildCharacterDetail(char: any): string {
+  const raw = char.appearancePermanent || char.description || ''
+  const propRows = db.select({ name: schema.props.name, deletedAt: schema.props.deletedAt })
+    .from(schema.props).where(eq(schema.props.dramaId, char.dramaId)).all()
+  const props = propRows.filter((p: any) => !p.deletedAt)
+  const { text, removed } = stripPropsFromAppearance(raw, props)
+  if (removed.length) {
+    logTaskWarn('CharacterImage', 'prop-stripped-from-appearance', {
+      characterId: char.id, dramaId: char.dramaId, removed,
+    })
+  }
+  return text
+}
 
 // GET /characters/:id — fetch single character (2026-09-24 PM msg-20260924-002 task_D)
 app.get('/:id', async (c) => {
@@ -106,7 +128,7 @@ app.post('/:id/generate-image', async (c) => {
   if (!ep) return badRequest(c, 'Episode not found')
 
   // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列), 不再 fallback deprecated appearance 列 (已被 RENAME)
-  const charDetail = char.appearancePermanent || char.description || ''
+  const charDetail = buildCharacterDetail(char)   // Sprint 36: 剥掉混进档案的剧情道具
   const personality = char.personality || ''
   const [drama] = db.select({ style: schema.dramas.style, characterAesthetic: schema.dramas.characterAesthetic })
     .from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
@@ -210,7 +232,7 @@ app.post('/batch-generate-images', async (c) => {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
     if (!char) continue
     // V2 治本 (msg-20261010-001): 只读 appearancePermanent (PERMANENT 列), 不再 fallback deprecated appearance 列 (已被 RENAME)
-  const charDetail = char.appearancePermanent || char.description || ''
+  const charDetail = buildCharacterDetail(char)   // Sprint 36: 剥掉混进档案的剧情道具
     const personality = char.personality || ''
     const stylePreset = dramaStyleMap.get(char.dramaId) || getStylePreset(undefined)
     const aestheticTokens = dramaAestheticMap.get(char.dramaId) || ''

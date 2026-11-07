@@ -225,6 +225,11 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     permanent_outfit (string[]): 永久服装/装饰, 1-10 项, 每项 ≤ 50 字
       格式: ["<服装:版型/颜色/材质>", "<配饰>", ...]
       例: ["白衬衫+牛仔裤", "深蓝色帆布包", "银色耳钉"]
+      ⚠️ Sprint 36 (PM msg-20261106-155): 只写【长期穿着 / 长期佩戴】的服装与随身物。
+        【剧情道具】(会被交接 / 拿在手里 / 只在某几镜出现的物件: 保温箱/信封/手机/刀/文件…) 严禁写进 permanent_outfit,
+        permanent_traits 的 outfit 维度同样只写服装本体。
+        原因: 角色形象图是【三视图, 含背面】, 会照着 permanent_outfit 把道具画出来, 而这张图进了【每一镜】的参考图 → 画面凭空多一个道具。
+        (道具属于 plot_state / props, 不属于角色常驻形象)
     严禁 (PERMANENT 列约束, V3 6 维 enum + salvage 兜底):
       - ⚠️ gender 不在严禁清单里, 它是合法维度且必填 (Sprint 12 新增)。看到"不接受扩展维度"不要把 gender 也当非法维度省掉
       - permanent_traits[i].category 写 'clothing/accessory/eyebrows/skin_tone' 等扩展维度 (gender 不算扩展维度; 真扩展维度 zod reject → salvage 移到 description + log)
