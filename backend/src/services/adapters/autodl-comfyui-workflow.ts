@@ -329,6 +329,10 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
      *  只是首/尾帧改以 ref_image_N 形式传给同一个工作流 → 不落 fallback_reason (前端不弹 tag),
      *  只在 flow-log 留一条 'model-mode-adapt' 痕迹。 */
     let modeAdapted = false
+    /** ★ Sprint 36 追加 (T2, PM msg-20261107-159): D1 路线里 首/尾帧 是以 ref_image_N 传的
+     *  → 模型不知道图1是起点图2是终点 → 会自由发挥 (『镜与镜衔接生硬』的根因之一)。
+     *  这里记下两张帧在参考图里的序号 (1-based, 对齐 prompt 里的 Image N), 稍后写进视频 prompt。 */
+    let d1FrameSlots: { start: number; end: number } | null = null
 
     // Sprint 14 (PM msg-20261019-074): 配音音频由后端从 storyboards.tts_audio_url 归一化后注入 (前端不传参),
     //   最多 3 段 — 平台 ref_audio_0/1/2 硬上限。
@@ -400,6 +404,11 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
         //   (之前这里会把用户选的 zm_u24/803 换成普通 v5, reason 却记着 mode_mismatch_ref2v
         //    → flow-log 记的码与真正换 workflow 的原因对不上。Sprint 35 已把那层替换去掉。)
         modeAdapted = true
+        // ★ Sprint 36 追加 (T2): 记下首/尾帧在参考图里的序号 (1-based) → prompt 里点明语义
+        d1FrameSlots = {
+          start: refs.indexOf(record.firstFrameUrl!) + 1,
+          end: record.lastFrameUrl ? refs.indexOf(record.lastFrameUrl) + 1 : 0,
+        }
         if (audioUrls.length === 0 && this.isAudioWorkflow(workflowId)
           && (AutoDLComfyUIWorkflowAdapter.AUDIO_REQUIRED_WORKFLOWS as readonly string[]).includes(workflowId)) {
           workflowId = this.pickRef2VWorkflowId(record.duration)
@@ -473,6 +482,19 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
 
     const body: any = {
       prompt: record.prompt || '',
+    }
+
+    // ★ Sprint 36 追加 (T2, PM msg-20261107-159): D1 路线 (用户显式选了 Ref2V 变体 + mode=first_last)
+    //   → 首/尾帧是以 ref_image_0/1 的形式传下去的, 平台【不知道】它们是这一镜的起止帧
+    //   → 模型把三张图当平级素材自由发挥 (这就是『镜与镜衔接生硬』的技术根因之一)。
+    //   这里在 prompt 里点明: 图1=起始帧, 图2=终止帧, 中间必须是这一镜内的连续运动, 且不得引入画面里没有的物体。
+    //   ★ 只在 D1 分支加 —— 真正的 FL2V 工作流走 first_frame/last_frame 专用字段, 平台自己知道, 加了反而多余。
+    if (d1FrameSlots) {
+      const parts = [`Image ${d1FrameSlots.start} is the START frame of this shot`]
+      if (d1FrameSlots.end > 0) parts.push(`Image ${d1FrameSlots.end} is the END frame of this shot`)
+      parts.push('the motion between them must be one continuous take inside this shot')
+      parts.push('do not introduce any object that is not already visible in these frames')
+      body.prompt = `${body.prompt}\n${parts.join('; ')}.`
     }
 
     // duration 上限看具体路由:
