@@ -39,6 +39,11 @@ export function useImageGeneration(deps: Deps) {
   const pendingShotFrameKeys = ref<string[]>([])
 
 
+  /** 场景/道具的图片 URL (snake/camel 双写兼容) */
+  function imageUrlOf(row: any): string | null {
+    return row?.image_url || row?.imageUrl || null
+  }
+
   function framePendingKey(id: number, frameType: string) {
     return `${id}:${frameType}`
   }
@@ -571,6 +576,12 @@ export function useImageGeneration(deps: Deps) {
   }
 
   async function genSceneImg(id: number) {
+    // ★ Sprint 37 (PM msg-20261109-161): 记下【生成前】的图片 URL ——
+    //   完成条件必须是『URL 变了』而不是『有没有图』: 重新生成【已存在】的图时旧图本来就在,
+    //   用『有没有图』判 → 第一轮 check 就 true → 轮询立刻结束 → 不会再 refresh
+    //   → 页面一直显示旧图 (用户得手动点右上角『刷新』才看到新图)。
+    //   首次生成 (本来就没有图) 时 beforeUrl=null → 判定逻辑与改动前逐字一致。
+    const beforeUrl = imageUrlOf(ctx.scenes.value.find(s => s.id === id))
     try {
       if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
       await sceneAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value)
@@ -578,10 +589,11 @@ export function useImageGeneration(deps: Deps) {
       await refresh()
       await watchAsyncResult(() => {
         const scene = ctx.scenes.value.find(s => s.id === id)
-        // 成功: 有图片; 失败: 明确标记 failed — 两种终态都要退出轮询
+        // 成功: 图片 URL 变了; 失败: 明确标记 failed — 两种终态都要退出轮询
         const isFailed = scene?.status === 'failed'
-        const done = !!(scene?.image_url || scene?.imageUrl)
-        if (done || isFailed) {
+        const nowUrl = imageUrlOf(scene)
+        const done = (!!nowUrl && nowUrl !== beforeUrl) || isFailed
+        if (done) {
           pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
           if (isFailed) toast.error(scene?.error_msg || scene?.errorMsg || '场景图片生成失败')
           return true
@@ -621,16 +633,30 @@ export function useImageGeneration(deps: Deps) {
   }
 
   async function genPropImg(id: number) {
+    // ★ Sprint 37 (PM msg-20261109-161): 同 genSceneImg —— 完成条件改成『URL 变了』。
+    //   道具表【没有 status 字段】→ 失败只能从生图记录看 (跟 batchPropImages 同款),
+    //   每 4 tick (~8s) 查一次, 不每 2s 查 (早期实现那样会把请求打满)。
+    const beforeUrl = imageUrlOf(ctx.keyProps.value.find(s => s.id === id))
     try {
       if (!isPendingPropImage(id)) pendingPropImageIds.value.push(id)
-      await propsAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value)
+      const resp = await propsAPI.generateImage(id, ctx.epId.value, imageConfigIdRef?.value) as any
+      const genId = resp?.image_generation_id || null
       toast.success('道具图片生成中')
       await refresh()
+      let genStatus: any = null
+      let tick = 0
       await watchAsyncResult(() => {
+        if (genId && tick % 4 === 0) {
+          imageAPI.get(genId).then((r: any) => { genStatus = r }).catch(() => { })
+        }
+        tick++
         const prop = ctx.keyProps.value.find(s => s.id === id)
-        const done = !!(prop?.image_url || prop?.imageUrl)
+        const nowUrl = imageUrlOf(prop)
+        const isFailed = genStatus?.status === 'failed'
+        const done = (!!nowUrl && nowUrl !== beforeUrl) || isFailed
         if (done) {
           pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
+          if (isFailed) toast.error(genStatus?.error_msg || genStatus?.errorMsg || '道具图片生成失败')
           return true
         }
         return false
@@ -736,6 +762,12 @@ export function useImageGeneration(deps: Deps) {
 
   async function genShotFrame(sb: any, frameType: string) {
     const key = framePendingKey(sb.id, frameType)
+    // ★ Sprint 37 (PM msg-20261109-161): 记下【生成前】的帧 URL ——
+    //   完成条件必须是『URL 变了』而不是『有没有帧』: 重新生成【已存在】的帧时旧图本来就在,
+    //   用『有没有帧』判 → 第一轮 check 就 true → 轮询立刻结束 → 不会再 refresh
+    //   → 卡片缩略图一直显示旧图 (要手动点右上角『刷新』才更新)。
+    //   首次生成 (本来就没有帧) 时 beforeUrl=null → 判定逻辑与改动前逐字一致。
+    const beforeUrl = frameType === 'first_frame' ? getFirstFrame(sb) : getLastFrame(sb)
     try {
       // 先标记 pending, 再等接力 —— 等待期间 UI 也显示"生成中", 不会出现点了没反应
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
@@ -778,9 +810,11 @@ export function useImageGeneration(deps: Deps) {
       await refresh()
       await watchAsyncResult(() => {
         const target = ctx.sbs.value.find(s => s.id === sb.id)
-        // 成功: 有首/尾帧; 失败: storyboard.status=failed — 两种终态都退出轮询
+        // 成功: 帧 URL 变了 (重新生成时旧图本来就在, 必须比 URL 而不是看有没有图);
+        // 失败: storyboard.status=failed — 两种终态都退出轮询
         const isFailed = target?.status === 'failed'
-        const done = (frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)) || isFailed
+        const nowUrl = frameType === 'first_frame' ? getFirstFrame(target) : getLastFrame(target)
+        const done = (!!nowUrl && nowUrl !== beforeUrl) || isFailed
         if (done) {
           pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
           if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '首尾帧生成失败')
