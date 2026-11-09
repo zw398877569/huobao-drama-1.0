@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
@@ -7,6 +7,8 @@ import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 // ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护 (引号内容 → <screen_text>)
 import { wrapQuotedAsScreenText, maskScreenText, restoreScreenText } from '../utils/screen-text.js'
+// ★ Sprint 36 追加 (T3, PM msg-20261107-159): 本镜【显式关联道具】的表面文字 → 注进帧 prompt
+import { buildPropScreenTextInjection } from '../utils/screen-text.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -75,15 +77,46 @@ app.post('/', async (c) => {
     //   → 手机屏上的中文线索读不出来。用 <screen_text> 包住 → 两道工序都绕开它。
     //   ★ 只对首尾帧生效 —— 角色图 / 场景图 的引号内容不是画面文字, 不动 (零回归)。
     const isShotFrame = body.frame_type === 'first_frame' || body.frame_type === 'last_frame'
+
+    // ★ Sprint 36 追加 (T3, PM msg-20261107-159): 本镜【显式关联】的道具 → 把道具表面文字注进帧 prompt。
+    //   道具图上印着的字 (例: 手机订单备注『501，王阿姨…』) 是剧情关键线索, 不在任何一句台词里
+    //   → 只能靠画面承载; 不点出来的话模型只会把屏幕画成一块糊 (线索彻底丢)。
+    //   ★ 只取 storyboard_props 里【显式关联】的道具, 不取本集所有道具。
+    //   ★ 走的是下面那条现成的 <screen_text> 通路 (mask → sanitize → restore) → 不另写一套。
+    let promptInput = body.prompt
+    let injectedPropTexts: { name: string; texts: string[] }[] = []
+    if (isShotFrame && body.storyboard_id) {
+      const sbId = Number(body.storyboard_id)
+      const links = db.select({ propId: schema.storyboardProps.propId })
+        .from(schema.storyboardProps).where(eq(schema.storyboardProps.storyboardId, sbId)).all()
+      const propIds = links.map(l => l.propId).filter(Boolean)
+      if (propIds.length) {
+        const propRows = db.select({ name: schema.props.name, description: schema.props.description })
+          .from(schema.props).where(inArray(schema.props.id, propIds)).all()
+        const { block, injected } = buildPropScreenTextInjection(propRows)
+        if (block) {
+          injectedPropTexts = injected
+          promptInput = `${body.prompt}, ${block}`
+          logTaskProgress('ImageAPI', 'prop-screen-text-injected', {
+            storyboardId: sbId,
+            dramaId: body.drama_id,
+            frameType: body.frame_type,
+            props: injected.map(x => ({ name: x.name, texts: x.texts })),
+            hint: '本镜显式关联道具的表面文字已注进帧 prompt (走 <screen_text> 保护, 两道 LLM 工序都不翻译不改写)',
+          })
+        }
+      }
+    }
+
     //   ★ 用【占位符】而不是标签去过 sanitizer —— LLM 改写时保住一个短 ASCII token
     //     比保住整个 <screen_text>…</screen_text> 块稳得多; 改写完再还原成标签存库。
     let safePrompt: string
     if (isShotFrame) {
-      const masked = maskScreenText(wrapQuotedAsScreenText(body.prompt))
+      const masked = maskScreenText(wrapQuotedAsScreenText(promptInput))
       const sanitized = await sanitizeImagePrompt(masked.text, { kind: imageKind })
       safePrompt = restoreScreenText(sanitized, masked.items)
     } else {
-      safePrompt = await sanitizeImagePrompt(body.prompt, { kind: imageKind })
+      safePrompt = await sanitizeImagePrompt(promptInput, { kind: imageKind })
     }
     const id = await generateImage({
       storyboardId: body.storyboard_id,

@@ -206,3 +206,37 @@ export function extractPropScreenText(description: string): string[] {
   }
   return out
 }
+
+// ─── 道具表面文字 → 帧 prompt 注入 (Sprint 36 追加 T3/T4) ────────────────────
+
+/**
+ * ★ Sprint 36 追加 (T3, PM msg-20261107-159): 把【显式关联道具】的表面文字抽出来,
+ *   拼成可以注进【帧 prompt】的块 (走 <screen_text> 保护 → 两道 LLM 工序都不碰它)。
+ *
+ * 【为什么】道具图上印着的文字 (例: 手机订单备注『501，王阿姨…』) 是剧情关键线索,
+ *   不在任何一句台词里 —— 只能靠画面承载。帧生成时如果不把这几个字点出来,
+ *   模型只会把手机屏画成一块糊 (实测: 备注糊成一团 → 线索彻底丢)。
+ *
+ * 【口径】
+ *   · 只取【显式关联】的道具 (storyboard_props), 不取本集所有道具
+ *   · 判定复用 props.ts 那套 extractPropScreenText (人名 / 台词引用那类不注入)
+ *   · 道具没有可抽取文字 → 不产出任何块 (免得给无关镜加一句废话)
+ *
+ * 【T4】注入了才在 prompt 尾部追加一句肯定式覆盖句 —— 压住拆解阶段写的禁令
+ *   (例: 『不出现可辨识文字』)。用追加不用删除: 禁令句措辞千变万化, 代码去匹配删除很脆。
+ */
+export function buildPropScreenTextInjection(
+  props: { name?: string | null; description?: string | null }[],
+): { block: string; injected: { name: string; texts: string[] }[] } {
+  const injected: { name: string; texts: string[] }[] = []
+  for (const p of props || []) {
+    const texts = extractPropScreenText(p.description || '')
+    if (!texts.length) continue
+    injected.push({ name: p.name || '道具', texts })
+  }
+  if (!injected.length) return { block: '', injected: [] }
+  const block = injected
+    .map(x => `道具「${x.name}」上的文字: ${x.texts.map(t => wrapScreenText(t)).join(' ')}`)
+    .join('; ')
+  return { block, injected }
+}
