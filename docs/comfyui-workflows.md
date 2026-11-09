@@ -153,6 +153,23 @@ adapter 通过 `aspectRatio` 自动映射（9:16/3:2→竖，16:9/4:3→横）�
 ★ Sprint 34 起: 分辨率【按工作流】取（adapter 的 `RESOLUTION_PROFILES`），不再全局只有 4 个字面量。
   每个工作流一份合法档位 + 默认档；803 的默认档 = 1088p, 其它工作流的默认档与之前逐字一致。
 
+## 视频参考图分层：道具图 vs 首尾帧（Sprint 36 追加，PM msg-20261107-159）
+
+| 路线 | 判据 | 视频层带不带道具图 | 为什么 |
+|---|---|---|---|
+| 有首尾帧 | `referenceMode=first_last` 或有 `firstFrameUrl/lastFrameUrl` | **不带** | 首/尾帧本来就是带着道具图生成的 → 道具在帧里已定型；再喂一张独立道具产品照 = 模型多画一个实物 = 穿模（实测 drama19 镜#3：视频里两个保温箱，一个还跟身体相交） |
+| 无首尾帧 | `referenceMode=multiple / single` | **带**（追加在末尾） | 这条路线没有帧，道具图是唯一的权威参考，删了道具在视频里会失控/变形 |
+
+- 判据是【帧在不在】，**不是**『镜头文本有没有提到这个道具』—— 文本只是代理指标，帧才是真相。
+- 实现在共享层 `services/adapters/prop-refs.ts`（`hasFrameRefs(record)` + `mergePropRefsIntoSlots`）→ 6 个 provider 一起生效，不用分 provider 改。
+- **帧层（首帧/尾帧生成）的道具参考图收集不动** —— 那是道具在画面里定型的机制。
+- **D1 分支**（用户显式选了 Ref2V 变体 + `mode=first_last` → 首/尾帧以 `ref_image_0/1` 传）时，视频 prompt 末尾会追加一句：
+  `Image 1 is the START frame of this shot; Image 2 is the END frame of this shot; the motion between them must be one continuous take inside this shot; do not introduce any object that is not already visible in these frames.`
+  —— 平台不知道图1/图2 是起止帧，不点明模型就自由发挥（这就是「镜与镜衔接生硬」的技术根因之一）。
+  真正的 FL2V 工作流（`minimax_h3_lightx2v`，走 `first_frame/last_frame` 专用字段）**不加**这句。
+- flow-log：`video-ref-slots` 的 `propCount` 能看出这次带没带道具图（带 >0 / 不带 =0）；被跳过时另记一条 `prop-refs-skipped-for-frames`。
+- ★ 136 单（sprint-31）验收第 1 条「镜3 视频请求里能查到 ≥3 张参考图且含道具图」**已作废**（与本规则直接冲突）→ 见 `~/Documents/aicg-collab/handoff/PM_to_DEV_sprint-31-video-prop-reference-20261102-136.json` 里的标注。
+
 ## 维护规则
 
 1. **新增工作流**: 按四步走：① 后端 adapter 加 `WORKFLOW_*` 常量 + JSDoc；② 前端 `useSettingsAi.ts` 的 `models` 数组加条目 + 行内注释；③ 同一文件顶部 `AUTODL_COMFYUI_MODEL_LABELS` 加中文标签（**否则 dropdown 显示 raw id**）；④ 本文件加一节。
