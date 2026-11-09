@@ -7,8 +7,8 @@ import { parseConfigIdWithModel } from '../services/ai.js'
 import { sanitizeImagePrompt } from '../utils/prompt-sanitizer.js'
 // ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护 (引号内容 → <screen_text>)
 import { wrapQuotedAsScreenText, maskScreenText, restoreScreenText } from '../utils/screen-text.js'
-// ★ Sprint 36 追加 (T3, PM msg-20261107-159): 本镜【显式关联道具】的表面文字 → 注进帧 prompt
-import { buildPropScreenTextInjection } from '../utils/screen-text.js'
+// ★ Sprint 36 追加 (T3/T4, PM msg-20261107-159): 本镜【显式关联道具】的表面文字 → 注进帧 prompt
+import { buildPropScreenTextInjection, SCREEN_TEXT_VERBATIM_SUFFIX } from '../utils/screen-text.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -117,6 +117,12 @@ app.post('/', async (c) => {
       safePrompt = restoreScreenText(sanitized, masked.items)
     } else {
       safePrompt = await sanitizeImagePrompt(promptInput, { kind: imageKind })
+    }
+    // ★ Sprint 36 追加 (T4): 注入过道具文字 → 在 prompt【尾部】追加肯定式覆盖句, 压住拆解阶段写的禁令
+    //   (例: 『不出现可辨识文字』)。用追加不用删除 —— 禁令句措辞千变万化, 匹配删除很脆。
+    //   ★ 只在真的注入了时才追加 (没注入不加, 免得给无关镜加一句废话)。
+    if (injectedPropTexts.length) {
+      safePrompt = `${safePrompt}, ${SCREEN_TEXT_VERBATIM_SUFFIX}`
     }
     const id = await generateImage({
       storyboardId: body.storyboard_id,

@@ -240,3 +240,11 @@ export function buildPropScreenTextInjection(
     .join('; ')
   return { block, injected }
 }
+
+/**
+ * ★ Sprint 36 追加 (T4, PM msg-20261107-159): 注入道具文字后的【肯定式覆盖句】(放在 prompt 尾部)。
+ *   尾部权重更高 → 能压住前面拆解阶段写的禁令句。
+ *   ★ 只在【真的注入了道具文字】时才追加 (没注入就不加, 免得给无关镜加一句废话)。
+ */
+export const SCREEN_TEXT_VERBATIM_SUFFIX =
+  'all on-screen text above must be reproduced verbatim from the reference images — do not blur, smudge, or omit any character'
