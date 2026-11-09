@@ -38,7 +38,7 @@ export class ViduVideoAdapter implements VideoProviderAdapter {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
         // ★ Sprint 32: 道具图并进 images (末尾追加 → 首帧仍占第 1 位)
-        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER, record)
         body.images.push(...merged.refs)
         if (merged.propSlots.length) {
           body.prompt = `${record.prompt || ''}\n${buildPropRefNotes(merged.propSlots)}`

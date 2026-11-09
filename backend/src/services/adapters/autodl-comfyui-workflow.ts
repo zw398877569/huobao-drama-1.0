@@ -526,7 +526,7 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       let propSlots: { name: string; slot: number }[] = []
       let droppedRefs: string[] = []
       if (propRefs.length) {
-        const merged = this.mergePropRefsIntoSlots(refs, propRefs)
+        const merged = this.mergePropRefsIntoSlots(refs, propRefs, record)
         refs = merged.refs
         propSlots = merged.propSlots
         droppedRefs = merged.dropped
@@ -602,8 +602,11 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
   private mergePropRefsIntoSlots(
     refs: string[],
     propRefs: { url: string; name: string }[],
+    record?: any,
   ): { refs: string[]; propSlots: { name: string; slot: number }[]; dropped: string[] } {
-    return mergePropRefsIntoSlots(refs, propRefs, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES)
+    // ★ Sprint 36 追加 (PM msg-20261107-159): 传 record → 共享层按【有没有首尾帧】决定带不带道具图
+    //   (mode=first_last → 道具在帧里已定型, 再喂独立道具图 = 多画一个实物/穿模)
+    return mergePropRefsIntoSlots(refs, propRefs, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES, record)
   }
 
   private parseRefImages(json?: string | null): string[] {

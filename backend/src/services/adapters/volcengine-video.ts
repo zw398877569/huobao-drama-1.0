@@ -37,7 +37,7 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
         // ★ Sprint 32: 道具图并进 reference_image (末尾追加 → 首帧仍占第 1 位)
-        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER, record)
         for (const url of merged.refs) {
           content.push({ type: 'image_url', image_url: { url } })
         }

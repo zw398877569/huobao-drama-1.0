@@ -52,7 +52,7 @@ export class AgnesVideoAdapter implements VideoProviderAdapter {
       try {
         const refs = JSON.parse(record.referenceImageUrls)
         // ★ Sprint 32: 道具图并进 keyframes (末尾追加 → 首帧仍占第 1 位)
-        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER)
+        const merged = mergePropRefsIntoSlots(refs, record.propReferenceImages || [], Number.MAX_SAFE_INTEGER, record)
         const validRefs = merged.refs.filter((r: string) => r && (r.startsWith('http') || r.startsWith('data:')))
         if (validRefs.length > 0) {
           body.extra_body = {

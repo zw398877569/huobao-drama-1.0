@@ -32,6 +32,26 @@ export interface PropRefSlot {
 }
 
 /**
+ * ★ Sprint 36 追加 (PM msg-20261107-159): 本镜【有没有首尾帧】→ 决定视频层要不要带道具图。
+ *
+ * 【为什么】mode=first_last 时, 首/尾帧本来就是【带着道具图生成的】(帧层 collectShotPropAssets 不动)
+ *   → 道具在帧里已经定型; 视频模型再收到一张【独立的】道具产品照 = 多画一个实物 = 穿模。
+ *   实测 drama19/ep20 镜#3: 视频里出现两个保温箱, 其中一个还跟身体相交。
+ *
+ * 【口径】判据是【帧在不在】(referenceMode / 有没有 firstFrameUrl·lastFrameUrl),
+ *   【不是】『镜头文本有没有提到这个道具』—— 文本只是代理指标, 帧才是真相
+ *   (用户关联了道具时, 帧的参考图里本来就有它)。
+ *
+ * 【保留】mode=multiple / single (纯多图, 没有首尾帧) → 道具图【照旧进槽位】:
+ *   这条路线没有帧, 道具图是唯一的权威参考, 删了道具在视频里会失控/变形。
+ */
+export function hasFrameRefs(record: any): boolean {
+  if (!record) return false
+  if (record.referenceMode === 'first_last') return true
+  return !!record.firstFrameUrl || !!record.lastFrameUrl
+}
+
+/**
  * 把本镜显式关联的道具图并进参考图列表 (末尾追加)。
  *
  * @param refs       现有的参考图列表 (第 0 位通常是首帧)
@@ -42,14 +62,28 @@ export function mergePropRefsIntoSlots(
   refs: string[],
   propRefs: PropRefItem[],
   maxImages: number,
+  record?: any,
 ): { refs: string[]; propSlots: PropRefSlot[]; dropped: string[] } {
+  // ★ Sprint 36 追加 (PM msg-20261107-159): 有首尾帧 → 道具图【不进】视频参考图 (见 hasFrameRefs)。
+  //   道具在帧里已经定型, 再喂一张独立产品照 = 模型多画一个实物 (穿模)。
+  const skipProps = hasFrameRefs(record)
+  const effectivePropRefs = skipProps ? [] : (propRefs || [])
+  if (skipProps && (propRefs || []).length) {
+    logTaskProgress('VideoTask', 'prop-refs-skipped-for-frames', {
+      storyboardId: record?.storyboardId,
+      referenceMode: record?.referenceMode,
+      propCount: propRefs.length,
+      props: propRefs.map(p => p?.name).filter(Boolean),
+      hint: '本镜有首尾帧 → 道具在帧里已定型, 视频层不再喂独立道具图 (否则会多画一个实物/穿模)',
+    })
+  }
   type Slot = { url: string; isProp: boolean; name?: string }
   const slots: Slot[] = (refs || []).map(url => {
-    const p = (propRefs || []).find(x => x.url === url)
+    const p = effectivePropRefs.find(x => x.url === url)
     return p ? { url, isProp: true, name: p.name } : { url, isProp: false }
   })
   // 不在 refs 里的道具图 → 追加到末尾
-  for (const p of propRefs || []) {
+  for (const p of effectivePropRefs) {
     if (!p?.url || !p.name) continue
     if (slots.some(s => s.url === p.url)) continue
     slots.push({ url: p.url, isProp: true, name: p.name })
