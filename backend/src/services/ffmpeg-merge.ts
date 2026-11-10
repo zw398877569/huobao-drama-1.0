@@ -39,7 +39,16 @@ const DATA_ROOT = path.resolve(__dirname, '../../../data')
 
 // Task F: xfade 转场时长 (秒) — 用户 2026-10-16 拍板 D2 锁定 200ms
 //   (>500ms 观感会明显"镜头交叠", 不擅自调大)
-const XFADE_DURATION = 0.2
+// ★ Sprint 38 T1-F (PM msg-20261110-165): PM 2026-11-10 拍板改成 400ms ——
+//   24fps + 模型运动幅度小 + 0.2s 的短叠化 (观感接近硬切) 把镜间跳变凸显出来了;
+//   0.4s 仍在『>500ms 会镜头交叠』的顾虑之内, 先试一版。
+//   可用环境变量 MERGE_XFADE_MS 调 (100~800), 方便 PM 再试 0.3 / 0.5 而不用改代码。
+//   ★ 视频 xfade 与音频 acrossfade 用的是同一个 D (音画总时长必须一致, 见下面的 acrossfade)。
+const XFADE_DURATION = (() => {
+  const raw = Number(process.env.MERGE_XFADE_MS)
+  if (Number.isFinite(raw) && raw >= 100 && raw <= 800) return raw / 1000
+  return 0.4
+})()
 // Task F: 转场开关 (env MERGE_XFADE=0 可关, 便于 QA 做 A/B 对照)
 const XFADE_ENABLED = process.env.MERGE_XFADE !== '0'
 // Task B: 归一化输出目录
@@ -99,6 +108,38 @@ export async function mergeEpisodeVideos(episodeId: number, dramaId: number): Pr
 }
 
 /**
+ * ★ Sprint 38 T1-B (PM msg-20261110-165): 从各 clip 的探测结果里挑【最常见】的规格当归一化基准。
+ *
+ * 【为什么】原来取【第一个 clip】当基准 → 混分辨率时, 多数派片段全被上采样放大
+ *   (放大不增细节, 成片整体发软), 而且每个不符的片段都要转一遍码 (实测 19 段转了 18 段)。
+ *   取最常见的那档 → 多数派不用转码, 少数派才转。
+ *
+ * 【口径】数量多的优先; 数量相同时按【首次出现顺序】(Map 保序 + sort 稳定) → 与旧行为最接近。
+ *   宽高取偶数 (h264 要求), 帧率探测不到按 30 算。
+ *
+ * 导出成纯函数 → 可以离线断言 (不用跑 ffmpeg)。
+ */
+export function rankSpecsByFrequency(
+  probes: Array<{ width?: number; height?: number; fps?: number }>,
+): Array<{ key: string; count: number; spec: { width: number; height: number; fps: number } }> {
+  const counts = new Map<string, { width: number; height: number; fps: number; count: number }>()
+  for (const p of probes || []) {
+    const pw = Number(p?.width || 0), ph = Number(p?.height || 0), pf = Number(p?.fps || 0)
+    if (!(pw > 0 && ph > 0)) continue
+    const w = pw % 2 === 0 ? pw : pw - 1
+    const h = ph % 2 === 0 ? ph : ph - 1
+    const f = pf > 0 ? pf : 30
+    const key = `${w}x${h}@${f}`
+    const cur = counts.get(key)
+    if (cur) cur.count++
+    else counts.set(key, { width: w, height: h, fps: f, count: 1 })
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([key, v]) => ({ key, count: v.count, spec: { width: v.width, height: v.height, fps: v.fps } }))
+}
+
+/**
  * Task B: 音频 + 规格归一化 (拼接前置)
  *
  * concat demuxer 遇到流结构不一致的输入会【静默降级为纯视频输出, rc=0 不报错】,
@@ -121,14 +162,20 @@ async function normalizeClips(videos: string[]): Promise<string[]> {
     probes.push(await probeMedia(p))
   }
 
-  // 基准规格: 第一个探测成功的 clip (xfade 要求所有输入一致)
-  const base = probes.find(p => p.width > 0 && p.height > 0)
+  // ★ Sprint 38 T1-B (PM msg-20261110-165): 基准取【最常见的规格】, 不是第一个 clip ——
+  //   混分辨率时用第一个 clip 当基准 → 【多数派】片段全被上采样放大 (放大不增细节, 成片整体发软;
+  //   实测 19 个片段里 17 个是 1344x768, 基准却是镜#1 的 1920x1056 → 18 个片段全被放大 + 全转一遍码),
+  //   而且每个不符的片段都要走一遍 libx264 转码 (归一化阶段 2.5 分钟)。
+  //   取最常见的那档 → 多数派不用转码, 少数派才转 (混分辨率时才有转码)。
+  //   帧率同理 (原来也取第一个 clip 的 fps)。
+  const ranked = rankSpecsByFrequency(probes)
+  const base = ranked[0]?.spec
   if (!base) {
     throw new Error('normalize-failed: 无法探测任何 clip 的分辨率, 归一化终止')
   }
-  const targetW = base.width % 2 === 0 ? base.width : base.width - 1
-  const targetH = base.height % 2 === 0 ? base.height : base.height - 1
-  const targetFps = base.fps > 0 ? base.fps : 30
+  const targetW = base.width
+  const targetH = base.height
+  const targetFps = base.fps
 
   const missingAudio = probes.filter(p => !p.hasAudio).length
   const specMismatch = probes.filter(p =>
@@ -139,6 +186,9 @@ async function normalizeClips(videos: string[]): Promise<string[]> {
     missingAudio,
     specMismatch,
     target: { width: targetW, height: targetH, fps: targetFps },
+    // ★ T1-B: 基准选择理由 + 各规格的 clip 数 (便于以后排查『为什么转了这么多段』)
+    targetReason: 'most-common-spec',
+    specCounts: ranked.map(r => ({ spec: r.key, count: r.count })),
   })
 
   const normalized: string[] = []
