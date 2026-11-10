@@ -1202,6 +1202,22 @@
               </div>
             </div>
 
+            <!-- ★ Sprint 38: 批量进度 + 失败明细 (PM T3) -->
+            <div v-if="batchShotRunning || batchShotFailures.length" class="batch-shot-bar">
+              <span class="dim" style="font-size:11px">
+                {{ batchShotDone }}/{{ batchShotTotal }} 已完成
+                <template v-if="batchShotCurrent.length">· 在跑: {{ batchShotCurrent.join('、') }}</template>
+                <template v-if="batchShotFailed">· {{ batchShotFailed }} 张失败</template>
+              </span>
+              <button v-if="batchShotRunning" class="btn btn-sm" @click="interruptBatchShotFrames">中断</button>
+              <button v-else class="btn btn-sm" @click="batchShotFrames({ retryFailures: true })">重试失败的 {{ batchShotFailures.length }} 张</button>
+            </div>
+            <div v-if="!batchShotRunning && batchShotFailures.length" class="batch-shot-failures">
+              <div v-for="f in batchShotFailures" :key="f.storyboardId + ':' + f.frameType" class="batch-shot-failure">
+                #{{ f.shotNumber }} {{ f.frameType === 'first_frame' ? '首帧' : '尾帧' }} — {{ f.reason }}<span v-if="f.detail">（{{ f.detail }}）</span>
+              </div>
+            </div>
+
             <div v-if="gridHistory?.length" class="grid-history-panel">
               <div v-if="gridImagePath" class="latest-grid-strip">
                 <button class="latest-grid-strip-thumb" @click="openImageViewer('/' + gridImagePath, '当前宫格图')">
@@ -2439,6 +2455,9 @@ const {
   pendingCharImageIds, pendingSceneImageIds, pendingPropImageIds, pendingShotFrameKeys,
   isPendingCharImage, isPendingSceneImage, isPendingPropImage, isPendingShotFrame,
   genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
+  // ★ Sprint 38 (PM msg-20261110-164): 分镜帧【批量生成】(按 scene 分链调度)
+  batchShotRunning, batchShotDone, batchShotTotal, batchShotFailed, batchShotCurrent, batchShotFailures,
+  batchShotConcurrency, setBatchConcurrency, batchShotFrames, interruptBatchShotFrames,
 } = useImageGeneration({
   ctx: { chars, scenes, keyProps, sbs, epId, dramaId },  // QA msg-20261010-012: dramaId 是 const number 不带 .value
   refresh,
@@ -4343,6 +4362,20 @@ onMounted(() => { refresh() })
   cursor: pointer; outline: none; max-width: 180px;
 }
 .model-select:focus { border-color: var(--accent); }
+
+/* ★ Sprint 38: 批量生成首尾帧 —— 进度条 + 失败明细 */
+.batch-shot-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1);
+}
+.batch-shot-failures {
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 160px; overflow: auto;
+  padding: 6px 10px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.batch-shot-failure { font-size: 11px; color: var(--text-2); }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
 .dub-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58)); }
