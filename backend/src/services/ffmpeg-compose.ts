@@ -17,6 +17,8 @@ import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
+// ★ Sprint 38 T3-D (PM msg-20261110-165): 音驱动工作流清单 (决定源音轨能不能保留)
+import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
 
 /**
  * 容器里 Noto CJK 字体的安装目录 (Dockerfile Stage 3 装了 fonts-noto-cjk)。
@@ -44,6 +46,73 @@ function supportsSubtitleFilter(): boolean {
     subtitleFilterSupport = false
   }
   return subtitleFilterSupport
+}
+
+/**
+ * ★ Sprint 38 T3-D (PM msg-20261110-165): 这个镜的【源音轨里有没有我们的人声】?
+ *
+ * 【背景】音驱动工作流 (zm_u24 / zm_u08 / image_audio_to_video_v2[_15s] / 803) 生成视频时,
+ *   我们把配好的 TTS 当 ref_audio_0 传了进去 → 平台按【我们的音色】对口型
+ *   → 源音轨里就是我们的人声, 而且嘴型跟着它走。
+ *   合成阶段以前把源音轨【换成一份重新对齐到 0 秒的 TTS】→ 声音和嘴型就错开了
+ *   (实测 drama19/ep20 镜#16 差 0.42s), 而且源音轨里的环境音 (雨声) 也一起被丢掉了。
+ *
+ * 【判定方式】结构性判定, 不是靠音量猜 (雨夜环境音的音量并不低):
+ *   ① 该镜的视频是用【音驱动工作流】生成的 → 源音轨里必然有我们的人声 → 保留
+ *   ② 视频生成时没有换过 workflow (fallbackReason 若是『换了 workflow』那类 → 不保留:
+ *      换过去的 T2V/普通 Ref2V 不吃音频, 源音轨里没有人声, 保留了就等于把台词丢了)
+ *   ③ 源视频压根没有音轨 → 保留不了 → 用 TTS
+ *   ④ 非音驱动工作流 (lightx2v 家族) → 源音轨里没有人声 → 仍用 TTS 替换 (行为与现在一致)
+ */
+/** ★ Sprint 38 T3-D: 换过 workflow 的原因码 → 换过去的工作流可能不吃音频 → 源音轨里没有人声 */
+const WORKFLOW_REPLACED_REASONS = ['mode_mismatch_no_images', 'model_not_supported', 'no_audio_fallback']
+
+/**
+ * ★ Sprint 38 T3-D: 判定【要不要保留源音轨】(纯函数 → 可离线断言)。
+ *   保留 = 源音轨里就是我们的人声 (音驱动工作流生成 + 没换过 workflow + 源视频有音轨 + 本镜有对白)
+ */
+export function decideSourceVoice(input: {
+  model?: string | null
+  fallbackReason?: string | null
+  sourceHasAudio?: boolean
+  hasTts?: boolean
+}): { keep: boolean; reason: string } {
+  const model = String(input.model || '')
+  if (!input.hasTts) return { keep: false, reason: 'no-tts' }
+  if (!input.sourceHasAudio) return { keep: false, reason: 'source-has-no-audio-track' }
+  if (!model) return { keep: false, reason: 'no-video-generation-record' }
+  if (!(AutoDLComfyUIWorkflowAdapter.AUDIO_DRIVEN_WORKFLOWS as readonly string[]).includes(model)) {
+    return { keep: false, reason: 'not-audio-driven-workflow' }
+  }
+  if (WORKFLOW_REPLACED_REASONS.includes(String(input.fallbackReason || ''))) {
+    return { keep: false, reason: `workflow-replaced(${input.fallbackReason})` }
+  }
+  return { keep: true, reason: 'audio-driven-workflow' }
+}
+
+/** 取这个镜【当前这条视频】的生成记录 (model + 有没有换过 workflow) */
+function getVideoGenerationInfo(
+  storyboardId: number,
+  videoUrl: string | null | undefined,
+): { model: string; fallbackReason: string | null } | null {
+  try {
+    const rows = db.select({
+      id: schema.videoGenerations.id,
+      model: schema.videoGenerations.model,
+      videoUrl: schema.videoGenerations.videoUrl,
+      localPath: schema.videoGenerations.localPath,
+      fallbackReason: schema.videoGenerations.fallbackReason,
+    }).from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.storyboardId, storyboardId)).all()
+    // 重新生成过的镜有多条记录 → 优先取【视频 url 对得上】的那条
+    const match = rows.find(r => (r.videoUrl && videoUrl && r.videoUrl === videoUrl)
+      || (r.localPath && videoUrl && r.localPath === videoUrl))
+    const row: any = match || rows[rows.length - 1]
+    if (!row) return null
+    return { model: String(row.model || ''), fallbackReason: row.fallbackReason ? String(row.fallbackReason) : null }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -234,7 +303,38 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
 
       const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23']
 
-      if (audioPath) {
+      // ★ Sprint 38 T3-D (PM msg-20261110-165): 源音轨里有我们的人声 (音驱动工作流生成) →
+      //   【保留源音轨】, 只烧字幕 —— 嘴型跟着源音轨走 (同步), 环境音也一起回来。
+      //   以前这里一律用 TTS 替换源音轨 → 声音重新对齐到 0 秒 → 和嘴型错开 (实测镜#16 差 0.42s),
+      //   而且源音轨里的雨声等环境音被丢掉了。
+      const videoGenInfo = getVideoGenerationInfo(sb.id, sb.videoUrl)
+      const sourceVoice = decideSourceVoice({
+        model: videoGenInfo?.model,
+        fallbackReason: videoGenInfo?.fallbackReason,
+        sourceHasAudio: !!videoProbe.hasAudio,
+        hasTts: !!audioPath,
+      })
+      const keepSourceVoice = sourceVoice.keep
+
+      if (keepSourceVoice) {
+        // 源音轨也显式对齐到【视频真实时长】(音频短 → 补静音, 长 → 裁掉), 音画总时长一致
+        const align = `[0:a]apad,atrim=0:${videoDuration.toFixed(3)},asetpts=N/SR/TB[aout]`
+        outputOptions.push(
+          '-filter_complex', align,
+          '-map', '0:v',
+          '-map', '[aout]',
+          '-c:a', 'aac',
+          '-ar', '48000',
+        )
+        logTaskProgress('ComposeTask', 'compose-keep-source-voice', {
+          storyboardId,
+          videoDuration: Number(videoDuration.toFixed(3)),
+          model: videoGenInfo?.model,
+          hasTts: true,
+          reason: sourceVoice.reason,
+          hint: '音驱动工作流: 源音轨里是我们的人声 (嘴型跟着它走) → 保留源音轨, 只烧字幕',
+        })
+      } else if (audioPath) {
         // Sprint 11 Task D (PM msg-20261016-001): 去 -shortest, 改显式对齐。
         //   修前问题: `-shortest` 让输出停在【较短的那一路】结束点 —
         //     音频比视频短 → 画面尾巴被截 (实测 shot 11: 6.58s → 4.67s, 截 29%)
@@ -259,6 +359,10 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
           storyboardId,
           videoDuration: Number(videoDuration.toFixed(3)),
           hasTts: true,
+          // ★ Sprint 38 T3-D: 为什么没用源音轨 (便于以后排查)
+          sourceVoiceReason: sourceVoice.reason,
+          sourceVoiceModel: videoGenInfo?.model,
+          sourceHasAudioTrack: !!videoProbe.hasAudio,
         })
       } else if (videoProbe.hasAudio) {
         // Sprint 11 Task C (PM msg-20261016-001): 无对白时【保留 H3 原声】。

@@ -134,6 +134,15 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
   ]
 
+  /**
+   * ★ Sprint 38 T3-D (PM msg-20261110-165): 【音驱动工作流】清单 (公开) ——
+   *   这些工作流会收 ref_audio_0/1/2 (我们配的 TTS) → 平台按【我们的音色】对口型
+   *   → 源音轨里就是【我们的人声】, 而且嘴型跟着它走。
+   *   合成阶段据此判断能不能保留源音轨 (见 services/ffmpeg-compose.ts)。
+   *   非音驱动 (lightx2v 家族: T2V / FL2V / v5 / v5_15s) 的源音轨里没有人声 → 仍要用 TTS 替换。
+   */
+  static readonly AUDIO_DRIVEN_WORKFLOWS: readonly string[] = AutoDLComfyUIWorkflowAdapter.REF2V_AUDIO_VARIANTS
+
   /** 音频参考最多 3 段 (ref_audio_0/1/2)，平台硬上限 */
   private static readonly REF2V_MAX_AUDIO = 3
 
