@@ -1892,10 +1892,14 @@
                   </div>
                   <div class="empty-title">拼接全集视频</div>
                   <div class="empty-desc">将 {{ composedCount }} 个已合成镜头拼接为完整视频</div>
-                  <button class="btn btn-primary" :disabled="composedCount === 0" @click="doMerge" style="margin-top:12px">
+                  <button class="btn btn-primary" :disabled="composedCount === 0 || merging" @click="doMerge" style="margin-top:12px">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                    开始拼接
+                    {{ merging ? '拼接中...' : '开始拼接' }}
                   </button>
+                  <!-- ★ Sprint 38 T2-C: 拼接进行中 → 页面要能看出在跑 (别让用户以为没点上又点一次) -->
+                  <div v-if="merging" class="empty-desc" style="margin-top:8px">
+                    正在拼接 {{ composedCount }} 个已合成镜头, 完成后这里会出现成片 (可刷新页面继续等)
+                  </div>
                 </div>
               </template>
             </div>
@@ -3012,15 +3016,35 @@ function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
+// ★ Sprint 38 T2-C (PM msg-20261110-165): 拼接进行中 —— 状态【从后端读】, 所以刷新页面/切走再回来
+//   依然能看到『拼接中』(不只靠内存里那个轮询)。后端也会去重 (已有处理中的 merge → 复用那条)。
+const merging = computed(() => {
+  const st = mergeData.value?.status
+  return st === 'processing' || st === 'pending'
+})
+
 async function doMerge() {
-  await mergeAPI.merge(epId.value); toast.success('拼接中...')
-  const poll = setInterval(async () => {
-    try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
-    if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {
-      clearInterval(poll)
-      mergeData.value.status === 'completed' ? toast.success('拼接完成') : toast.error('拼接失败')
+  if (merging.value) { toast.info('拼接正在进行中, 请稍候'); return }
+  try {
+    const resp: any = await mergeAPI.merge(epId.value)
+    // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
+    //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)
+    if (resp) {
+      mergeData.value = { ...(mergeData.value || {}), status: resp.status || 'processing', id: resp.merge_id }
     }
-  }, 3000)
+    toast.success('拼接中...')
+    const poll = setInterval(async () => {
+      try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
+      if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {
+        clearInterval(poll)
+        mergeData.value.status === 'completed' ? toast.success('拼接完成') : toast.error('拼接失败')
+      }
+    }, 3000)
+  } catch (e: any) {
+    // ★ 失败 → 状态清回未拼接 (按钮恢复可点, 不残留『拼接中』)
+    mergeData.value = { ...(mergeData.value || {}), status: 'failed' }
+    toast.error(e?.message || '拼接失败')
+  }
 }
 
 function getRefs(sb) {
