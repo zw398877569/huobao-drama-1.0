@@ -9,6 +9,14 @@ import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../
 const app = new Hono()
 
 /**
+ * ★ Sprint 38 追加单 166: 取【最新一条】merge (按 id 倒序) ——
+ *   重新拼接会新增一条记录 → 页面要显示的是【新的那一条】(成片 url + 下载链接都换新的)。
+ */
+export function pickLatestMerge<T extends { id: number }>(merges: T[]): T | undefined {
+  return (merges || []).slice().sort((a, b) => b.id - a.id)[0]
+}
+
+/**
  * ★ Sprint 38 T2-C (PM msg-20261110-165): 本集有没有【处理中】的 merge 可以复用?
  *   (纯函数 → 可离线断言; 处理中 = processing / pending)
  */
@@ -61,7 +69,7 @@ app.get('/episodes/:id/merge', async (c) => {
     .where(eq(schema.videoMerges.episodeId, episodeId))
     .all()
 
-  const latest = merges[merges.length - 1]
+  const latest = pickLatestMerge(merges)
   if (!latest) return success(c, null)
 
   return success(c, toSnakeCase(latest))

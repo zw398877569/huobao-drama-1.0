@@ -1879,10 +1879,25 @@
                 <div class="export-bar">
                   <span class="tag tag-success">拼接完成</span>
                   <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 镜头 · {{  totalDuration  }}s</span>
-                  <a :href="'/' + mergeUrl" download class="btn btn-primary ml-auto">
+                  <!-- ★ Sprint 38 追加单 166 (PM msg-20261110-166): 【重新拼接】入口 ——
+                       成片旁边给一个按钮 (成片不藏起来): 改了转场时长想再试一版 / 某镜合成出错想重来,
+                       都能从这里再拼一次; 流程与首次拼接一致 (按钮变『拼接中...』不可点, 完成后换成新成片) -->
+                  <button
+                    class="btn btn-sm ml-auto"
+                    :disabled="merging || composedCount === 0"
+                    title="用当前的合成结果重新拼一次 (改了转场时长 / 某镜合成出错想重来时用)"
+                    @click="doMerge"
+                  >
+                    {{ merging ? '拼接中...' : '重新拼接' }}
+                  </button>
+                  <a :href="'/' + mergeUrl" download class="btn btn-primary">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     下载视频
                   </a>
+                </div>
+                <!-- ★ 重新拼接进行中 → 旧成片仍然可见, 但要告诉用户在跑 (别让用户以为没点上) -->
+                <div v-if="merging" class="empty-desc" style="margin-top:8px">
+                  正在重新拼接 {{ composedCount }} 个已合成镜头, 完成后这里会换成新的成片 (旧成片先保留着)
                 </div>
               </template>
               <template v-else>
@@ -3034,7 +3049,17 @@ async function doMerge() {
     }
     toast.success('拼接中...')
     const poll = setInterval(async () => {
-      try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
+      try {
+        const st: any = await mergeAPI.status(epId.value)
+        // ★ Sprint 38 追加单 166: 重新拼接时, 新记录还没出成片 (merged_url 为空)
+        //   → 空值沿用【旧的】成片 → 用户已有的成片不会在拼接过程中消失 (完成后自动换成新的)
+        if (st) {
+          mergeData.value = {
+            ...st,
+            merged_url: st.merged_url || st.mergedUrl || mergeData.value?.merged_url || null,
+          }
+        }
+      } catch {}
       if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {
         clearInterval(poll)
         mergeData.value.status === 'completed' ? toast.success('拼接完成') : toast.error('拼接失败')
