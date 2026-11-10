@@ -494,7 +494,19 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       if (d1FrameSlots.end > 0) parts.push(`Image ${d1FrameSlots.end} is the END frame of this shot`)
       parts.push('the motion between them must be one continuous take inside this shot')
       parts.push('do not introduce any object that is not already visible in these frames')
-      body.prompt = `${body.prompt}\n${parts.join('; ')}.`
+      const sentence = `${parts.join('; ')}.`
+      // ★ Sprint 38 T4-G (PM msg-20261110-165): 这段要放在【官方限制项之前】——
+      //   H3 官方规范: 限制项必须是整份 prompt 的【最后一段】(结尾用整句限制项)。
+      //   Sprint 38 T2 把这段追加在末尾 → 限制项被挤到倒数第二段, 权重下降。
+      //   ★ 只在末段确实是官方限制项 (以 "No text" 开头) 时才往前挪;
+      //     其它模板 (general) 的 prompt 结构不同 → 维持【追加在末尾】(逐字不变)。
+      const paras = String(body.prompt).split('\n\n')
+      const lastPara = (paras[paras.length - 1] || '').trim()
+      if (paras.length > 1 && /^No text\b/i.test(lastPara)) {
+        body.prompt = [...paras.slice(0, -1), sentence, lastPara].join('\n\n')
+      } else {
+        body.prompt = `${body.prompt}\n${sentence}`
+      }
     }
 
     // duration 上限看具体路由:
