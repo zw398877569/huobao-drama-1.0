@@ -30,6 +30,18 @@ type Deps = {
   imageConfigIdRef?: Ref<string | number | null>,
 }
 
+export type ShotFrameType = 'first_frame' | 'last_frame'
+
+/** ★ Sprint 38 (PM msg-20261110-164): 批量生成里失败的帧 */
+export interface BatchShotFailure {
+  storyboardId: number
+  frameType: ShotFrameType
+  shotNumber: number
+  /** provider 报错 / 依赖没就绪 / 其它 */
+  reason: string
+  detail?: string
+}
+
 export function useImageGeneration(deps: Deps) {
   const { ctx, refresh, getFirstFrame, getLastFrame, getRefs, getStoryboardCharacterNames, getSceneName, watchAsyncResult, sleep, videoConfigLabel, positiveShotTokens, imageConfigIdRef } = deps
 
@@ -37,6 +49,16 @@ export function useImageGeneration(deps: Deps) {
   const pendingSceneImageIds = ref<number[]>([])
   const pendingPropImageIds = ref<number[]>([])
   const pendingShotFrameKeys = ref<string[]>([])
+
+  // ── ★ Sprint 38 (PM msg-20261110-164): 分镜帧【批量生成】调度器状态 ──────────
+  const batchShotRunning = ref(false)
+  const batchShotDone = ref(0)
+  const batchShotTotal = ref(0)
+  const batchShotFailed = ref(0)
+  const batchShotCurrent = ref<string[]>([])     // 正在跑的镜 (显示用)
+  const batchShotFailures = ref<BatchShotFailure[]>([])
+  const batchShotInterrupted = ref(false)
+  const batchShotConcurrency = ref(3)            // 并发上限 (可配, localStorage 持久化)
 
 
   /** 场景/道具的图片 URL (snake/camel 双写兼容) */
@@ -760,7 +782,22 @@ export function useImageGeneration(deps: Deps) {
     return false
   }
 
-  async function genShotFrame(sb: any, frameType: string) {
+  /**
+   * 生成镜头的一帧 (首帧 / 尾帧)。
+   *
+   * ★ Sprint 38 (PM msg-20261110-164) 两处改动:
+   *   ① 【尾帧也要等上一镜的尾帧】(关联项 B) ——
+   *      以前只有首帧等 (waitPrevShotLastFrame 只在 first_frame 分支调用) → 生成尾帧时若上一镜
+   *      尾帧没就绪, 会【静默少一张参考图】(用户和 QA 都看不出来; 批量里还会让同批镜子的
+   *      参考图集合不一致 → 结果不可复现)。现在尾帧也走同一口径 (在生成中就等, 根本没生成
+   *      就立即提示不等待)。★ 首帧侧的行为逐字不变。
+   *   ② 返回结果 + requireRelay —— 批量调度要知道成功/失败, 且【上一镜尾帧没就绪就不提交】
+   *      (批量里不能像单张那样「降级直接生成」, 否则整批参考图集合会不一致)。
+   */
+  async function genShotFrame(
+    sb: any,
+    frameType: string,
+  ): Promise<{ ok: boolean; reason?: 'dependency' | 'provider'; error?: string }> {
     const key = framePendingKey(sb.id, frameType)
     // ★ Sprint 37 (PM msg-20261109-161): 记下【生成前】的帧 URL ——
     //   完成条件必须是『URL 变了』而不是『有没有帧』: 重新生成【已存在】的帧时旧图本来就在,
@@ -808,6 +845,7 @@ export function useImageGeneration(deps: Deps) {
       await imageAPI.generate(body)
       toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
       await refresh()
+      let failed = false
       await watchAsyncResult(() => {
         const target = ctx.sbs.value.find(s => s.id === sb.id)
         // 成功: 帧 URL 变了 (重新生成时旧图本来就在, 必须比 URL 而不是看有没有图);
@@ -817,20 +855,223 @@ export function useImageGeneration(deps: Deps) {
         const done = (!!nowUrl && nowUrl !== beforeUrl) || isFailed
         if (done) {
           pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
-          if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '首尾帧生成失败')
+          if (isFailed) {
+            failed = true
+            toast.error(target?.error_msg || target?.errorMsg || '首尾帧生成失败')
+          }
         }
         return done
       })
+      // ★ Sprint 38: 把结果带回给调用方 (批量调度要按成功/失败分流: 重试 / 记失败 / 继续)
+      if (failed) return { ok: false, reason: 'provider', error: '生成失败' }
+      const after = ctx.sbs.value.find(s => s.id === sb.id)
+      const afterUrl = frameType === 'first_frame' ? getFirstFrame(after) : getLastFrame(after)
+      if (!afterUrl || afterUrl === beforeUrl) return { ok: false, reason: 'provider', error: '等待超时' }
+      return { ok: true }
     } catch (e: any) {
       pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
       toast.error(e.message)
+      return { ok: false, reason: 'provider', error: e?.message || '生成失败' }
     }
+  }
+
+  // ── ★ Sprint 38 (PM msg-20261110-164): 分镜帧【批量生成】调度器 ────────────────
+  //
+  // 【为什么这样调度】镜N的首帧要参考镜N-1的尾帧 (接力图) → 同 scene 内必须串行,
+  //   否则并发推进时后面的镜首帧拿不到接力图 (QA 的 wave 并发 3 → 19 镜里约 12 镜丢接力图)。
+  //   不同 scene 的链没有接力依赖 → 可以并行 (PM D1: 同 scene 内串行 + scene 间并行)。
+  //
+  // 【口径】(PM 2026-11-10 拍板)
+  //   D1 同 scene 内严格串行 (镜N首 → 镜N尾 → 镜N+1首 …)
+  //   D2 并发上限 3 (可配), 实际 = min(scene 数, 上限)
+  //   D3 scene 边界那一刀不等上一镜尾帧 (跨空间接力意义不大)
+  //   D5 过渡镜只生成首帧 (尾帧 = 后一镜首帧, 视频层直接复用 → 每个过渡镜省一次生成)
+  //   D6 单张失败 → 自动重试 1 次 (间隔 10s) → 仍失败则记失败、继续跑后面的
+  //   D7 已完成 (有帧) 的直接跳过 → 天然支持【刷新后续跑】; 手动正在生成的也跳过 (手动优先生效)
+
+  const BATCH_CONCURRENCY_KEY = 'huobao.batchShotConcurrency'
+
+  function loadBatchConcurrency(): number {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(BATCH_CONCURRENCY_KEY) : null
+      const v = Number(raw)
+      if (Number.isFinite(v) && v >= 1 && v <= 8) return Math.floor(v)
+    } catch { /* localStorage 不可用 → 用默认 */ }
+    return 3
+  }
+  function setBatchConcurrency(v: number) {
+    const n = Math.max(1, Math.min(8, Math.floor(Number(v) || 3)))
+    batchShotConcurrency.value = n
+    try {
+      if (typeof window !== 'undefined') window.localStorage.setItem(BATCH_CONCURRENCY_KEY, String(n))
+    } catch { /* 忽略: 存不了只是这次不记住 */ }
+  }
+  batchShotConcurrency.value = loadBatchConcurrency()
+
+  function shotNumOf(sb: any) { return Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? 0) }
+  function shotSceneKey(sb: any) { return String(sb?.scene_id ?? sb?.sceneId ?? 0) }
+  function frameUrlOf(sb: any, frameType: ShotFrameType): string | null {
+    if (!sb) return null
+    return frameType === 'first_frame' ? getFirstFrame(sb) : getLastFrame(sb)
+  }
+  function liveShot(id: number) { return ctx.sbs.value.find((s: any) => s.id === id) }
+
+  /** 同 scene 内的镜头, 按 storyboard_number 升序 (每条链 = 一个 scene) */
+  function buildBatchChains(): any[][] {
+    const shots = [...ctx.sbs.value].sort((a, b) => shotNumOf(a) - shotNumOf(b))
+    const byScene = new Map<string, any[]>()
+    for (const sb of shots) {
+      const key = shotSceneKey(sb)
+      if (!byScene.has(key)) byScene.set(key, [])
+      byScene.get(key)!.push(sb)
+    }
+    return [...byScene.values()]
+  }
+
+  /** 同 scene 内的上一镜 (跳过过渡镜, 与 findPrevShot 同语义) */
+  function prevInChain(chain: any[], sb: any): any | null {
+    const idx = chain.findIndex(s => s.id === sb.id)
+    if (idx <= 0) return null
+    for (let i = idx - 1; i >= 0; i--) {
+      if (!isTransitionShot(chain[i])) return chain[i]
+    }
+    return null
+  }
+
+  /**
+   * 批量模式的依赖检查 (PM T1): 依赖没就绪【不提交】——
+   *   不能像单张那样「上一镜尾帧不在生成中就不等直接降级」, 那个降级会让整批的参考图集合不一致。
+   */
+  function batchDependencyOk(chain: any[], sb: any, frameType: ShotFrameType): boolean {
+    // ① 尾帧任务: 本镜自己的首帧必须已就绪
+    if (frameType === 'last_frame' && !frameUrlOf(liveShot(sb.id), 'first_frame')) return false
+    // ② 同 scene 内上一镜 (跳过过渡镜) 的尾帧必须已就绪 (scene 边界 → prev 为 null → 不等)
+    const prev = prevInChain(chain, sb)
+    if (prev && !frameUrlOf(liveShot(prev.id), 'last_frame')) return false
+    return true
+  }
+
+  function recordBatchFailure(sb: any, frameType: ShotFrameType, reason: string, detail?: string) {
+    batchShotFailures.value = [...batchShotFailures.value, {
+      storyboardId: sb.id,
+      frameType,
+      shotNumber: shotNumOf(sb),
+      reason,
+      detail,
+    }]
+    batchShotFailed.value = batchShotFailures.value.length
+  }
+
+  async function runBatchTask(chain: any[], sb: any, frameType: ShotFrameType, filter?: Set<string>): Promise<void> {
+    const taskKey = `${sb.id}:${frameType}`
+    if (filter && !filter.has(taskKey)) return
+    const live = liveShot(sb.id) || sb
+    // 已完成 → 跳过 (续跑: 刷新页面后重进批量, 已完成的直接略过)
+    if (frameUrlOf(live, frameType)) { batchShotDone.value++; return }
+    // 手动正在生成 → 让手动的那次优先生效 (PM D7)
+    if (isPendingShotFrame(live.id, frameType)) return
+    if (!batchDependencyOk(chain, live, frameType)) {
+      recordBatchFailure(live, frameType, '依赖没就绪')
+      return
+    }
+    const label = `#${shotNumOf(live)}${frameType === 'first_frame' ? '首帧' : '尾帧'}`
+    batchShotCurrent.value = [...batchShotCurrent.value, label]
+    let result = await genShotFrame(live, frameType)
+    // ★ D6: 自动重试 1 次 (间隔 10 秒); 「依赖没就绪」是确定性的 → 不重试
+    if (!result.ok && result.reason !== 'dependency') {
+      await sleep(10000)
+      const live2 = liveShot(sb.id) || sb
+      result = await genShotFrame(live2, frameType)
+    }
+    batchShotCurrent.value = batchShotCurrent.value.filter(x => x !== label)
+    if (result.ok) { batchShotDone.value++; return }
+    recordBatchFailure(live, frameType, result.reason === 'dependency' ? '依赖没就绪' : 'provider 报错', result.error)
+  }
+
+  async function runBatchChain(chain: any[], filter?: Set<string>): Promise<void> {
+    for (const sb of chain) {
+      if (batchShotInterrupted.value) return
+      await runBatchTask(chain, sb, 'first_frame', filter)
+      // ★ D5: 过渡镜只生成首帧 (它的尾帧 = 后一镜的首帧, 视频层直接复用 → 省一次生成)
+      if (!isTransitionShot(sb)) {
+        if (batchShotInterrupted.value) return
+        await runBatchTask(chain, sb, 'last_frame', filter)
+      }
+    }
+  }
+
+  /**
+   * ★ Sprint 38: 批量生成【当前集全部镜】的首尾帧。
+   * @param opts.retryFailures 只重试上次失败的那些 (PM T3: 『N 张失败, 点这里重试』)
+   */
+  async function batchShotFrames(opts?: { retryFailures?: boolean }): Promise<void> {
+    if (batchShotRunning.value) { toast.info('批量生成已在进行中'); return }
+    const chains = buildBatchChains()
+    if (!chains.length) { toast.info('本集没有镜头'); return }
+
+    const filter = opts?.retryFailures
+      ? new Set(batchShotFailures.value.map(f => `${f.storyboardId}:${f.frameType}`))
+      : undefined
+
+    // 任务总数 (已完成的跳过 → 天然支持续跑)
+    let total = 0
+    for (const chain of chains) {
+      for (const sb of chain) {
+        const k1 = `${sb.id}:first_frame`
+        const k2 = `${sb.id}:last_frame`
+        if (!filter || filter.has(k1)) {
+          if (!frameUrlOf(liveShot(sb.id), 'first_frame')) total++
+        }
+        if ((!filter || filter.has(k2)) && !isTransitionShot(sb)) {
+          if (!frameUrlOf(liveShot(sb.id), 'last_frame')) total++
+        }
+      }
+    }
+    if (!total) { toast.success(opts?.retryFailures ? '没有需要重试的帧' : '所有镜头的帧图都已生成'); return }
+
+    batchShotRunning.value = true
+    batchShotInterrupted.value = false
+    batchShotFailures.value = []
+    batchShotFailed.value = 0
+    batchShotDone.value = 0
+    batchShotTotal.value = total
+    batchShotCurrent.value = []
+    try {
+      // ★ D2: 并发上限可配; 实际并发 = min(scene 数, 上限)
+      const limit = Math.max(1, Math.min(batchShotConcurrency.value, chains.length))
+      let cursor = 0
+      const worker = async () => {
+        while (true) {
+          if (batchShotInterrupted.value) return
+          const idx = cursor++
+          if (idx >= chains.length) return
+          await runBatchChain(chains[idx], filter)
+        }
+      }
+      await Promise.all(Array.from({ length: limit }, () => worker()))
+    } finally {
+      batchShotRunning.value = false
+      batchShotCurrent.value = []
+      const failed = batchShotFailures.value.length
+      if (failed) toast.error(`批量生成结束: ${batchShotDone.value} 张成功, ${failed} 张失败`)
+      else toast.success(`批量生成完成: ${batchShotDone.value} 张`)
+    }
+  }
+
+  /** 中断: 停止继续提交新的任务 (已提交的任务等它跑完) */
+  function interruptBatchShotFrames() {
+    if (!batchShotRunning.value) return
+    batchShotInterrupted.value = true
+    toast.info('已停止提交新任务, 正在跑的任务等它完成')
   }
 
   return {
     pendingCharImageIds, pendingSceneImageIds, pendingPropImageIds, pendingShotFrameKeys,
     isPendingCharImage, isPendingSceneImage, isPendingPropImage, isPendingShotFrame, framePendingKey,
     genCharImg, batchCharImages, genSceneImg, batchSceneImages, genPropImg, batchPropImages, genShotFrame,
+    // ★ Sprint 38: 分镜帧批量生成
+    batchShotRunning, batchShotDone, batchShotTotal, batchShotFailed, batchShotCurrent, batchShotFailures,
+    batchShotConcurrency, setBatchConcurrency, batchShotFrames, interruptBatchShotFrames,
     buildShotReferenceAssets, getShotReferenceImages, buildShotImagePrompt,
   }
 }
