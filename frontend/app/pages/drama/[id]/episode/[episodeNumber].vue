@@ -1191,6 +1191,19 @@
               <span v-if="imageConfigIds['shots']" class="tag" style="font-size:10px">自定义</span>
               <div class="ml-auto flex gap-1">
                 <BaseSelect v-model="frameMode" :options="frameModeOptions" placeholder="帧模式" searchable style="width:100px" />
+                <!-- ★ Sprint 38 (PM msg-20261110-164): 批量生成首尾帧 ——
+                     按 scene 分链调度: 同 scene 内严格串行 (每镜都拿得到上一镜的尾帧), scene 间并行;
+                     实际并发 = min(scene 数, 上限) -->
+                <BaseSelect v-model="batchConcurrencyModel" :options="batchShotConcurrencyOptions" placeholder="并发" searchable style="width:78px" />
+                <button
+                  class="btn btn-sm"
+                  :disabled="batchShotRunning"
+                  :title="'批量生成当前集全部镜的首尾帧 (同 scene 内串行保证接力图, 不同 scene 并行)'"
+                  @click="batchShotFrames()"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                  {{ batchShotRunning ? `批量生成中 ${batchShotDone}/${batchShotTotal}` : '批量生成首尾帧' }}
+                </button>
                 <button v-if="gridImagePath" class="btn btn-sm" @click="reopenGridPreview">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
                   查看当前宫格图
@@ -2473,6 +2486,22 @@ const {
   // imageConfigId / videoConfigId 在 setup 顶层定义 (见下面), 模板直接访问
   imageConfigIdRef: imageConfigId,
   videoConfigIdRef: videoConfigId,
+})
+
+// ★ Sprint 38 (PM msg-20261110-164): 批量生成的并发上限 (可配, localStorage 持久化)
+//   实际并发 = min(scene 数, 上限) —— ep20 只有 2 个 scene → 实际并发 2。
+//   ⚠️ PM 的验收写的是『在设置里可配』; 本单 scope 只含本页面 + composable,
+//      所以放在批量按钮旁边 (同样能配, 刷新页面后记住)。要挪到设置页说一声, 我加。
+const batchShotConcurrencyOptions = [
+  { label: '并发 1', value: 1 },
+  { label: '并发 2', value: 2 },
+  { label: '并发 3', value: 3 },
+  { label: '并发 4', value: 4 },
+  { label: '并发 5', value: 5 },
+]
+const batchConcurrencyModel = computed({
+  get: () => batchShotConcurrency.value,
+  set: (v: any) => setBatchConcurrency(Number(v)),
 })
 
 // Video generation + compose pipeline (state + handlers extracted to composable)
