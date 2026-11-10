@@ -797,6 +797,7 @@ export function useImageGeneration(deps: Deps) {
   async function genShotFrame(
     sb: any,
     frameType: string,
+    opts?: { requireRelay?: boolean; skipRelayWait?: boolean },
   ): Promise<{ ok: boolean; reason?: 'dependency' | 'provider'; error?: string }> {
     const key = framePendingKey(sb.id, frameType)
     // ★ Sprint 37 (PM msg-20261109-161): 记下【生成前】的帧 URL ——
@@ -808,9 +809,16 @@ export function useImageGeneration(deps: Deps) {
     try {
       // 先标记 pending, 再等接力 —— 等待期间 UI 也显示"生成中", 不会出现点了没反应
       if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
-      // ★ Sprint 28 Task B: 生成首帧前先确保上一镜的末帧就绪 (接力依赖)
-      if (frameType === 'first_frame') {
-        await waitPrevShotLastFrame(sb)
+      // ★ Sprint 28 Task B + Sprint 38 T2: 生成【首帧/尾帧】前都要确保上一镜的末帧就绪 (接力依赖)
+      //   首帧侧行为不变 (在生成中就等, 根本没生成就立即降级 + 提示);
+      //   尾帧侧新增同样的等待 (以前是静默少一张参考图)。
+      //   ★ skipRelayWait: 批量调度里【scene 边界那一刀】不等上一镜尾帧 (PM D3: 跨空间接力意义不大)
+      //     —— 否则另一条链还在跑时会白等, 甚至因『上一镜没尾帧』把本镜判成依赖没就绪。
+      const relayReady = opts?.skipRelayWait ? true : await waitPrevShotLastFrame(sb)
+      // ★ 批量模式: 上一镜尾帧没就绪 → 不提交 (整批参考图集合必须一致)
+      if (opts?.requireRelay && !relayReady) {
+        pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
+        return { ok: false, reason: 'dependency' }
       }
       const prompt = buildShotImagePrompt(sb, frameType)
       // 重新生成 first_frame 时不引用旧 first_frame (避免 LLM 复制旧图错误)
@@ -976,12 +984,18 @@ export function useImageGeneration(deps: Deps) {
     }
     const label = `#${shotNumOf(live)}${frameType === 'first_frame' ? '首帧' : '尾帧'}`
     batchShotCurrent.value = [...batchShotCurrent.value, label]
-    let result = await genShotFrame(live, frameType)
+    // ★ PM D3: 接力只在【同 scene 内】才算数 ——
+    //   prevInChain 跳过过渡镜, 所以「链里没有上一镜」就意味着这个镜的接力图在【别的 scene】
+    //   (跨空间接力意义不大) → 不等、不要求 (D3: scene 边界那一刀不等上一镜尾帧)。
+    //   ★ 判据不能用『是不是链里的第一个』—— 过渡镜占着链首时, 真正的同 scene 上一镜在链外。
+    const chainPrev = prevInChain(chain, sb)
+    const relayOpts = chainPrev ? { requireRelay: true } : { skipRelayWait: true }
+    let result = await genShotFrame(live, frameType, relayOpts)
     // ★ D6: 自动重试 1 次 (间隔 10 秒); 「依赖没就绪」是确定性的 → 不重试
     if (!result.ok && result.reason !== 'dependency') {
       await sleep(10000)
       const live2 = liveShot(sb.id) || sb
-      result = await genShotFrame(live2, frameType)
+      result = await genShotFrame(live2, frameType, relayOpts)
     }
     batchShotCurrent.value = batchShotCurrent.value.filter(x => x !== label)
     if (result.ok) { batchShotDone.value++; return }
