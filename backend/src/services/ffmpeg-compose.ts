@@ -19,6 +19,8 @@ import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWar
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
 // ★ Sprint 38 T3-D (PM msg-20261110-165): 音驱动工作流清单 (决定源音轨能不能保留)
 import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
+// ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机开关 (compose = 在这里烧 (默认); merge = 在拼接阶段烧)
+import { readMergeSettings } from './ffmpeg-merge.js'
 
 /**
  * 容器里 Noto CJK 字体的安装目录 (Dockerfile Stage 3 装了 fonts-noto-cjk)。
@@ -275,7 +277,10 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
 
       const filters: string[] = []
 
-      if (subtitlePath && supportsSubtitleFilter()) {
+      // ★ Sprint 39 T4: 开关 = 'merge' 时【不烧】字幕 (由拼接阶段统一烧 → 字幕只过一次有损编码);
+      //   SRT 仍然照常写出来 (拼接阶段要用它) → 单镜文件仍然是独立可播放的 mp4 ✔
+      const burnSubtitles = readMergeSettings(sb.episodeId).subtitleStage !== 'merge'
+      if (subtitlePath && burnSubtitles && supportsSubtitleFilter()) {
         const escapedPath = subtitlePath
           .replace(/\\/g, '/')
           .replace(/:/g, '\\:')
@@ -290,7 +295,7 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
         //   直接指目录比依赖 family name 匹配更稳: FontName 查不到也不影响 fontsdir 生效 (决策 6)。
         const forceStyle = 'FontSize=32\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,Outline=2'
         filters.push(`subtitles=filename='${escapedPath}':fontsdir='${SUBTITLE_FONTS_DIR}':force_style='${forceStyle}'`)
-      } else if (subtitlePath) {
+      } else if (subtitlePath && burnSubtitles) {
         logTaskProgress('ComposeTask', 'subtitle-filter-unavailable', {
           storyboardId,
           subtitlePath,

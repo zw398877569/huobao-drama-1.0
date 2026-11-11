@@ -1946,6 +1946,15 @@
                 </div>
               </div>
 
+              <!-- ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机 (默认在合成阶段烧 = 改动前的行为) -->
+              <div class="merge-transition-row" style="margin-top:12px">
+                <span class="dim" style="font-size:11px; width:70px">字幕烧录</span>
+                <select v-model="mergeSubtitleStage" class="merge-transition-select" style="width:220px">
+                  <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
+                  <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
+                </select>
+              </div>
+
               <!-- ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (默认关闭; 参数后端持久化) -->
               <div class="merge-transition-config">
                 <button class="btn btn-sm" @click="mergeGradeOpen = !mergeGradeOpen">
@@ -3131,11 +3140,14 @@ function applyMergeTransitionToAll() {
 // ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (可选, 默认关闭 = 与改动前逐帧一致)
 const mergeGradeOpen = ref(false)
 const mergeGrade = ref({ enabled: false, brightness: 0, contrast: 1, saturation: 1 })
+// ★ Sprint 39 T4: 字幕烧录时机 —— compose = 合成阶段烧 (默认, 改动前的行为); merge = 拼接阶段烧 (只过一次有损编码)
+const mergeSubtitleStage = ref<'compose' | 'merge'>('compose')
 async function loadMergeSettings() {
   try {
     const st: any = await mergeAPI.settings(epId.value)
     if (st?.grade) mergeGrade.value = { ...mergeGrade.value, ...st.grade }
-  } catch { /* 拉不到就用默认值 (调色关闭) */ }
+    if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose') mergeSubtitleStage.value = st.subtitleStage
+  } catch { /* 拉不到就用默认值 (调色关闭 + 合成阶段烧字幕) */ }
 }
 
 async function doMerge() {
@@ -3168,6 +3180,8 @@ async function doMerge() {
         gaps: mergeTransitionRows.value.map(r => ({ index: r.index, type: r.type, durationSec: Number(r.durationSec) })),
       },
       grade: { enabled: !!g.enabled, brightness: Number(g.brightness), contrast: Number(g.contrast), saturation: Number(g.saturation) },
+      // ★ Sprint 39 T4: 字幕烧录时机 (后端会持久化 → 下次再拼同一集仍然生效)
+      subtitleStage: mergeSubtitleStage.value,
     })
     // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
     //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)

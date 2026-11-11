@@ -51,7 +51,22 @@ app.post('/episodes/:id/merge', async (c) => {
   }
 
   // ★ Sprint 39 T3 (PM msg-20261111-169): 全片调色参数 —— 校验 + 持久化 (下次再拼同一集仍然生效)
-  let grade = readMergeSettings(episodeId).grade
+  const currentSettings = readMergeSettings(episodeId)
+  let grade = currentSettings.grade
+  // ★ Sprint 39 T4: 字幕烧录时机 (compose = 合成阶段烧 (默认) / merge = 拼接阶段烧)
+  let subtitleStage = currentSettings.subtitleStage
+  if (body?.subtitleStage != null) {
+    const st = String(body.subtitleStage)
+    if (st !== 'compose' && st !== 'merge') {
+      logTaskWarn('MergeAPI', 'episode-merge-invalid-subtitle-stage', {
+        episodeId, dramaId: ep.dramaId, subtitleStage: st,
+        hint: '字幕烧录时机不合法 → 已拒绝, 没有新建 merge 记录',
+      })
+      return badRequest(c, `字幕烧录时机不合法: ${st} (可选: compose / merge)`)
+    }
+    subtitleStage = st as 'compose' | 'merge'
+    writeMergeSettings(episodeId, { subtitleStage })
+  }
   if (body?.grade != null) {
     const g = validateGradeConfig(body.grade)
     if (!g.ok) {
@@ -85,7 +100,7 @@ app.post('/episodes/:id/merge', async (c) => {
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId })
-    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade })
+    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade, subtitleStage })
     logTaskSuccess('MergeAPI', 'episode-merge', { episodeId, mergeId })
     return success(c, { merge_id: mergeId, status: 'processing' })
   } catch (err: any) {

@@ -66,7 +66,11 @@ function toAbsPath(relativePath: string): string {
 export async function mergeEpisodeVideos(
   episodeId: number,
   dramaId: number,
-  options?: { transitions?: MergeTransitionConfig; grade?: MergeGradeConfig },
+  options?: {
+    transitions?: MergeTransitionConfig
+    grade?: MergeGradeConfig
+    subtitleStage?: MergeSubtitleStage
+  },
 ): Promise<number> {
   const storyboards = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
@@ -100,7 +104,7 @@ export async function mergeEpisodeVideos(
   const mergeId = Number(res.lastInsertRowid)
 
   // 异步执行 (★ Sprint 39 T2: 逐镜缝转场配置透传给拼接执行)
-  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade).catch(err => {
+  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade, options?.subtitleStage, composedStoryboards).catch(err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
     console.error(`[Merge] Failed:`, err)
     db.update(schema.videoMerges)
@@ -194,8 +198,16 @@ export interface MergeGradeConfig {
   saturation: number
 }
 export const DEFAULT_MERGE_GRADE: MergeGradeConfig = { enabled: false, brightness: 0, contrast: 1, saturation: 1 }
-export interface MergeSettings { grade: MergeGradeConfig }
+export type MergeSubtitleStage = 'compose' | 'merge'
+export interface MergeSettings {
+  grade: MergeGradeConfig
+  /** ★ Sprint 39 T4: 字幕烧录时机 —— compose = 合成阶段烧 (默认, 改动前的行为); merge = 拼接阶段烧 (字幕只过 一次有损编码) */
+  subtitleStage: MergeSubtitleStage
+}
 const MERGE_SETTINGS_DIR = path.join(DATA_ROOT, 'merge-settings')
+/** ★ Sprint 39 T4: 拼接阶段烧字幕时用的字体目录与样式 (与 compose 阶段逐字一致 → 字幕看起来一样) */
+const SUBTITLE_FONTS_DIR = '/usr/share/fonts/opentype/noto'
+const SUBTITLE_FORCE_STYLE = 'FontSize=32\\,PrimaryColour=&HFFFFFF&\\,OutlineColour=&H000000&\\,Outline=2'
 
 /** 校验调色参数 (非法值挡住 → 不影响拼接) */
 export function validateGradeConfig(input: any): { ok: boolean; config: MergeGradeConfig; errors: string[] } {
@@ -228,16 +240,22 @@ export function readMergeSettings(episodeId: number): MergeSettings {
     const raw = fs.readFileSync(mergeSettingsPath(episodeId), 'utf-8')
     const parsed = JSON.parse(raw)
     const v = validateGradeConfig(parsed?.grade)
-    return { grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE } }
+    return {
+      grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE },
+      subtitleStage: parsed?.subtitleStage === 'merge' ? 'merge' : 'compose',
+    }
   } catch {
-    return { grade: { ...DEFAULT_MERGE_GRADE } }
+    return { grade: { ...DEFAULT_MERGE_GRADE }, subtitleStage: 'compose' }
   }
 }
 
 /** 写本集的拼接设置 (调色参数持久化 → 下次再拼同一集仍然生效) */
 export function writeMergeSettings(episodeId: number, patch: Partial<MergeSettings>): MergeSettings {
   const current = readMergeSettings(episodeId)
-  const next: MergeSettings = { grade: patch.grade ?? current.grade }
+  const next: MergeSettings = {
+    grade: patch.grade ?? current.grade,
+    subtitleStage: patch.subtitleStage ?? current.subtitleStage,
+  }
   try {
     fs.mkdirSync(MERGE_SETTINGS_DIR, { recursive: true })
     fs.writeFileSync(mergeSettingsPath(episodeId), JSON.stringify({ ...next, updatedAt: now() }, null, 2), 'utf-8')
@@ -245,6 +263,46 @@ export function writeMergeSettings(episodeId: number, patch: Partial<MergeSettin
     logTaskWarn('MergeTask', 'merge-settings-persist-failed', { episodeId, error: err?.message })
   }
   return next
+}
+
+/**
+ * ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机 —— 合成阶段烧 (默认) / 拼接阶段烧。
+ *
+ * 【为什么】现在字幕在【合成】阶段就烧进画面, 拼接时整片又被重编码一次 → 字幕被压了两遍
+ *   (小字糊掉)。改成在【拼接】阶段烧 → 字幕只过【一次】有损编码。
+ *
+ * 【做法】各镜的 SRT 是按本镜时间轴生成的 (compose 阶段写好了) → 拼接时按每镜在成片里的
+ *   起点把时间轴整体平移 → 拼成一份整片 SRT → 在拼接的 filter 里一次性烧上去。
+ *   ★ 字幕内容/时间轴/样式/位置与现状一致 (同一份 SRT, 只是整体平移)。
+ */
+
+/** 把一段 SRT 的所有时间戳整体平移 offsetSec 秒 */
+export function shiftSrtTimestamps(content: string, offsetSec: number): string {
+  return String(content || '').replace(
+    /(\d{2}):(\d{2}):(\d{2}),(\d{3})/g,
+    (_m, h: string, mi: string, sec: string, ms: string) => {
+      const total = Number(h) * 3600 + Number(mi) * 60 + Number(sec) + Number(ms) / 1000 + offsetSec
+      const tt = Math.max(0, total)
+      const hh = String(Math.floor(tt / 3600)).padStart(2, '0')
+      const mm = String(Math.floor((tt % 3600) / 60)).padStart(2, '0')
+      const ss = String(Math.floor(tt % 60)).padStart(2, '0')
+      const mmm = String(Math.round((tt - Math.floor(tt)) * 1000)).padStart(3, '0')
+      return `${hh}:${mm}:${ss},${mmm}`
+    },
+  )
+}
+
+/** 把多段 (已平移的) SRT 拼成一份整片 SRT 并重新编号 (cue 号必须连续) */
+export function mergeSrtBlocks(blocks: string[]): string {
+  const cues: string[] = []
+  for (const b of blocks || []) {
+    for (const raw of String(b || '').split(/\n\s*\n/)) {
+      const cue = raw.trim()
+      if (!cue) continue
+      cues.push(cue.replace(/^\d+\n/, ''))
+    }
+  }
+  return cues.map((c, i) => `${i + 1}\n${c}`).join('\n\n')
 }
 
 /**
@@ -496,6 +554,7 @@ async function mergeWithXfade(
   encode: MergeEncodeParams,
   transitions: Array<{ type: string; durationSec: number }>,
   grade?: MergeGradeConfig,
+  mergedSrtPath?: string | null,
 ): Promise<void> {
   // ★ Sprint 39 T2: 逐镜缝的转场 (默认全是 fade + XFADE_DURATION → 与改动前逐字一致)
   const D = XFADE_DURATION
@@ -550,6 +609,12 @@ async function mergeWithXfade(
     filters.push(`[vout]eq=brightness=${grade.brightness}:contrast=${grade.contrast}:saturation=${grade.saturation}[vgraded]`)
     videoOut = 'vgraded'
   }
+  // ★ Sprint 39 T4: 拼接阶段烧字幕 (在转场与调色之后, 一次性套整片)
+  if (mergedSrtPath) {
+    const esc = mergedSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")
+    filters.push(`[${videoOut}]subtitles=filename='${esc}':fontsdir='${SUBTITLE_FONTS_DIR}':force_style='${SUBTITLE_FORCE_STYLE}'[vsub]`)
+    videoOut = 'vsub'
+  }
 
   await new Promise<void>((resolve, reject) => {
     const cmd = ffmpeg()
@@ -581,6 +646,8 @@ async function doMerge(
   videos: string[],
   transitionConfig?: MergeTransitionConfig,
   gradeConfig?: MergeGradeConfig,
+  subtitleStage?: MergeSubtitleStage,
+  storyboards?: Array<{ subtitleUrl?: string | null }>,
 ) {
   // 输出文件 (先定路径, 归一化与两种拼接方式都写到这里)
   const outputDir = path.join(STORAGE_ROOT, 'merged')
@@ -609,6 +676,22 @@ async function doMerge(
   for (const p of normalized) normalizedProbes.push(await probeMedia(p))
   const anyInputHasAudio = normalizedProbes.some(p => p.hasAudio)
 
+  // ── ★ Sprint 39 T4: 字幕烧录时机 ──
+  //   'compose' (默认) = 合成阶段已经烧进画面了 → 拼接阶段【不】再烧 (否则叠两层字幕)
+  //   'merge' = 合成阶段没烧 → 拼接阶段把各镜 SRT 平移后拼成整片 SRT, 一次性烧上去 (只过一次有损编码)
+  const stage: MergeSubtitleStage = subtitleStage === 'merge' ? 'merge' : 'compose'
+  let mergedSrtPath: string | null = null
+  if (stage === 'merge' && storyboards && storyboards.length) {
+    mergedSrtPath = buildFilmSrt(storyboards, normalizedProbes.map(p => p.durationSec), transitions)
+    if (mergedSrtPath) {
+      logTaskProgress('MergeTask', 'film-srt-built', {
+        mergeId, episodeId, path: mergedSrtPath,
+        clips: storyboards.length,
+        hint: '字幕改在拼接阶段烧 → 只过一次有损编码',
+      })
+    }
+  }
+
   // ── Task F: 优先 xfade 转场, 失败 fallback 硬切 concat ──
   let usedXfade = false
   let xfadeFallbackReason: string | null = null
@@ -622,6 +705,7 @@ async function doMerge(
         encode,
         transitions,
         gradeConfig,
+        mergedSrtPath,
       )
       usedXfade = true
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
@@ -667,6 +751,10 @@ async function doMerge(
             // ★ Sprint 39 T3: 硬切回退路径也要套全片调色 (与 xfade 路径一致)
             ...(gradeConfig?.enabled
               ? ['-vf', `eq=brightness=${gradeConfig.brightness}:contrast=${gradeConfig.contrast}:saturation=${gradeConfig.saturation}`]
+              : []),
+            // ★ Sprint 39 T4: 回退路径也要烧字幕 (与 xfade 路径一致)
+            ...(mergedSrtPath
+              ? ['-vf', `subtitles=filename='${mergedSrtPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")}':fontsdir='${SUBTITLE_FONTS_DIR}':force_style='${SUBTITLE_FORCE_STYLE}'`]
               : []),
             '-c:a', 'aac',
             '-ar', '48000',
@@ -752,8 +840,8 @@ async function doMerge(
       contrast: gradeConfig?.contrast ?? DEFAULT_MERGE_GRADE.contrast,
       saturation: gradeConfig?.saturation ?? DEFAULT_MERGE_GRADE.saturation,
     },
-    // 字幕烧录时机 (★ T4 会接成可切换的; 现在固定在合成阶段 = 改动前的行为)
-    subtitleStage: 'compose',
+    // 字幕烧录时机 (T4: compose = 合成阶段烧 (默认) / merge = 拼接阶段烧)
+    subtitleStage: stage,
     // 最终成片的编码参数
     encode: {
       codec: 'h264',
@@ -769,6 +857,38 @@ async function doMerge(
     // 是否走了兜底路径 (转场失败 → 硬切 concat)
     usedFallbackPath: !usedXfade,
   })
+}
+
+/**
+ * ★ Sprint 39 T4: 把各镜的 SRT 按【在成片里的起点】平移后拼成一份整片 SRT。
+ *   起点 = 前面的镜的时长之和 - 被转场吃掉的时长 (与 xfade 的 offset 同一套算法)。
+ */
+function buildFilmSrt(
+  storyboards: Array<{ subtitleUrl?: string | null }>,
+  durations: number[],
+  transitions: Array<{ type: string; durationSec: number }>,
+): string | null {
+  const blocks: string[] = []
+  let start = 0
+  for (let i = 0; i < storyboards.length; i++) {
+    if (i > 0) start += (durations[i - 1] || 0) - (transitions[i - 1]?.durationSec || 0)
+    const rel = storyboards[i]?.subtitleUrl
+    if (!rel) continue
+    try {
+      const p = toAbsPath(rel)
+      if (!fs.existsSync(p)) continue
+      const shifted = shiftSrtTimestamps(fs.readFileSync(p, 'utf-8'), start)
+      if (shifted.trim()) blocks.push(shifted)
+    } catch { /* 单镜 SRT 读不到就跳过, 不阻断整片 */ }
+  }
+  if (!blocks.length) return null
+  const merged = mergeSrtBlocks(blocks)
+  if (!merged.trim()) return null
+  const dir = path.join(STORAGE_ROOT, 'temp')
+  fs.mkdirSync(dir, { recursive: true })
+  const outPath = path.join(dir, `${uuid()}-film.srt`)
+  fs.writeFileSync(outPath, merged + '\n', 'utf-8')
+  return outPath
 }
 
 function getVideoDuration(filePath: string): Promise<number> {
