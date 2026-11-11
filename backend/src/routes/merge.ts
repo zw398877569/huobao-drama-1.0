@@ -2,9 +2,9 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest } from '../utils/response.js'
-import { mergeEpisodeVideos } from '../services/ffmpeg-merge.js'
+import { mergeEpisodeVideos, validateTransitionConfig } from '../services/ffmpeg-merge.js'
 import { toSnakeCase } from '../utils/transform.js'
-import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
 
@@ -33,6 +33,20 @@ app.post('/episodes/:id/merge', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+
+  // ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置校验 ——
+  //   非法类型 / 非法时长【在这里就被挡住】(可读提示), 不建 merge 记录 → 不产生 failed 脏数据/半成品成片
+  const t = validateTransitionConfig(body?.transitions)
+  if (!t.ok) {
+    logTaskWarn('MergeAPI', 'episode-merge-invalid-transitions', {
+      episodeId, dramaId: ep.dramaId, errors: t.errors,
+      hint: '转场配置不合法 → 已拒绝, 没有新建 merge 记录',
+    })
+    return badRequest(c, `转场配置不合法: ${t.errors.join('; ')}`)
+  }
+
   // ★ Sprint 38 T2-C (PM msg-20261110-165): 本集已有【处理中】的 merge → 直接复用那一条 ——
   //   不新建记录、不再起第二个 ffmpeg (两个 ffmpeg 抢 CPU; 而且用户以为没点上会再点一次)。
   //   以前这个接口无去重 → 连点两次就是两条记录 + 两个 ffmpeg 抢资源。
@@ -53,7 +67,7 @@ app.post('/episodes/:id/merge', async (c) => {
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId })
-    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId)
+    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config })
     logTaskSuccess('MergeAPI', 'episode-merge', { episodeId, mergeId })
     return success(c, { merge_id: mergeId, status: 'processing' })
   } catch (err: any) {

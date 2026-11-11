@@ -134,7 +134,8 @@ export const composeAPI = {
   status: (epId: number) => api.get(`/compose/episodes/${epId}/compose-status`),
 }
 export const mergeAPI = {
-  merge: (epId: number) => api.post(`/merge/episodes/${epId}/merge`),
+  // ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (可选, 不传 = 与改动前一致)
+  merge: (epId: number, body?: any) => api.post(`/merge/episodes/${epId}/merge`, body || {}),
   status: (epId: number) => api.get(`/merge/episodes/${epId}/merge`),
 }
 export const agentAPI = {

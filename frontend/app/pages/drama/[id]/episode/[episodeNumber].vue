@@ -1917,6 +1917,34 @@
                   </div>
                 </div>
               </template>
+
+              <!-- ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (默认折叠收起) -->
+              <div class="merge-transition-config">
+                <button class="btn btn-sm" @click="mergeTransitionsOpen = !mergeTransitionsOpen">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  转场设置
+                  <span class="dim" style="font-size:11px">{{ mergeTransitionRows.length }} 个镜缝</span>
+                </button>
+                <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
+                  <div class="merge-transition-toolbar">
+                    <span class="dim" style="font-size:11px">全部镜缝</span>
+                    <select v-model="mergeTransitionAll.type" class="merge-transition-select">
+                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                    <input v-model.number="mergeTransitionAll.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
+                    <span class="dim" style="font-size:11px">秒</span>
+                    <button class="btn btn-sm" @click="applyMergeTransitionToAll">应用到全部</button>
+                  </div>
+                  <div v-for="r in mergeTransitionRows" :key="r.index" class="merge-transition-row">
+                    <span class="mono dim" style="font-size:11px; width:70px">#{{ r.index + 1 }}→#{{ r.index + 2 }}</span>
+                    <select v-model="r.type" class="merge-transition-select">
+                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                    <input v-model.number="r.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
+                    <span class="dim" style="font-size:11px">秒</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="export-list">
               <div class="export-list-head">镜头概览</div>
@@ -3038,10 +3066,53 @@ const merging = computed(() => {
   return st === 'processing' || st === 'pending'
 })
 
+// ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (默认折叠收起, 不干扰一键拼接)
+//   与后端 XFADE_TRANSITION_TYPES 对齐 (backend/src/services/ffmpeg-merge.ts)
+const mergeTransitionsOpen = ref(false)
+const mergeTransitionTypes = [
+  'fade', 'fadeblack', 'fadewhite',
+  'wipeleft', 'wiperight', 'wipup', 'wipedown',
+  'slideleft', 'slideright', 'slideup', 'slidedown',
+  'smoothleft', 'smoothright', 'smoothup', 'smoothdown',
+  'circlecrop', 'rectcrop', 'circleopen', 'circleclose',
+  'vertopen', 'vertclose', 'horzopen', 'horzclose',
+  'dissolve', 'pixelize', 'radial', 'distance',
+]
+const MERGE_TRANSITION_MIN = 0.1
+const MERGE_TRANSITION_MAX = 2.0
+/** 「应用到全部」的那一组值 (默认 fade + 0.4s = 与改动前一致) */
+const mergeTransitionAll = ref({ type: 'fade', durationSec: 0.4 })
+/** 逐镜缝: index = 镜缝序号 (0 = 第1镜与第2镜之间) */
+const mergeTransitionRows = ref<Array<{ index: number; type: string; durationSec: number }>>([])
+// 镜缝数 = 镜头数 - 1; 镜头数变了就补齐行 (已改过的行保留)
+watch(() => sbs.value?.length ?? 0, (n) => {
+  const gapCount = Math.max(0, (n || 0) - 1)
+  const rows = mergeTransitionRows.value
+  mergeTransitionRows.value = Array.from({ length: gapCount }, (_, i) =>
+    rows[i] ?? { index: i, type: mergeTransitionAll.value.type, durationSec: mergeTransitionAll.value.durationSec })
+}, { immediate: true })
+function applyMergeTransitionToAll() {
+  const t = mergeTransitionAll.value
+  mergeTransitionRows.value = mergeTransitionRows.value.map(r => ({ ...r, type: t.type, durationSec: t.durationSec }))
+}
+
 async function doMerge() {
   if (merging.value) { toast.info('拼接正在进行中, 请稍候'); return }
   try {
-    const resp: any = await mergeAPI.merge(epId.value)
+    // ★ Sprint 39 T2: 本地先校验转场配置 (不合法就不提交 → 后端也会再挡一次, 不会产生脏记录)
+    const badRow = mergeTransitionRows.value.find(r =>
+      !(Number(r.durationSec) >= MERGE_TRANSITION_MIN && Number(r.durationSec) <= MERGE_TRANSITION_MAX))
+    if (badRow) {
+      toast.error(`第 ${badRow.index + 1} 个镜缝的转场时长必须在 ${MERGE_TRANSITION_MIN}~${MERGE_TRANSITION_MAX} 秒之间`)
+      return
+    }
+    const resp: any = await mergeAPI.merge(epId.value, {
+      transitions: {
+        defaultType: 'fade',
+        defaultDurationSec: 0.4,
+        gaps: mergeTransitionRows.value.map(r => ({ index: r.index, type: r.type, durationSec: Number(r.durationSec) })),
+      },
+    })
     // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
     //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)
     if (resp) {
@@ -4454,6 +4525,27 @@ onMounted(() => { refresh() })
   border: 1px solid var(--border); border-radius: 6px;
 }
 .batch-shot-failure { font-size: 11px; color: var(--text-2); }
+
+/* ★ Sprint 39 T2: 逐镜缝转场配置面板 */
+.merge-transition-config { margin-top: 12px; }
+.merge-transition-panel {
+  margin-top: 8px; max-height: 260px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.merge-transition-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.merge-transition-row { display: flex; align-items: center; gap: 6px; }
+.merge-transition-select {
+  font-size: 11px; padding: 2px 4px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
+}
+.merge-transition-input {
+  width: 70px; font-size: 11px; padding: 2px 4px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
+}
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
 .dub-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58)); }

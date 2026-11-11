@@ -63,7 +63,11 @@ function toAbsPath(relativePath: string): string {
 /**
  * 拼接一集的所有合成镜头视频
  */
-export async function mergeEpisodeVideos(episodeId: number, dramaId: number): Promise<number> {
+export async function mergeEpisodeVideos(
+  episodeId: number,
+  dramaId: number,
+  options?: { transitions?: MergeTransitionConfig },
+): Promise<number> {
   const storyboards = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
     .orderBy(schema.storyboards.storyboardNumber)
@@ -95,8 +99,8 @@ export async function mergeEpisodeVideos(episodeId: number, dramaId: number): Pr
   }).run()
   const mergeId = Number(res.lastInsertRowid)
 
-  // 异步执行
-  doMerge(mergeId, episodeId, videos).catch(err => {
+  // 异步执行 (★ Sprint 39 T2: 逐镜缝转场配置透传给拼接执行)
+  doMerge(mergeId, episodeId, videos, options?.transitions).catch(err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
     console.error(`[Merge] Failed:`, err)
     db.update(schema.videoMerges)
@@ -171,6 +175,112 @@ export function resolveMergeEncodeParams(env: Record<string, string | undefined>
     return { crf, preset: DEFAULT_MERGE_PRESET, rejectedPreset: rawPreset }
   }
   return { crf, preset: rawPreset, rejectedPreset: null }
+}
+
+/**
+ * ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场 —— 类型 + 时长都可单独配 (不是全片一刀切)。
+ *
+ * 【默认 = 改动前的行为】不传配置 → 全部镜缝用 fade + XFADE_DURATION(400ms) → 与改动前逐字一致。
+ * 【音频跟随视频】同一镜缝的 acrossfade 时长 = 该镜缝的 xfade 时长 → 音画总时长一致。
+ */
+export interface MergeTransitionGap {
+  /** 镜缝索引: 0 = 第 1 镜与第 2 镜之间 */
+  index: number
+  type: string
+  durationSec: number
+}
+export interface MergeTransitionConfig {
+  defaultType?: string
+  defaultDurationSec?: number
+  /** 逐镜缝覆盖 (只写要改的) */
+  gaps?: MergeTransitionGap[]
+}
+
+/** xfade 支持的转场类型 (取 ffmpeg 4.3+ 一直有的那批, 避开版本差异大的新类型) */
+export const XFADE_TRANSITION_TYPES: readonly string[] = [
+  'fade', 'fadeblack', 'fadewhite',
+  'wipeleft', 'wiperight', 'wipup', 'wipedown',
+  'slideleft', 'slideright', 'slideup', 'slidedown',
+  'smoothleft', 'smoothright', 'smoothup', 'smoothdown',
+  'circlecrop', 'rectcrop', 'circleopen', 'circleclose',
+  'vertopen', 'vertclose', 'horzopen', 'horzclose',
+  'dissolve', 'pixelize', 'radial', 'distance',
+]
+export const XFADE_MIN_DURATION = 0.1
+export const XFADE_MAX_DURATION = 2.0
+
+/**
+ * 校验逐镜缝转场配置 → { ok, config, errors }
+ *   ★ 非法值【在这里就被挡住】(返回可读提示), 不让整次拼接失败、也不产生半成品成片。
+ */
+export function validateTransitionConfig(input: any): { ok: boolean; config: MergeTransitionConfig; errors: string[] } {
+  const errors: string[] = []
+  const config: MergeTransitionConfig = {}
+  if (input == null) return { ok: true, config, errors }
+  if (typeof input !== 'object') {
+    return { ok: false, config, errors: ['转场配置格式不对 (需要是一个对象)'] }
+  }
+  const rawDefaultType = input.defaultType != null ? String(input.defaultType) : undefined
+  if (rawDefaultType != null && rawDefaultType !== '') {
+    if (!XFADE_TRANSITION_TYPES.includes(rawDefaultType)) {
+      errors.push(`不支持的转场类型 "${rawDefaultType}" (可选: ${XFADE_TRANSITION_TYPES.join(' / ')})`)
+    } else {
+      config.defaultType = rawDefaultType
+    }
+  }
+  const rawDefaultDur = input.defaultDurationSec != null ? Number(input.defaultDurationSec) : undefined
+  if (rawDefaultDur != null && !Number.isNaN(rawDefaultDur)) {
+    if (rawDefaultDur < XFADE_MIN_DURATION || rawDefaultDur > XFADE_MAX_DURATION) {
+      errors.push(`默认转场时长 ${rawDefaultDur}s 超出范围 (${XFADE_MIN_DURATION}~${XFADE_MAX_DURATION}s)`)
+    } else {
+      config.defaultDurationSec = rawDefaultDur
+    }
+  }
+  const gaps: MergeTransitionGap[] = []
+  const rawGaps = Array.isArray(input.gaps) ? input.gaps : []
+  for (const g of rawGaps) {
+    const idx = Number(g?.index)
+    if (!Number.isInteger(idx) || idx < 0) {
+      errors.push(`镜缝索引不合法: ${JSON.stringify(g?.index)} (应为 0 起的整数)`)
+      continue
+    }
+    const type = String(g?.type || config.defaultType || 'fade')
+    if (!XFADE_TRANSITION_TYPES.includes(type)) {
+      errors.push(`第 ${idx + 1} 个镜缝: 不支持的转场类型 "${type}" (可选: ${XFADE_TRANSITION_TYPES.join(' / ')})`)
+      continue
+    }
+    const dur = Number(g?.durationSec)
+    if (!Number.isFinite(dur) || dur < XFADE_MIN_DURATION || dur > XFADE_MAX_DURATION) {
+      errors.push(`第 ${idx + 1} 个镜缝: 转场时长 ${g?.durationSec}s 不合法 (${XFADE_MIN_DURATION}~${XFADE_MAX_DURATION}s)`)
+      continue
+    }
+    gaps.push({ index: idx, type, durationSec: dur })
+  }
+  config.gaps = gaps
+  return { ok: errors.length === 0, config, errors }
+}
+
+/**
+ * 生成【逐镜缝】的转场列表 (长度 = 镜缝数)。
+ *   默认 = fade + XFADE_DURATION (与改动前一致); 逐镜缝覆盖优先。
+ */
+export function buildTransitionList(
+  config: MergeTransitionConfig | null | undefined,
+  gapCount: number,
+): Array<{ type: string; durationSec: number }> {
+  const defaultType = config?.defaultType || 'fade'
+  const defaultDur = config?.defaultDurationSec != null ? config.defaultDurationSec : XFADE_DURATION
+  const overrides = new Map<number, MergeTransitionGap>()
+  for (const g of config?.gaps || []) overrides.set(g.index, g)
+  const out: Array<{ type: string; durationSec: number }> = []
+  for (let i = 0; i < Math.max(0, gapCount); i++) {
+    const g = overrides.get(i)
+    out.push({
+      type: g?.type || defaultType,
+      durationSec: g?.durationSec != null ? g.durationSec : defaultDur,
+    })
+  }
+  return out
 }
 
 /**
@@ -314,8 +424,12 @@ async function mergeWithXfade(
   durationSec: number[],
   outputPath: string,
   encode: MergeEncodeParams,
+  transitions: Array<{ type: string; durationSec: number }>,
 ): Promise<void> {
+  // ★ Sprint 39 T2: 逐镜缝的转场 (默认全是 fade + XFADE_DURATION → 与改动前逐字一致)
   const D = XFADE_DURATION
+  const fmtDur = (d: number) => String(Number(Number(d).toFixed(3)))
+  const gap = (i: number) => transitions[i - 1] || { type: 'fade', durationSec: D }
 
   // 单个 clip 不需要转场, 直接转封装
   if (clips.length === 1) {
@@ -332,13 +446,14 @@ async function mergeWithXfade(
 
   // 构建 filter_complex
   const filters: string[] = []
-  let accDur = durationSec[0] - D
+  let accDur = durationSec[0] - gap(1).durationSec
   for (let i = 1; i < clips.length; i++) {
+    const g = gap(i)
     const offset = accDur.toFixed(3)
     const isLast = i === clips.length - 1
     const outLabel = isLast ? 'vout' : `v${i}`
-    filters.push(`[${i === 1 ? '0:v' : `v${i - 1}`}][${i}:v]xfade=transition=fade:duration=${D}:offset=${offset}[${outLabel}]`)
-    accDur += durationSec[i] - D
+    filters.push(`[${i === 1 ? '0:v' : `v${i - 1}`}][${i}:v]xfade=transition=${g.type}:duration=${fmtDur(g.durationSec)}:offset=${offset}[${outLabel}]`)
+    accDur += durationSec[i] - g.durationSec
   }
   // 音频: acrossfade 逐段交叉淡化 (xfade 只管视频)
   //
@@ -347,13 +462,15 @@ async function mergeWithXfade(
   //    输出末尾出现"只有声音没有画面"的尾巴。
   //    acrossfade 每段同样消耗 D 秒, 音画总时长一致 (实测 audio 5.616 vs video 5.600,
   //    16ms 差是 AAC 帧对齐误差, 听感/观感无影响)。
-  let accDurAudio = durationSec[0] - D
+  // ★ 音频的交叉淡化时长【跟随该镜缝的视频转场时长】→ 音画总时长一致 (AC)
+  let accDurAudio = durationSec[0] - gap(1).durationSec
   for (let i = 1; i < clips.length; i++) {
+    const g = gap(i)
     const isLast = i === clips.length - 1
     const outLabel = isLast ? 'aout' : `a${i}`
     const inLabel = i === 1 ? '0:a' : `a${i - 1}`
-    filters.push(`[${inLabel}][${i}:a]acrossfade=d=${D}:c1=tri:c2=tri[${outLabel}]`)
-    accDurAudio += durationSec[i] - D
+    filters.push(`[${inLabel}][${i}:a]acrossfade=d=${fmtDur(g.durationSec)}:c1=tri:c2=tri[${outLabel}]`)
+    accDurAudio += durationSec[i] - g.durationSec
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -380,7 +497,12 @@ async function mergeWithXfade(
   })
 }
 
-async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
+async function doMerge(
+  mergeId: number,
+  episodeId: number,
+  videos: string[],
+  transitionConfig?: MergeTransitionConfig,
+) {
   // 输出文件 (先定路径, 归一化与两种拼接方式都写到这里)
   const outputDir = path.join(STORAGE_ROOT, 'merged')
   fs.mkdirSync(outputDir, { recursive: true })
@@ -417,6 +539,7 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
         normalizedProbes.map(p => p.durationSec),
         outputPath,
         encode,
+        buildTransitionList(transitionConfig, normalized.length - 1),
       )
       usedXfade = true
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
