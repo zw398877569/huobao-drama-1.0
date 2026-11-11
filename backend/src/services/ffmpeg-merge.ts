@@ -66,7 +66,7 @@ function toAbsPath(relativePath: string): string {
 export async function mergeEpisodeVideos(
   episodeId: number,
   dramaId: number,
-  options?: { transitions?: MergeTransitionConfig },
+  options?: { transitions?: MergeTransitionConfig; grade?: MergeGradeConfig },
 ): Promise<number> {
   const storyboards = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
@@ -100,7 +100,7 @@ export async function mergeEpisodeVideos(
   const mergeId = Number(res.lastInsertRowid)
 
   // 异步执行 (★ Sprint 39 T2: 逐镜缝转场配置透传给拼接执行)
-  doMerge(mergeId, episodeId, videos, options?.transitions).catch(err => {
+  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade).catch(err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
     console.error(`[Merge] Failed:`, err)
     db.update(schema.videoMerges)
@@ -175,6 +175,76 @@ export function resolveMergeEncodeParams(env: Record<string, string | undefined>
     return { crf, preset: DEFAULT_MERGE_PRESET, rejectedPreset: rawPreset }
   }
   return { crf, preset: rawPreset, rejectedPreset: null }
+}
+
+/**
+ * ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (可选, 默认关) —— 消除各镜之间的色调/亮度漂移。
+ *
+ * 【默认 = 改动前】enabled=false → 完全不加滤镜 → 成片逐帧一致。
+ * 【用 ffmpeg 自带的 eq 滤镜】不引入任何外部素材 (不下载 LUT, 不往仓库加二进制资源)。
+ * 【持久化】按集存一份 JSON (data/merge-settings/episode-<id>.json) → 用户下次再拼同一集, 参数仍然生效。
+ */
+export interface MergeGradeConfig {
+  enabled: boolean
+  /** 亮度 -1 ~ 1 (0 = 不动) */
+  brightness: number
+  /** 对比度 0.5 ~ 2 (1 = 不动) */
+  contrast: number
+  /** 饱和度 0 ~ 3 (1 = 不动) */
+  saturation: number
+}
+export const DEFAULT_MERGE_GRADE: MergeGradeConfig = { enabled: false, brightness: 0, contrast: 1, saturation: 1 }
+export interface MergeSettings { grade: MergeGradeConfig }
+const MERGE_SETTINGS_DIR = path.join(DATA_ROOT, 'merge-settings')
+
+/** 校验调色参数 (非法值挡住 → 不影响拼接) */
+export function validateGradeConfig(input: any): { ok: boolean; config: MergeGradeConfig; errors: string[] } {
+  const config: MergeGradeConfig = { ...DEFAULT_MERGE_GRADE }
+  const errors: string[] = []
+  if (input == null) return { ok: true, config, errors }
+  if (typeof input !== 'object') return { ok: false, config, errors: ['调色配置格式不对 (需要是一个对象)'] }
+  config.enabled = !!input.enabled
+  const ranges: Array<[keyof MergeGradeConfig, number, number]> = [
+    ['brightness', -1, 1], ['contrast', 0.5, 2], ['saturation', 0, 3],
+  ]
+  for (const [k, min, max] of ranges) {
+    // 没传这一项 → 保持默认值 (只校验传了的)
+    if (input[k] == null) continue
+    const v = Number(input[k])
+    if (!Number.isFinite(v)) { errors.push(`${k} 不是数字`); continue }
+    if (v < min || v > max) { errors.push(`${k} 超出范围 (${min}~${max})`); continue }
+    (config as any)[k] = v
+  }
+  return { ok: errors.length === 0, config, errors }
+}
+
+function mergeSettingsPath(episodeId: number) {
+  return path.join(MERGE_SETTINGS_DIR, `episode-${episodeId}.json`)
+}
+
+/** 读本集的拼接设置 (读不到 → 默认值: 调色关闭) */
+export function readMergeSettings(episodeId: number): MergeSettings {
+  try {
+    const raw = fs.readFileSync(mergeSettingsPath(episodeId), 'utf-8')
+    const parsed = JSON.parse(raw)
+    const v = validateGradeConfig(parsed?.grade)
+    return { grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE } }
+  } catch {
+    return { grade: { ...DEFAULT_MERGE_GRADE } }
+  }
+}
+
+/** 写本集的拼接设置 (调色参数持久化 → 下次再拼同一集仍然生效) */
+export function writeMergeSettings(episodeId: number, patch: Partial<MergeSettings>): MergeSettings {
+  const current = readMergeSettings(episodeId)
+  const next: MergeSettings = { grade: patch.grade ?? current.grade }
+  try {
+    fs.mkdirSync(MERGE_SETTINGS_DIR, { recursive: true })
+    fs.writeFileSync(mergeSettingsPath(episodeId), JSON.stringify({ ...next, updatedAt: now() }, null, 2), 'utf-8')
+  } catch (err: any) {
+    logTaskWarn('MergeTask', 'merge-settings-persist-failed', { episodeId, error: err?.message })
+  }
+  return next
 }
 
 /**
@@ -425,6 +495,7 @@ async function mergeWithXfade(
   outputPath: string,
   encode: MergeEncodeParams,
   transitions: Array<{ type: string; durationSec: number }>,
+  grade?: MergeGradeConfig,
 ): Promise<void> {
   // ★ Sprint 39 T2: 逐镜缝的转场 (默认全是 fade + XFADE_DURATION → 与改动前逐字一致)
   const D = XFADE_DURATION
@@ -473,13 +544,20 @@ async function mergeWithXfade(
     accDurAudio += durationSec[i] - g.durationSec
   }
 
+  // ★ Sprint 39 T3: 全片统一调色 —— 套在【所有转场之后】(一次性作用于整片, 不是只作用在某几段)
+  let videoOut = 'vout'
+  if (grade?.enabled) {
+    filters.push(`[vout]eq=brightness=${grade.brightness}:contrast=${grade.contrast}:saturation=${grade.saturation}[vgraded]`)
+    videoOut = 'vgraded'
+  }
+
   await new Promise<void>((resolve, reject) => {
     const cmd = ffmpeg()
     for (const clip of clips) cmd.input(clip)
     cmd
       .complexFilter(filters.join(';'))
       .outputOptions([
-        '-map', '[vout]',
+        '-map', `[${videoOut}]`,
         '-map', '[aout]',
         '-c:v', 'libx264',
         // ★ Sprint 39 T1: crf/preset 可配 (env), 默认 crf 18 + preset medium (比改动前好)
@@ -502,6 +580,7 @@ async function doMerge(
   episodeId: number,
   videos: string[],
   transitionConfig?: MergeTransitionConfig,
+  gradeConfig?: MergeGradeConfig,
 ) {
   // 输出文件 (先定路径, 归一化与两种拼接方式都写到这里)
   const outputDir = path.join(STORAGE_ROOT, 'merged')
@@ -540,6 +619,7 @@ async function doMerge(
         outputPath,
         encode,
         buildTransitionList(transitionConfig, normalized.length - 1),
+        gradeConfig,
       )
       usedXfade = true
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
@@ -582,6 +662,10 @@ async function doMerge(
             // ★ Sprint 39 T1: 同上 (硬切回退路径也要用同一套质量参数)
             '-preset', encode.preset,
             '-crf', String(encode.crf),
+            // ★ Sprint 39 T3: 硬切回退路径也要套全片调色 (与 xfade 路径一致)
+            ...(gradeConfig?.enabled
+              ? ['-vf', `eq=brightness=${gradeConfig.brightness}:contrast=${gradeConfig.contrast}:saturation=${gradeConfig.saturation}`]
+              : []),
             '-c:a', 'aac',
             '-ar', '48000',
             '-b:a', '192k',

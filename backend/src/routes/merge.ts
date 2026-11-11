@@ -2,7 +2,10 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest } from '../utils/response.js'
-import { mergeEpisodeVideos, validateTransitionConfig } from '../services/ffmpeg-merge.js'
+import {
+  mergeEpisodeVideos, validateTransitionConfig, validateGradeConfig,
+  readMergeSettings, writeMergeSettings,
+} from '../services/ffmpeg-merge.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
@@ -47,6 +50,21 @@ app.post('/episodes/:id/merge', async (c) => {
     return badRequest(c, `转场配置不合法: ${t.errors.join('; ')}`)
   }
 
+  // ★ Sprint 39 T3 (PM msg-20261111-169): 全片调色参数 —— 校验 + 持久化 (下次再拼同一集仍然生效)
+  let grade = readMergeSettings(episodeId).grade
+  if (body?.grade != null) {
+    const g = validateGradeConfig(body.grade)
+    if (!g.ok) {
+      logTaskWarn('MergeAPI', 'episode-merge-invalid-grade', {
+        episodeId, dramaId: ep.dramaId, errors: g.errors,
+        hint: '调色配置不合法 → 已拒绝, 没有新建 merge 记录',
+      })
+      return badRequest(c, `调色配置不合法: ${g.errors.join('; ')}`)
+    }
+    grade = g.config
+    writeMergeSettings(episodeId, { grade })
+  }
+
   // ★ Sprint 38 T2-C (PM msg-20261110-165): 本集已有【处理中】的 merge → 直接复用那一条 ——
   //   不新建记录、不再起第二个 ffmpeg (两个 ffmpeg 抢 CPU; 而且用户以为没点上会再点一次)。
   //   以前这个接口无去重 → 连点两次就是两条记录 + 两个 ffmpeg 抢资源。
@@ -67,13 +85,20 @@ app.post('/episodes/:id/merge', async (c) => {
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId })
-    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config })
+    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade })
     logTaskSuccess('MergeAPI', 'episode-merge', { episodeId, mergeId })
     return success(c, { merge_id: mergeId, status: 'processing' })
   } catch (err: any) {
     logTaskError('MergeAPI', 'episode-merge', { episodeId, error: err.message })
     return badRequest(c, err.message)
   }
+})
+
+// GET /episodes/:id/merge/settings — 读本集的拼接设置 (★ Sprint 39 T3: 调色参数等, 持久化)
+//   前端进页面时拉一次 → 用户改完的调色参数下次再拼同一集仍然生效
+app.get('/episodes/:id/merge/settings', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  return success(c, readMergeSettings(episodeId))
 })
 
 // GET /episodes/:id/merge — 查询拼接状态

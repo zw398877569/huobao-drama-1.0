@@ -137,6 +137,8 @@ export const mergeAPI = {
   // ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (可选, 不传 = 与改动前一致)
   merge: (epId: number, body?: any) => api.post(`/merge/episodes/${epId}/merge`, body || {}),
   status: (epId: number) => api.get(`/merge/episodes/${epId}/merge`),
+  // ★ Sprint 39 T3 (PM msg-20261111-169): 拼接设置 (调色参数等, 后端持久化)
+  settings: (epId: number) => api.get(`/merge/episodes/${epId}/merge/settings`),
 }
 export const agentAPI = {
   chat: (type: string, body: { message: string; drama_id: number; episode_id: number }) =>

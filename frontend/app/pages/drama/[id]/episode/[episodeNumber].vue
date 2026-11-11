@@ -1945,6 +1945,36 @@
                   </div>
                 </div>
               </div>
+
+              <!-- ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (默认关闭; 参数后端持久化) -->
+              <div class="merge-transition-config">
+                <button class="btn btn-sm" @click="mergeGradeOpen = !mergeGradeOpen">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20z"/></svg>
+                  调色设置
+                  <span class="dim" style="font-size:11px">{{ mergeGrade.enabled ? '已开启' : '默认关闭' }}</span>
+                </button>
+                <div v-if="mergeGradeOpen" class="merge-transition-panel">
+                  <label class="merge-transition-row" style="cursor:pointer">
+                    <input type="checkbox" v-model="mergeGrade.enabled" />
+                    <span style="font-size:11px">启用全片统一调色 (消除各镜之间的色调/亮度漂移)</span>
+                  </label>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">亮度</span>
+                    <input v-model.number="mergeGrade.brightness" type="number" min="-1" max="1" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">-1 ~ 1 (0 = 不动)</span>
+                  </div>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">对比度</span>
+                    <input v-model.number="mergeGrade.contrast" type="number" min="0.5" max="2" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">0.5 ~ 2 (1 = 不动)</span>
+                  </div>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">饱和度</span>
+                    <input v-model.number="mergeGrade.saturation" type="number" min="0" max="3" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">0 ~ 3 (1 = 不动)</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="export-list">
               <div class="export-list-head">镜头概览</div>
@@ -2949,6 +2979,8 @@ async function refresh() {
     toast.error(e.message)
   }
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
+  // ★ Sprint 39 T3: 拉本集的拼接设置 (调色参数等, 后端持久化 → 下次再拼同一集仍然生效)
+  await loadMergeSettings()
 }
 
 function sleep(ms) {
@@ -3096,6 +3128,16 @@ function applyMergeTransitionToAll() {
   mergeTransitionRows.value = mergeTransitionRows.value.map(r => ({ ...r, type: t.type, durationSec: t.durationSec }))
 }
 
+// ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (可选, 默认关闭 = 与改动前逐帧一致)
+const mergeGradeOpen = ref(false)
+const mergeGrade = ref({ enabled: false, brightness: 0, contrast: 1, saturation: 1 })
+async function loadMergeSettings() {
+  try {
+    const st: any = await mergeAPI.settings(epId.value)
+    if (st?.grade) mergeGrade.value = { ...mergeGrade.value, ...st.grade }
+  } catch { /* 拉不到就用默认值 (调色关闭) */ }
+}
+
 async function doMerge() {
   if (merging.value) { toast.info('拼接正在进行中, 请稍候'); return }
   try {
@@ -3106,12 +3148,26 @@ async function doMerge() {
       toast.error(`第 ${badRow.index + 1} 个镜缝的转场时长必须在 ${MERGE_TRANSITION_MIN}~${MERGE_TRANSITION_MAX} 秒之间`)
       return
     }
+    // ★ Sprint 39 T3: 调色参数本地校验 (不合法不提交; 后端也会再挡一次)
+    const g = mergeGrade.value
+    if (g.enabled) {
+      const bad = [
+        ['亮度', Number(g.brightness), -1, 1],
+        ['对比度', Number(g.contrast), 0.5, 2],
+        ['饱和度', Number(g.saturation), 0, 3],
+      ].find(([, v, min, max]) => !(Number.isFinite(v as number) && (v as number) >= (min as number) && (v as number) <= (max as number)))
+      if (bad) {
+        toast.error(`${bad[0]}必须在 ${bad[2]}~${bad[3]} 之间`)
+        return
+      }
+    }
     const resp: any = await mergeAPI.merge(epId.value, {
       transitions: {
         defaultType: 'fade',
         defaultDurationSec: 0.4,
         gaps: mergeTransitionRows.value.map(r => ({ index: r.index, type: r.type, durationSec: Number(r.durationSec) })),
       },
+      grade: { enabled: !!g.enabled, brightness: Number(g.brightness), contrast: Number(g.contrast), saturation: Number(g.saturation) },
     })
     // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
     //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)
