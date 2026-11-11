@@ -24,6 +24,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ★ Sprint 39 (PM msg-20261111-168): 多架构构建 —— amd64 (现有 win 主机) + arm64 (为将来
+      #   Apple Silicon 的 Mac 铺路)。同一个 tag 下两个架构都能拉到 (manifest list)。
+      #   ★ binfmt 注册: GitHub 的 amd64 runner 上跑 arm64 的 RUN 步骤 (apt-get / npm) 需要
+      #     注册 QEMU 的 binfmt handler, 否则会报 exec format error。
+      #     注: 产出的仍然是【原生 arm64 镜像】(同样的 Dockerfile/基础镜像/apt 源), 模拟只发生在构建过程。
+      - name: Set up QEMU (register binfmt handlers)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -49,7 +59,10 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          # ★ Sprint 39 (PM msg-20261111-168): 同时产出 linux/amd64 + linux/arm64。
+          #   amd64 的镜像内容与改动前【完全一致】(同样的 Dockerfile / build-args / 源) → win 主机零影响。
+          #   构建日志里每个步骤都带 [linux/amd64] / [linux/arm64] 前缀 → 某个架构失败时能直接看出是哪个。
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
