@@ -140,6 +140,40 @@ export function rankSpecsByFrequency(
 }
 
 /**
+ * ★ Sprint 39 T1 (PM msg-20261111-169): 成片编码参数 —— 可配, 且默认值【比改动前更好】。
+ *
+ * 【为什么】改动前: crf 23 + preset medium → 成片细节偏软 (文件也偏小)。
+ * 【原则】D1 质量优先: 禁止用【降低画质】换速度 → preset 不允许被降级;
+ *   crf 默认从 23 提到 18 (画质档位更高 → 码率/体积/细节保留都明显更好), 编码变慢是预期代价。
+ * 【可配】环境变量 MERGE_CRF (10~40, 默认 18) / MERGE_PRESET (默认 medium)。
+ *   ★ preset 传了比 medium 更快的档 (fast/faster/veryfast/superfast/ultrafast) → 忽略并回落 medium
+ *     (防止有人为了提速悄悄把画质调差) —— 回落时会记一条 flow-log。
+ */
+const DEFAULT_MERGE_CRF = 18
+const DEFAULT_MERGE_PRESET = 'medium'
+/** 比 medium 更快 = 画质更差的 preset 名单 (AC: 不允许用它们换速度) */
+const FASTER_THAN_MEDIUM_PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast']
+
+export interface MergeEncodeParams {
+  crf: number
+  preset: string
+  /** 传了但被挡下来的 preset (null = 没传或没被挡) */
+  rejectedPreset?: string | null
+}
+
+/** 解析成片编码参数 (env 可配; preset 不可被降级) */
+export function resolveMergeEncodeParams(env: Record<string, string | undefined> = process.env): MergeEncodeParams {
+  const rawCrf = Number(env.MERGE_CRF)
+  const crf = Number.isFinite(rawCrf) && rawCrf >= 10 && rawCrf <= 40 ? rawCrf : DEFAULT_MERGE_CRF
+  const rawPreset = String(env.MERGE_PRESET || '').trim().toLowerCase()
+  if (!rawPreset) return { crf, preset: DEFAULT_MERGE_PRESET, rejectedPreset: null }
+  if (FASTER_THAN_MEDIUM_PRESETS.includes(rawPreset)) {
+    return { crf, preset: DEFAULT_MERGE_PRESET, rejectedPreset: rawPreset }
+  }
+  return { crf, preset: rawPreset, rejectedPreset: null }
+}
+
+/**
  * Task B: 音频 + 规格归一化 (拼接前置)
  *
  * concat demuxer 遇到流结构不一致的输入会【静默降级为纯视频输出, rc=0 不报错】,
@@ -153,7 +187,7 @@ export function rankSpecsByFrequency(
  *
  * @returns 归一化后的绝对路径列表 (可直接喂给 concat / xfade)
  */
-async function normalizeClips(videos: string[]): Promise<string[]> {
+async function normalizeClips(videos: string[], encode: MergeEncodeParams): Promise<string[]> {
   fs.mkdirSync(NORMALIZE_DIR, { recursive: true })
 
   const absPaths = videos.map(toAbsPath)
@@ -216,8 +250,9 @@ async function normalizeClips(videos: string[]): Promise<string[]> {
           '-map', '0:v',
           '-map', probe.hasAudio ? '0:a' : '1:a',
           '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-crf', '23',
+          // ★ Sprint 39 T1: 中间产物也要保住细节 (它会被最终编码再压一次) → 用同一套质量参数
+          '-preset', encode.preset,
+          '-crf', String(encode.crf),
           '-vf', `scale=${targetW}:${targetH},fps=${targetFps}`,
           '-c:a', 'aac',
           '-ar', '48000',
@@ -274,7 +309,12 @@ async function normalizeClips(videos: string[]): Promise<string[]> {
  * @param clips 已归一化的绝对路径 (Task B 产出, 规格一致)
  * @param durationSec 每个 clip 的时长 (与 clips 同序)
  */
-async function mergeWithXfade(clips: string[], durationSec: number[], outputPath: string): Promise<void> {
+async function mergeWithXfade(
+  clips: string[],
+  durationSec: number[],
+  outputPath: string,
+  encode: MergeEncodeParams,
+): Promise<void> {
   const D = XFADE_DURATION
 
   // 单个 clip 不需要转场, 直接转封装
@@ -325,8 +365,9 @@ async function mergeWithXfade(clips: string[], durationSec: number[], outputPath
         '-map', '[vout]',
         '-map', '[aout]',
         '-c:v', 'libx264',
-        '-preset', 'medium',
-        '-crf', '23',
+        // ★ Sprint 39 T1: crf/preset 可配 (env), 默认 crf 18 + preset medium (比改动前好)
+        '-preset', encode.preset,
+        '-crf', String(encode.crf),
         '-c:a', 'aac',
         '-ar', '48000',
         '-b:a', '192k',
@@ -346,10 +387,21 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
   const outputFilename = `${uuid()}.mp4`
   const outputPath = path.join(outputDir, outputFilename)
 
+  // ★ Sprint 39 T1: 解析编码参数 (env 可配); preset 被降级时留痕
+  const encode = resolveMergeEncodeParams()
+  if (encode.rejectedPreset) {
+    logTaskWarn('MergeTask', 'merge-preset-rejected', {
+      mergeId, episodeId,
+      requested: encode.rejectedPreset,
+      used: encode.preset,
+      hint: '比 medium 更快的 preset 会降低画质 → 已忽略 (AC: 禁止用降 preset 换速度)',
+    })
+  }
+
   // ── Task B 前置: 音频 + 规格归一化 ──
   //   concat demuxer 遇流结构不一致会静默输出纯视频 (rc=0), 所以必须先统一。
   //   任一 clip 归一化失败 → throw (fail-fast, 不静默跳过)
-  const normalized = await normalizeClips(videos)
+  const normalized = await normalizeClips(videos, encode)
   const normalizedProbes: MediaProbe[] = []
   for (const p of normalized) normalizedProbes.push(await probeMedia(p))
   const anyInputHasAudio = normalizedProbes.some(p => p.hasAudio)
@@ -364,6 +416,7 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
         normalized,
         normalizedProbes.map(p => p.durationSec),
         outputPath,
+        encode,
       )
       usedXfade = true
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
@@ -403,8 +456,9 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
           .outputOptions([
             '-fflags', '+genpts',
             '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
+            // ★ Sprint 39 T1: 同上 (硬切回退路径也要用同一套质量参数)
+            '-preset', encode.preset,
+            '-crf', String(encode.crf),
             '-c:a', 'aac',
             '-ar', '48000',
             '-b:a', '192k',
