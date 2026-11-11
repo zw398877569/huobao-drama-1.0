@@ -590,6 +590,8 @@ async function doMerge(
 
   // ★ Sprint 39 T1: 解析编码参数 (env 可配); preset 被降级时留痕
   const encode = resolveMergeEncodeParams()
+  // ★ Sprint 39 T2: 逐镜缝转场列表 (默认 = fade + 400ms; 逐镜缝覆盖优先) → 日志里要能查
+  const transitions = buildTransitionList(transitionConfig, Math.max(0, videos.length - 1))
   if (encode.rejectedPreset) {
     logTaskWarn('MergeTask', 'merge-preset-rejected', {
       mergeId, episodeId,
@@ -618,7 +620,7 @@ async function doMerge(
         normalizedProbes.map(p => p.durationSec),
         outputPath,
         encode,
-        buildTransitionList(transitionConfig, normalized.length - 1),
+        transitions,
         gradeConfig,
       )
       usedXfade = true
@@ -719,6 +721,13 @@ async function doMerge(
     .set({ videoUrl: mergedRelative, updatedAt: now() })
     .where(eq(schema.episodes.id, episodeId)).run()
 
+  // ── ★ Sprint 39 T5 (PM msg-20261111-169): 拼接流程日志补全 ──
+  //   ★ 没有配置时也记录默认值 (不然事后分不清『没配』还是『没记』)
+  //   ★ 逐镜缝的转场记成【一条结构化记录】里的列表, 不是一行一镜 (19 镜就 19 行 → 日志体积异常膨胀)
+  let outputSizeBytes = 0
+  try { outputSizeBytes = fs.statSync(outputPath).size } catch { /* 忽略 */ }
+  const avgBitrateKbps = duration > 0 ? Math.round((outputSizeBytes * 8) / duration / 1000) : 0
+
   logTaskSuccess('MergeTask', 'episode-merge', {
     mergeId,
     episodeId,
@@ -729,6 +738,36 @@ async function doMerge(
     xfadeFallbackReason,
     outputHasAudio: outputProbe.hasAudio,
     anyInputHasAudio,
+    // 逐镜缝转场 (一条记录里装下整个列表)
+    transitions: transitions.map((t, i) => ({
+      gap: i + 1,                       // 第 1 个镜缝 = 第1镜与第2镜之间
+      type: t.type,
+      durationMs: Math.round(t.durationSec * 1000),
+    })),
+    transitionCount: transitions.length,
+    // 全片调色 (默认关闭也要记)
+    grade: {
+      enabled: !!gradeConfig?.enabled,
+      brightness: gradeConfig?.brightness ?? DEFAULT_MERGE_GRADE.brightness,
+      contrast: gradeConfig?.contrast ?? DEFAULT_MERGE_GRADE.contrast,
+      saturation: gradeConfig?.saturation ?? DEFAULT_MERGE_GRADE.saturation,
+    },
+    // 字幕烧录时机 (★ T4 会接成可切换的; 现在固定在合成阶段 = 改动前的行为)
+    subtitleStage: 'compose',
+    // 最终成片的编码参数
+    encode: {
+      codec: 'h264',
+      preset: encode.preset,
+      crf: encode.crf,
+      width: outputProbe.width,
+      height: outputProbe.height,
+      fps: outputProbe.fps,
+      audio: 'aac/48000/192k',
+      avgBitrateKbps,
+      sizeBytes: outputSizeBytes,
+    },
+    // 是否走了兜底路径 (转场失败 → 硬切 concat)
+    usedFallbackPath: !usedXfade,
   })
 }
 
