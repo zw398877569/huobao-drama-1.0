@@ -731,7 +731,16 @@ async function doMerge(
   if (bgmConfig?.file) {
     const abs = resolveBgmPath(bgmConfig.file)
     if (abs) {
-      bgmSource = { path: abs, config: bgmConfig }
+      // 探一下: 文件里没有音轨 (例: 误放了一个纯视频 mp4) → 当作没配, 不让整次拼接失败
+      const probe = await probeMedia(abs)
+      if (probe.hasAudio) {
+        bgmSource = { path: abs, config: bgmConfig }
+      } else {
+        logTaskWarn('MergeTask', 'bgm-no-audio', {
+          mergeId, episodeId, file: bgmConfig.file,
+          hint: 'BGM 文件里没有音轨 → 这次不铺 BGM (不阻断拼接)',
+        })
+      }
     } else {
       logTaskWarn('MergeTask', 'bgm-missing', {
         mergeId, episodeId, file: bgmConfig.file,
