@@ -120,6 +120,8 @@ import cron from './routes/cron.js'
 import aiVoices from './routes/aiVoices.js'
 import aiVoicesAsync from './routes/aiVoicesAsync.js'
 import faceArchive from './routes/faceArchive.js'
+// ★ Sprint 40 T2 (PM msg-20261112-171): 素材库只读接口 (bgm / sfx)
+import mediaLibrary from './routes/media-library.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { ensureLogDir } from './utils/file-log.js'
 import { initBatchVideoScheduler } from './services/batch-video-scheduler.js'
@@ -164,6 +166,7 @@ api.route('/style-presets', stylePresets)
 api.route('/ai-voices', aiVoices)
 api.route('/ai-voices-async', aiVoicesAsync)
 api.route('/face-entries', faceArchive)
+api.route('/media-library', mediaLibrary)
 
 app.route('/api/v1/_debug', agnesDebug)
 app.route('/api/v1', api)
