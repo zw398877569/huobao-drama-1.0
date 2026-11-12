@@ -1874,6 +1874,77 @@
           </div>
           <div v-else class="export-split">
             <div class="export-main">
+              <!-- ★ Sprint 39 追加单 170 (PM msg-20261112-170): 三个配置入口移到成片【上方】+ 横着并排
+                   (有成片 / 没拼过 两种状态都在上方 —— 用户要能在拼接之前就改字幕时机和调色) -->
+              <div class="merge-config-row">
+                <button class="btn btn-sm merge-config-btn" @click="mergeTransitionsOpen = !mergeTransitionsOpen">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  转场设置
+                  <span class="dim" style="font-size:11px">{{ mergeTransitionRows.length }} 个镜缝</span>
+                </button>
+
+                <!-- ★ Sprint 39 T4: 字幕烧录时机 (默认在合成阶段烧 = 改动前的行为) -->
+                <div class="merge-config-item">
+                  <span class="dim" style="font-size:11px">字幕烧录</span>
+                  <select v-model="mergeSubtitleStage" class="merge-transition-select">
+                    <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
+                    <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
+                  </select>
+                </div>
+
+                <!-- ★ Sprint 39 T3: 全片统一调色 (默认关闭; 参数后端持久化) -->
+                <button class="btn btn-sm merge-config-btn" @click="mergeGradeOpen = !mergeGradeOpen">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20z"/></svg>
+                  调色设置
+                  <span class="dim" style="font-size:11px">{{ mergeGrade.enabled ? '已开启' : '默认关闭' }}</span>
+                </button>
+              </div>
+
+              <!-- 展开的面板: 放在整行【下面】(宽度与成片一致, 内容自己滚动 → 不把视频顶出视口) -->
+              <!-- ★ Sprint 39 T2: 逐镜缝转场配置 (默认折叠收起) -->
+                <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
+                  <div class="merge-transition-toolbar">
+                    <span class="dim" style="font-size:11px">全部镜缝</span>
+                    <select v-model="mergeTransitionAll.type" class="merge-transition-select">
+                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                    <input v-model.number="mergeTransitionAll.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
+                    <span class="dim" style="font-size:11px">秒</span>
+                    <button class="btn btn-sm" @click="applyMergeTransitionToAll">应用到全部</button>
+                  </div>
+                  <div v-for="r in mergeTransitionRows" :key="r.index" class="merge-transition-row">
+                    <span class="mono dim" style="font-size:11px; width:70px">#{{ r.index + 1 }}→#{{ r.index + 2 }}</span>
+                    <select v-model="r.type" class="merge-transition-select">
+                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                    <input v-model.number="r.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
+                    <span class="dim" style="font-size:11px">秒</span>
+                  </div>
+                </div>
+
+              <!-- ★ Sprint 39 T3: 全片统一调色面板 -->
+                <div v-if="mergeGradeOpen" class="merge-transition-panel">
+                  <label class="merge-transition-row" style="cursor:pointer">
+                    <input type="checkbox" v-model="mergeGrade.enabled" />
+                    <span style="font-size:11px">启用全片统一调色 (消除各镜之间的色调/亮度漂移)</span>
+                  </label>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">亮度</span>
+                    <input v-model.number="mergeGrade.brightness" type="number" min="-1" max="1" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">-1 ~ 1 (0 = 不动)</span>
+                  </div>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">对比度</span>
+                    <input v-model.number="mergeGrade.contrast" type="number" min="0.5" max="2" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">0.5 ~ 2 (1 = 不动)</span>
+                  </div>
+                  <div class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; width:52px">饱和度</span>
+                    <input v-model.number="mergeGrade.saturation" type="number" min="0" max="3" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
+                    <span class="dim" style="font-size:11px">0 ~ 3 (1 = 不动)</span>
+                  </div>
+                </div>
+
               <template v-if="mergeUrl">
                 <video :src="'/' + mergeUrl" controls class="export-video" />
                 <div class="export-bar">
@@ -1918,72 +1989,6 @@
                 </div>
               </template>
 
-              <!-- ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (默认折叠收起) -->
-              <div class="merge-transition-config">
-                <button class="btn btn-sm" @click="mergeTransitionsOpen = !mergeTransitionsOpen">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  转场设置
-                  <span class="dim" style="font-size:11px">{{ mergeTransitionRows.length }} 个镜缝</span>
-                </button>
-                <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
-                  <div class="merge-transition-toolbar">
-                    <span class="dim" style="font-size:11px">全部镜缝</span>
-                    <select v-model="mergeTransitionAll.type" class="merge-transition-select">
-                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
-                    </select>
-                    <input v-model.number="mergeTransitionAll.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
-                    <span class="dim" style="font-size:11px">秒</span>
-                    <button class="btn btn-sm" @click="applyMergeTransitionToAll">应用到全部</button>
-                  </div>
-                  <div v-for="r in mergeTransitionRows" :key="r.index" class="merge-transition-row">
-                    <span class="mono dim" style="font-size:11px; width:70px">#{{ r.index + 1 }}→#{{ r.index + 2 }}</span>
-                    <select v-model="r.type" class="merge-transition-select">
-                      <option v-for="t in mergeTransitionTypes" :key="t" :value="t">{{ t }}</option>
-                    </select>
-                    <input v-model.number="r.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
-                    <span class="dim" style="font-size:11px">秒</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机 (默认在合成阶段烧 = 改动前的行为) -->
-              <div class="merge-transition-row" style="margin-top:12px">
-                <span class="dim" style="font-size:11px; width:70px">字幕烧录</span>
-                <select v-model="mergeSubtitleStage" class="merge-transition-select" style="width:220px">
-                  <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
-                  <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
-                </select>
-              </div>
-
-              <!-- ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (默认关闭; 参数后端持久化) -->
-              <div class="merge-transition-config">
-                <button class="btn btn-sm" @click="mergeGradeOpen = !mergeGradeOpen">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20z"/></svg>
-                  调色设置
-                  <span class="dim" style="font-size:11px">{{ mergeGrade.enabled ? '已开启' : '默认关闭' }}</span>
-                </button>
-                <div v-if="mergeGradeOpen" class="merge-transition-panel">
-                  <label class="merge-transition-row" style="cursor:pointer">
-                    <input type="checkbox" v-model="mergeGrade.enabled" />
-                    <span style="font-size:11px">启用全片统一调色 (消除各镜之间的色调/亮度漂移)</span>
-                  </label>
-                  <div class="merge-transition-row">
-                    <span class="dim" style="font-size:11px; width:52px">亮度</span>
-                    <input v-model.number="mergeGrade.brightness" type="number" min="-1" max="1" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
-                    <span class="dim" style="font-size:11px">-1 ~ 1 (0 = 不动)</span>
-                  </div>
-                  <div class="merge-transition-row">
-                    <span class="dim" style="font-size:11px; width:52px">对比度</span>
-                    <input v-model.number="mergeGrade.contrast" type="number" min="0.5" max="2" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
-                    <span class="dim" style="font-size:11px">0.5 ~ 2 (1 = 不动)</span>
-                  </div>
-                  <div class="merge-transition-row">
-                    <span class="dim" style="font-size:11px; width:52px">饱和度</span>
-                    <input v-model.number="mergeGrade.saturation" type="number" min="0" max="3" step="0.01" class="merge-transition-input" :disabled="!mergeGrade.enabled" />
-                    <span class="dim" style="font-size:11px">0 ~ 3 (1 = 不动)</span>
-                  </div>
-                </div>
-              </div>
             </div>
             <div class="export-list">
               <div class="export-list-head">镜头概览</div>
@@ -4599,7 +4604,7 @@ onMounted(() => { refresh() })
 /* ★ Sprint 39 T2: 逐镜缝转场配置面板 */
 .merge-transition-config { margin-top: 12px; }
 .merge-transition-panel {
-  margin-top: 8px; max-height: 260px; overflow: auto;
+  margin-top: 8px; max-height: 180px; overflow-y: auto;
   border: 1px solid var(--border); border-radius: 6px; padding: 8px;
   display: flex; flex-direction: column; gap: 4px;
 }
@@ -4607,7 +4612,7 @@ onMounted(() => { refresh() })
   display: flex; align-items: center; gap: 6px;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.merge-transition-row { display: flex; align-items: center; gap: 6px; }
+.merge-transition-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .merge-transition-select {
   font-size: 11px; padding: 2px 4px; border-radius: 4px;
   border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
@@ -4615,6 +4620,26 @@ onMounted(() => { refresh() })
 .merge-transition-input {
   width: 70px; font-size: 11px; padding: 2px 4px; border-radius: 4px;
   border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
+}
+
+/* ★ Sprint 39 追加单 170 (PM msg-20261112-170): 三个配置入口 (转场设置 / 字幕烧录 / 调色设置)
+   移到成片【上方】, 横着并排; 容器宽度与成片播放器一致 (720px, 同 .export-video)。 */
+.merge-config-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  width: 100%; max-width: 720px;
+  margin-bottom: 12px;
+}
+.merge-config-btn { display: inline-flex; align-items: center; gap: 4px; }
+.merge-config-item { display: flex; align-items: center; gap: 6px; }
+/* 下拉框与按钮同高 (studio.css: .btn-sm = padding 4px 10px / font-size 12px → 高约 25px) */
+.merge-config-row .merge-transition-select { height: 25px; padding: 0 6px; font-size: 12px; width: 220px; }
+.merge-transition-panel { width: 100%; max-width: 720px; }
+.merge-transition-panel .merge-transition-select { width: 150px; }
+/* 窄屏 (<900px): 三个入口换行, 不出横向滚动条 */
+@media (max-width: 900px) {
+  .merge-config-row { flex-direction: column; align-items: stretch; }
+  .merge-config-item { justify-content: space-between; }
+  .merge-config-row .merge-transition-select { width: 100%; }
 }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
