@@ -1909,6 +1909,13 @@
                 <span class="dim" style="font-size:11px">整集视频 + 每镜字幕 + 结构化 manifest (给人工精修用)</span>
               </div>
 
+              <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)
+                   精剪成片【只放本机, 不回流本项目】(PM 2026-11-12 决策 D6) -->
+              <div class="dim" style="font-size:11px; margin-bottom: 12px">
+                人工精剪 (OpenChatCut 之类工具) 出来的成片【只留在你自己的电脑上, 不会回流到本项目】——
+                精剪素材来自上面导出的素材包, 剪完的成片请自行保存到你想要的位置。
+              </div>
+
               <!-- 展开的面板: 放在整行【下面】(宽度与成片一致, 内容自己滚动 → 不把视频顶出视口) -->
               <!-- ★ Sprint 39 T2: 逐镜缝转场配置 (默认折叠收起) -->
                 <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
