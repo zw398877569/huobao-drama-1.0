@@ -1900,6 +1900,15 @@
                 </button>
               </div>
 
+              <!-- ★ Sprint 40 T1: 导出素材包 (ZIP) —— 人工精修的输入包 -->
+              <div class="merge-config-row" style="margin-bottom: 12px">
+                <button class="btn btn-sm" :disabled="exportingPack" @click="exportMergePack">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  {{ exportingPack ? '正在打包...' : '导出素材包 (ZIP)' }}
+                </button>
+                <span class="dim" style="font-size:11px">整集视频 + 每镜字幕 + 结构化 manifest (给人工精修用)</span>
+              </div>
+
               <!-- 展开的面板: 放在整行【下面】(宽度与成片一致, 内容自己滚动 → 不把视频顶出视口) -->
               <!-- ★ Sprint 39 T2: 逐镜缝转场配置 (默认折叠收起) -->
                 <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
@@ -2385,7 +2394,7 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Package, Loader2,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'
@@ -3153,6 +3162,22 @@ async function loadMergeSettings() {
     if (st?.grade) mergeGrade.value = { ...mergeGrade.value, ...st.grade }
     if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose') mergeSubtitleStage.value = st.subtitleStage
   } catch { /* 拉不到就用默认值 (调色关闭 + 合成阶段烧字幕) */ }
+}
+
+// ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (整集视频 + 每镜字幕 + 结构化 manifest)
+//   → 给人工精修 (OpenChatCut 之类) 用的输入包。
+const exportingPack = ref(false)
+async function exportMergePack() {
+  if (exportingPack.value) return
+  exportingPack.value = true
+  try {
+    await downloadBinaryFile(`/merge/episodes/${epId.value}/merge/export-pack`, `episode-${epId.value}-export-pack.zip`)
+    toast.success('素材包已开始下载')
+  } catch (e: any) {
+    toast.error(e?.message || '导出素材包失败')
+  } finally {
+    exportingPack.value = false
+  }
 }
 
 async function doMerge() {

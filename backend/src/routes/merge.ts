@@ -1,11 +1,15 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
+import fs from 'fs'
+import { Readable } from 'stream'
 import { db, schema } from '../db/index.js'
 import { success, badRequest } from '../utils/response.js'
 import {
   mergeEpisodeVideos, validateTransitionConfig, validateGradeConfig,
   readMergeSettings, writeMergeSettings,
 } from '../services/ffmpeg-merge.js'
+// ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (manifest.json + clips/ + subtitles/ + bgm/)
+import { buildMergeExportPack } from '../services/merge-export-pack.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
@@ -106,6 +110,34 @@ app.post('/episodes/:id/merge', async (c) => {
   } catch (err: any) {
     logTaskError('MergeAPI', 'episode-merge', { episodeId, error: err.message })
     return badRequest(c, err.message)
+  }
+})
+
+// GET /episodes/:id/merge/export-pack — 导出【素材包】(ZIP)
+//   ★ Sprint 40 T1: 给人工精修 (OpenChatCut 之类) 用的输入包。
+//     manifest.json 是核心 (通用剪辑器不知道哪一镜是谁在说哪句台词);
+//     clips/ 是 compose 产出的 mp4 【直接复制】, 不重编码 (可被 md5 验证)。
+//   ★ 本集还有镜没合成完 → 400 + 列出缺哪几镜 (不导半成品包)。
+app.get('/episodes/:id/merge/export-pack', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  try {
+    const pack = await buildMergeExportPack(episodeId)
+    logTaskSuccess('MergeAPI', 'episode-export-pack', {
+      episodeId,
+      zip: pack.zipName,
+      clipCount: pack.clipCount,
+      totalDurationSec: pack.totalDurationSec,
+    })
+    const stat = fs.statSync(pack.zipPath)
+    const stream = Readable.toWeb(fs.createReadStream(pack.zipPath)) as unknown as ReadableStream
+    return c.body(stream, 200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${pack.zipName}"`,
+      'Content-Length': String(stat.size),
+    })
+  } catch (err: any) {
+    logTaskError('MergeAPI', 'episode-export-pack', { episodeId, error: err?.message || String(err) })
+    return badRequest(c, err?.message || '导出素材包失败')
   }
 })
 

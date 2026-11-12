@@ -26,6 +26,33 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   }
 }
 
+/**
+ * ★ Sprint 40 T1 (PM msg-20261112-171): 下载二进制文件 (素材包 ZIP)。
+ *   走 fetch 而不是直接 <a download>: 后端可能返回 JSON 错误 (例: 还有镜没合成完),
+ *   直接 <a> 会把错误 JSON 当文件下载下来 → 用户一脸懵。
+ */
+export async function downloadBinaryFile(path: string, fallbackName: string): Promise<void> {
+  const resp = await fetch(`${BASE}${path}`)
+  const contentType = resp.headers.get('content-type') || ''
+  if (!resp.ok || contentType.includes('application/json')) {
+    let msg = `下载失败 (${resp.status})`
+    try {
+      const j: any = await resp.json()
+      if (j?.message) msg = j.message
+    } catch { /* 不是 JSON → 用默认提示 */ }
+    throw new Error(msg)
+  }
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fallbackName
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 3000)
+}
+
 export const api = {
   get: <T = any>(p: string, params?: any) => {
     if (params) {
