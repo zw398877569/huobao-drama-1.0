@@ -10,6 +10,9 @@ import {
 } from '../services/ffmpeg-merge.js'
 // ★ Sprint 40 T2: BGM 校验 (纯逻辑模块)
 import { validateBgmConfig } from '../services/merge-bgm.js'
+// ★ Sprint 40 T3: 音效校验  ★ Sprint 40 T4: 片头配置校验
+import { validateSfxConfig } from '../services/merge-sfx.js'
+import { validateTitleCardConfig } from '../services/merge-title-card.js'
 // ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (manifest.json + clips/ + subtitles/ + bgm/)
 import { buildMergeExportPack } from '../services/merge-export-pack.js'
 import { toSnakeCase } from '../utils/transform.js'
@@ -88,6 +91,34 @@ app.post('/episodes/:id/merge', async (c) => {
     bgm = b.config
     writeMergeSettings(episodeId, { bgm })
   }
+  // ★ Sprint 40 T3 (PM msg-20261112-171): 逐镜缝音效 (校验 + 持久化)
+  let sfx = currentSettings.sfx
+  if (body?.sfx != null) {
+    const v = validateSfxConfig(body.sfx)
+    if (!v.ok) {
+      logTaskWarn('MergeAPI', 'episode-merge-invalid-sfx', {
+        episodeId, dramaId: ep.dramaId, errors: v.errors,
+        hint: '音效配置不合法 → 已拒绝, 没有新建 merge 记录',
+      })
+      return badRequest(c, `音效配置不合法: ${v.errors.join('; ')}`)
+    }
+    sfx = v.config
+    writeMergeSettings(episodeId, { sfx })
+  }
+  // ★ Sprint 40 T4 (PM msg-20261112-171): 片头 / 集数卡 (默认关)
+  let titleCard = currentSettings.titleCard
+  if (body?.titleCard != null) {
+    const v = validateTitleCardConfig(body.titleCard)
+    if (!v.ok) {
+      logTaskWarn('MergeAPI', 'episode-merge-invalid-title-card', {
+        episodeId, dramaId: ep.dramaId, errors: v.errors,
+        hint: '片头配置不合法 → 已拒绝, 没有新建 merge 记录',
+      })
+      return badRequest(c, `片头配置不合法: ${v.errors.join('; ')}`)
+    }
+    titleCard = v.config
+    writeMergeSettings(episodeId, { titleCard })
+  }
   if (body?.grade != null) {
     const g = validateGradeConfig(body.grade)
     if (!g.ok) {
@@ -121,7 +152,9 @@ app.post('/episodes/:id/merge', async (c) => {
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId })
-    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade, subtitleStage, bgm })
+    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, {
+      transitions: t.config, grade, subtitleStage, bgm, sfx, titleCard,
+    })
     logTaskSuccess('MergeAPI', 'episode-merge', { episodeId, mergeId })
     return success(c, { merge_id: mergeId, status: 'processing' })
   } catch (err: any) {
@@ -186,6 +219,32 @@ app.post('/episodes/:id/merge/settings', async (c) => {
       return badRequest(c, `BGM 配置不合法: ${b.errors.join('; ')}`)
     }
     writeMergeSettings(episodeId, { bgm: b.config })
+  }
+
+  // ★ Sprint 40 T3: 音效设置
+  if (body?.sfx != null) {
+    const v = validateSfxConfig(body.sfx)
+    if (!v.ok) {
+      logTaskWarn('MergeAPI', 'merge-settings-invalid-sfx', {
+        episodeId, dramaId: ep.dramaId, errors: v.errors,
+        hint: '音效配置不合法 → 没有保存',
+      })
+      return badRequest(c, `音效配置不合法: ${v.errors.join('; ')}`)
+    }
+    writeMergeSettings(episodeId, { sfx: v.config })
+  }
+
+  // ★ Sprint 40 T4: 片头设置
+  if (body?.titleCard != null) {
+    const v = validateTitleCardConfig(body.titleCard)
+    if (!v.ok) {
+      logTaskWarn('MergeAPI', 'merge-settings-invalid-title-card', {
+        episodeId, dramaId: ep.dramaId, errors: v.errors,
+        hint: '片头配置不合法 → 没有保存',
+      })
+      return badRequest(c, `片头配置不合法: ${v.errors.join('; ')}`)
+    }
+    writeMergeSettings(episodeId, { titleCard: v.config })
   }
 
   return success(c, readMergeSettings(episodeId))

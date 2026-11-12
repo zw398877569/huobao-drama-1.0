@@ -442,7 +442,7 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="sbs?.length" class="char-count">{{  sbs?.length ?? 0  }} 镜头 · {{  totalDuration  }}s</span>
+              <span v-if="sbs?.length" class="char-count">{{  sbs?.length ?? 0  }} 镜头 · {{  sbsTotalDuration  }}s</span>
               <button v-if="sbs?.length" class="btn btn-sm" @click="addShot">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 添加
@@ -472,7 +472,7 @@
               <div class="shot-list-head">
                 <!-- 删除 .shot-list-title 节点 (用户不要 '镜头序列' 标题, 三个按钮均分主区头部宽度) -->
                 <div class="shot-list-actions">
-                  <span class="tag mono">{{ totalDuration }}s</span>
+                  <span class="tag mono">{{ sbsTotalDuration }}s</span>
                   <!-- V4 wizard (PM msg-20261010-005): 主区可发现, 老 + 新 button 同 row -->
                   <button class="btn btn-sm" :disabled="rn" @click="doBreakdown" title="1 步跑完 (auto mode)">
                     <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
@@ -1941,6 +1941,23 @@
                 </div>
               </div>
 
+              <!-- ★ Sprint 40 T4 (PM msg-20261112-171): 片头 / 集数卡 (默认关)
+                   开启后: 成片开头多一段标题卡 → 总时长 +N 秒, 镜缝编号整体 +1 (片头占第 0 个片段) -->
+              <div class="merge-config-row" style="margin-bottom: 8px">
+                <label style="display:flex; align-items:center; gap:5px; cursor:pointer">
+                  <input type="checkbox" v-model="mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                  <span style="font-size:11px">片头 / 集数卡</span>
+                </label>
+                <input v-model="mergeTitleCard.title" type="text" :placeholder="(drama?.title || '标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <input v-model="mergeTitleCard.subtitle" type="text" :placeholder="(episode?.episodeNumber ? '第 ' + episode.episodeNumber + ' 集' : '副标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <input v-model.number="mergeTitleCard.durationSec" type="number" min="1" max="10" step="0.5" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <span class="dim" style="font-size:11px">秒</span>
+                <input v-model="mergeTitleCard.background" type="color" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <input v-model.number="mergeTitleCard.fontSize" type="number" min="16" max="240" step="4" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <span class="dim" style="font-size:11px">字号</span>
+                <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">(成片开头多 {{ mergeTitleCard.durationSec }}s, 镜缝编号整体 +1)</span>
+              </div>
+
               <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)
                    精剪成片【只放本机, 不回流本项目】(PM 2026-11-12 决策 D6) -->
               <div class="dim" style="font-size:11px; margin-bottom: 12px">
@@ -1962,6 +1979,10 @@
                     <input v-model.number="mergeTransitionAll.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
                     <span class="dim" style="font-size:11px">秒</span>
                     <button class="btn btn-sm" @click="applyMergeTransitionToAll">应用到全部</button>
+                    <!-- ★ Sprint 40 T3: 音效音量 (全局, 默认 -14dB = 比人声低但听得见) -->
+                    <span class="dim" style="font-size:11px">音效音量</span>
+                    <input v-model.number="mergeSfxVolumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" @change="saveMergeSfxSettings" />
+                    <span class="dim" style="font-size:11px">dB</span>
                   </div>
                   <div v-for="r in mergeTransitionRows" :key="r.index" class="merge-transition-row">
                     <span class="mono dim" style="font-size:11px; width:70px">#{{ r.index + 1 }}→#{{ r.index + 2 }}</span>
@@ -1970,6 +1991,15 @@
                     </select>
                     <input v-model.number="r.durationSec" type="number" class="merge-transition-input" min="0.1" max="2" step="0.05" />
                     <span class="dim" style="font-size:11px">秒</span>
+                    <!-- ★ Sprint 40 T3: 这一刀切点放的音效 (默认不加) -->
+                    <span class="dim" style="font-size:11px">音效</span>
+                    <select v-model="r.sfx" class="merge-transition-select" @change="saveMergeSfxSettings">
+                      <option value="">不加</option>
+                      <option v-for="f in sfxFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
+                    </select>
+                  </div>
+                  <div v-if="!sfxFiles.length" class="merge-transition-row">
+                    <span class="dim" style="font-size:11px">音效目录 data/media/sfx/ 里还没有音频文件</span>
                   </div>
                 </div>
 
@@ -2000,7 +2030,7 @@
                 <video :src="'/' + mergeUrl" controls class="export-video" />
                 <div class="export-bar">
                   <span class="tag tag-success">拼接完成</span>
-                  <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 镜头 · {{  totalDuration  }}s</span>
+                  <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 镜头{{ mergeTitleCard.enabled ? ' + 片头' : '' }} · {{  mergeDisplayDuration  }}s</span>
                   <!-- ★ Sprint 38 追加单 166 (PM msg-20261110-166): 【重新拼接】入口 ——
                        成片旁边给一个按钮 (成片不藏起来): 改了转场时长想再试一版 / 某镜合成出错想重来,
                        都能从这里再拼一次; 流程与首次拼接一致 (按钮变『拼接中...』不可点, 完成后换成新成片) -->
@@ -2019,7 +2049,7 @@
                 </div>
                 <!-- ★ 重新拼接进行中 → 旧成片仍然可见, 但要告诉用户在跑 (别让用户以为没点上) -->
                 <div v-if="merging" class="empty-desc" style="margin-top:8px">
-                  正在重新拼接 {{ composedCount }} 个已合成镜头, 完成后这里会换成新的成片 (旧成片先保留着)
+                  正在重新拼接 {{ composedCount }} 个已合成镜头{{ mergeTitleCard.enabled ? ' + 片头' : '' }}, 完成后这里会换成新的成片 (旧成片先保留着)
                 </div>
               </template>
               <template v-else>
@@ -3182,13 +3212,13 @@ const MERGE_TRANSITION_MAX = 2.0
 /** 「应用到全部」的那一组值 (默认 fade + 0.4s = 与改动前一致) */
 const mergeTransitionAll = ref({ type: 'fade', durationSec: 0.4 })
 /** 逐镜缝: index = 镜缝序号 (0 = 第1镜与第2镜之间) */
-const mergeTransitionRows = ref<Array<{ index: number; type: string; durationSec: number }>>([])
+const mergeTransitionRows = ref<Array<{ index: number; type: string; durationSec: number; sfx: string }>>([])
 // 镜缝数 = 镜头数 - 1; 镜头数变了就补齐行 (已改过的行保留)
 watch(() => sbs.value?.length ?? 0, (n) => {
   const gapCount = Math.max(0, (n || 0) - 1)
   const rows = mergeTransitionRows.value
   mergeTransitionRows.value = Array.from({ length: gapCount }, (_, i) =>
-    rows[i] ?? { index: i, type: mergeTransitionAll.value.type, durationSec: mergeTransitionAll.value.durationSec })
+    rows[i] ?? { index: i, type: mergeTransitionAll.value.type, durationSec: mergeTransitionAll.value.durationSec, sfx: '' })
 }, { immediate: true })
 function applyMergeTransitionToAll() {
   const t = mergeTransitionAll.value
@@ -3207,7 +3237,67 @@ async function loadMergeSettings() {
     if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose') mergeSubtitleStage.value = st.subtitleStage
     // ★ Sprint 40 T2: BGM 选择 + 音量 + duck 参数 (后端持久化 → 刷新页面仍在)
     if (st?.bgm) mergeBgm.value = { ...mergeBgm.value, ...st.bgm }
+    // ★ Sprint 40 T4: 片头 (先恢复 → 音效的镜缝序号要按它做偏移)
+    if (st?.titleCard) mergeTitleCard.value = { ...mergeTitleCard.value, ...st.titleCard }
+    // ★ Sprint 40 T3: 音效 (音量 + 逐镜缝选择)
+    if (st?.sfx) {
+      if (typeof st.sfx.volumeDb === 'number') mergeSfxVolumeDb.value = st.sfx.volumeDb
+      const offset = mergeTitleCard.value.enabled ? 1 : 0
+      const byIndex = new Map<number, string>()
+      for (const g of (st.sfx.gaps || [])) byIndex.set(Number(g.index) - offset, String(g.file))
+      mergeTransitionRows.value = mergeTransitionRows.value.map(r => ({ ...r, sfx: byIndex.get(r.index) || '' }))
+    }
   } catch { /* 拉不到就用默认值 (调色关闭 + 合成阶段烧字幕 + 不加 BGM) */ }
+}
+
+// ★ Sprint 40 T3 (PM msg-20261112-171): 逐镜缝音效 (默认不加 → 成片与改动前一致)
+const sfxFiles = ref<Array<{ name: string; sizeBytes: number; durationSec: number }>>([])
+const mergeSfxVolumeDb = ref(-14)
+// ★ Sprint 40 T4 (PM msg-20261112-171): 片头 / 集数卡 (默认关)
+const mergeTitleCard = ref({
+  enabled: false, title: '', subtitle: '', durationSec: 2,
+  background: '#101014', textColor: '#ffffff', fontSize: 64,
+})
+/** ★ 开了片头 → 片头占第 0 个镜缝 → 用户配的镜缝序号整体 +1 (后端链内编号) */
+const mergeGapOffset = computed(() => (mergeTitleCard.value.enabled ? 1 : 0))
+/** 分镜总时长 (★ 页面里原来用的是没定义的 totalDuration → 那行渲染成空, 这里补一个真的) */
+const sbsTotalDuration = computed(() =>
+  (sbs.value || []).reduce((sum: number, sb: any) => sum + Number(sb?.duration || 0), 0),
+)
+/** 成片时长: 优先后端记录的真实成片时长; 没有就按分镜时长 + (片头时长) */
+const mergeDisplayDuration = computed(() => {
+  const actual = Number((mergeData.value as any)?.duration || 0)
+  if (actual > 0) return actual
+  return Math.round(sbsTotalDuration.value + (mergeTitleCard.value.enabled ? Number(mergeTitleCard.value.durationSec || 0) : 0))
+})
+/** 音效 payload (镜缝序号按片头偏移) */
+const mergeSfxPayload = computed(() => ({
+  volumeDb: Number(mergeSfxVolumeDb.value),
+  gaps: mergeTransitionRows.value
+    .filter(r => r.sfx)
+    .map(r => ({ index: r.index + mergeGapOffset.value, file: r.sfx })),
+}))
+let sfxSaveTimer: ReturnType<typeof setTimeout> | null = null
+function saveMergeSfxSettings() {
+  if (sfxSaveTimer) clearTimeout(sfxSaveTimer)
+  sfxSaveTimer = setTimeout(async () => {
+    try {
+      await mergeAPI.saveSettings(epId.value, { sfx: mergeSfxPayload.value })
+    } catch (e: any) {
+      toast.error(e?.message || '保存音效设置失败')
+    }
+  }, 400)
+}
+let cardSaveTimer: ReturnType<typeof setTimeout> | null = null
+function saveMergeTitleCardSettings() {
+  if (cardSaveTimer) clearTimeout(cardSaveTimer)
+  cardSaveTimer = setTimeout(async () => {
+    try {
+      await mergeAPI.saveSettings(epId.value, { titleCard: { ...mergeTitleCard.value } })
+    } catch (e: any) {
+      toast.error(e?.message || '保存片头设置失败')
+    }
+  }, 400)
 }
 
 // ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
@@ -3221,6 +3311,13 @@ async function loadMediaLibrary() {
     bgmFiles.value = Array.isArray(lib?.items) ? lib.items : []
   } catch {
     bgmFiles.value = []
+  }
+  // ★ Sprint 40 T3: 音效素材 (复用同一个素材库接口, kind=sfx)
+  try {
+    const lib: any = await mediaLibraryAPI.list('sfx')
+    sfxFiles.value = Array.isArray(lib?.items) ? lib.items : []
+  } catch {
+    sfxFiles.value = []
   }
 }
 let bgmSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -3280,13 +3377,18 @@ async function doMerge() {
       transitions: {
         defaultType: 'fade',
         defaultDurationSec: 0.4,
-        gaps: mergeTransitionRows.value.map(r => ({ index: r.index, type: r.type, durationSec: Number(r.durationSec) })),
+        // ★ Sprint 40 T4: 开了片头 → 镜缝序号整体 +1 (片头占第 0 个片段)
+        gaps: mergeTransitionRows.value.map(r => ({ index: r.index + mergeGapOffset.value, type: r.type, durationSec: Number(r.durationSec) })),
       },
       grade: { enabled: !!g.enabled, brightness: Number(g.brightness), contrast: Number(g.contrast), saturation: Number(g.saturation) },
       // ★ Sprint 39 T4: 字幕烧录时机 (后端会持久化 → 下次再拼同一集仍然生效)
       subtitleStage: mergeSubtitleStage.value,
       // ★ Sprint 40 T2: BGM + 对白 ducking 参数 (后端会持久化 → 下次再拼同一集仍然生效)
       bgm: { ...mergeBgm.value },
+      // ★ Sprint 40 T3: 逐镜缝音效 (镜缝序号已按片头偏移)
+      sfx: mergeSfxPayload.value,
+      // ★ Sprint 40 T4: 片头 / 集数卡 (默认关)
+      titleCard: { ...mergeTitleCard.value },
     })
     // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
     //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)

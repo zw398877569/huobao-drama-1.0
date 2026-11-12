@@ -37,6 +37,15 @@ import {
   DEFAULT_MERGE_BGM, BGM_DIR, resolveBgmPath, validateBgmConfig, buildBgmMixChain,
   type MergeBgmConfig, type BgmMixChain,
 } from './merge-bgm.js'
+// ★ Sprint 40 T3: 逐镜缝音效 (纯逻辑模块) + ★ Sprint 40 T4: 片头/集数卡
+import {
+  DEFAULT_MERGE_SFX, SFX_DIR, resolveSfxPath, validateSfxConfig, buildSfxMixChain,
+  type MergeSfxConfig, type SfxPlacement,
+} from './merge-sfx.js'
+import {
+  DEFAULT_MERGE_TITLE_CARD, validateTitleCardConfig, generateTitleCard,
+  type MergeTitleCardConfig,
+} from './merge-title-card.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -77,6 +86,10 @@ export async function mergeEpisodeVideos(
     subtitleStage?: MergeSubtitleStage
     /** ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (不传 = 不加 BGM = 与改动前逐样本一致) */
     bgm?: MergeBgmConfig | null
+    /** ★ Sprint 40 T3: 逐镜缝音效 (不传 = 不加音效) */
+    sfx?: MergeSfxConfig | null
+    /** ★ Sprint 40 T4: 片头 / 集数卡 (不传或 enabled=false = 不加片头) */
+    titleCard?: MergeTitleCardConfig | null
   },
 ): Promise<number> {
   const storyboards = db.select().from(schema.storyboards)
@@ -111,7 +124,10 @@ export async function mergeEpisodeVideos(
   const mergeId = Number(res.lastInsertRowid)
 
   // 异步执行 (★ Sprint 39 T2: 逐镜缝转场配置透传给拼接执行)
-  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade, options?.subtitleStage, composedStoryboards, options?.bgm).catch(err => {
+  doMerge(
+    mergeId, episodeId, videos, options?.transitions, options?.grade, options?.subtitleStage,
+    composedStoryboards, options?.bgm, options?.sfx, options?.titleCard,
+  ).catch(err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
     console.error(`[Merge] Failed:`, err)
     db.update(schema.videoMerges)
@@ -213,6 +229,10 @@ export interface MergeSettings {
   subtitleStage: MergeSubtitleStage
   /** ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (默认 file='' = 不加 BGM) */
   bgm: MergeBgmConfig
+  /** ★ Sprint 40 T3: 逐镜缝音效 (默认 = 不加音效) */
+  sfx: MergeSfxConfig
+  /** ★ Sprint 40 T4: 片头 / 集数卡 (默认关闭) */
+  titleCard: MergeTitleCardConfig
 }
 const MERGE_SETTINGS_DIR = path.join(DATA_ROOT, 'merge-settings')
 /** ★ Sprint 39 T4: 拼接阶段烧字幕时用的字体目录与样式 (与 compose 阶段逐字一致 → 字幕看起来一样) */
@@ -254,13 +274,29 @@ export function readMergeSettings(episodeId: number): MergeSettings {
     const b = validateBgmConfig(parsed?.bgm, BGM_DIR, false)
     const bgm: MergeBgmConfig = b.ok ? { ...b.config } : { ...DEFAULT_MERGE_BGM }
     if (bgm.file && !resolveBgmPath(bgm.file)) bgm.file = ''
+    // ★ Sprint 40 T3: 音效 (素材被删 → 静默降级成"不加音效", 但保留音量设置)
+    const sf = validateSfxConfig(parsed?.sfx, SFX_DIR, false)
+    const sfx: MergeSfxConfig = sf.ok
+      ? { volumeDb: sf.config.volumeDb, gaps: sf.config.gaps.filter(g => resolveSfxPath(g.file)) }
+      : { ...DEFAULT_MERGE_SFX, gaps: [] }
+    // ★ Sprint 40 T4: 片头 (默认关)
+    const tc = validateTitleCardConfig(parsed?.titleCard)
+    const titleCard: MergeTitleCardConfig = tc.ok ? { ...tc.config } : { ...DEFAULT_MERGE_TITLE_CARD }
     return {
       grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE },
       subtitleStage: parsed?.subtitleStage === 'merge' ? 'merge' : 'compose',
       bgm,
+      sfx,
+      titleCard,
     }
   } catch {
-    return { grade: { ...DEFAULT_MERGE_GRADE }, subtitleStage: 'compose', bgm: { ...DEFAULT_MERGE_BGM } }
+    return {
+      grade: { ...DEFAULT_MERGE_GRADE },
+      subtitleStage: 'compose',
+      bgm: { ...DEFAULT_MERGE_BGM },
+      sfx: { ...DEFAULT_MERGE_SFX, gaps: [] },
+      titleCard: { ...DEFAULT_MERGE_TITLE_CARD },
+    }
   }
 }
 
@@ -272,6 +308,10 @@ export function writeMergeSettings(episodeId: number, patch: Partial<MergeSettin
     subtitleStage: patch.subtitleStage ?? current.subtitleStage,
     // ★ Sprint 40 T2: BGM 选择 + 参数一起持久化 (刷新页面后仍在)
     bgm: patch.bgm ?? current.bgm,
+    // ★ Sprint 40 T3: 音效选择 + 音量
+    sfx: patch.sfx ?? current.sfx,
+    // ★ Sprint 40 T4: 片头配置
+    titleCard: patch.titleCard ?? current.titleCard,
   }
   try {
     fs.mkdirSync(MERGE_SETTINGS_DIR, { recursive: true })
@@ -442,7 +482,10 @@ export function buildTransitionList(
  *
  * @returns 归一化后的绝对路径列表 (可直接喂给 concat / xfade)
  */
-async function normalizeClips(videos: string[], encode: MergeEncodeParams): Promise<string[]> {
+async function normalizeClips(
+  videos: string[],
+  encode: MergeEncodeParams,
+): Promise<{ files: string[]; spec: { width: number; height: number; fps: number } }> {
   fs.mkdirSync(NORMALIZE_DIR, { recursive: true })
 
   const absPaths = videos.map(toAbsPath)
@@ -548,7 +591,7 @@ async function normalizeClips(videos: string[], encode: MergeEncodeParams): Prom
     transcoded: normalized.filter((p, i) => p !== absPaths[i]).length,
     target: { width: targetW, height: targetH, fps: targetFps },
   })
-  return normalized
+  return { files: normalized, spec: { width: targetW, height: targetH, fps: targetFps } }
 }
 
 /**
@@ -574,20 +617,28 @@ async function mergeWithXfade(
   mergedSrtPath?: string | null,
   /** ★ Sprint 40 T2: BGM 素材 (null = 不铺 BGM → filter 链与改动前逐字一致) */
   bgm?: { path: string; config: MergeBgmConfig } | null,
-): Promise<void> {
+  /** ★ Sprint 40 T3: 逐镜缝音效配置 (null / 空 = 不加音效 → filter 链与改动前逐字一致) */
+  sfx?: MergeSfxConfig | null,
+  /** ★ Sprint 40 T4: 片头卡 (作为第 0 个片段进链; null = 不加 → 与改动前逐字一致) */
+  card?: { path: string; durationSec: number; clipDurationSec: number } | null,
+): Promise<{ sfxPlacements: Array<{ gapIndex: number; file: string; startSec: number }>; audioTotalSec: number }> {
   // ★ Sprint 39 T2: 逐镜缝的转场 (默认全是 fade + XFADE_DURATION → 与改动前逐字一致)
   const D = XFADE_DURATION
   const fmtDur = (d: number) => String(Number(Number(d).toFixed(3)))
   const gap = (i: number) => transitions[i - 1] || { type: 'fade', durationSec: D }
 
+  // ★ Sprint 40 T4: 片头作为【第 0 个片段】参与链 → 片段数 +1, 镜缝数 +1 (镜缝编号整体后移)
+  const chainClips = card ? [card.path, ...clips] : clips
+  const chainDur = card ? [card.clipDurationSec, ...durationSec] : durationSec
+
   // 单个 clip 不需要转场, 直接转封装
-  if (clips.length === 1) {
+  if (chainClips.length === 1) {
     // ★ Sprint 40 T2: 加了 BGM 就不能纯 copy (音频要混) → 视频仍 copy, 音频走 filter
     if (bgm) {
-      const chain = buildBgmMixChain('0:a', bgm.config, 1, durationSec[0])
+      const chain = buildBgmMixChain('0:a', bgm.config, 1, chainDur[0])
       await new Promise<void>((resolve, reject) => {
         const cmd = ffmpeg()
-        cmd.input(clips[0])
+        cmd.input(chainClips[0])
         cmd.input(bgm.path).inputOptions(['-stream_loop', '-1'])
         cmd
           .complexFilter(chain.filters.join(';'))
@@ -605,29 +656,32 @@ async function mergeWithXfade(
           .on('error', (err) => reject(err))
           .run()
       })
-      return
+      return { sfxPlacements: [], audioTotalSec: chainDur[0] }
     }
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(clips[0])
+      ffmpeg(chainClips[0])
         .outputOptions(['-c', 'copy'])
         .output(outputPath)
         .on('end', () => resolve())
         .on('error', (err) => reject(err))
         .run()
     })
-    return
+    return { sfxPlacements: [], audioTotalSec: chainDur[0] }
   }
 
   // 构建 filter_complex
   const filters: string[] = []
-  let accDur = durationSec[0] - gap(1).durationSec
-  for (let i = 1; i < clips.length; i++) {
+  // ★ 每个镜缝在成片时间轴上的起点 (音效要叠在切点上 → 需要这个)
+  const gapOffsets: number[] = []
+  let accDur = chainDur[0] - gap(1).durationSec
+  for (let i = 1; i < chainClips.length; i++) {
     const g = gap(i)
     const offset = accDur.toFixed(3)
-    const isLast = i === clips.length - 1
+    gapOffsets.push(accDur)                       // 镜缝序号 = i - 1
+    const isLast = i === chainClips.length - 1
     const outLabel = isLast ? 'vout' : `v${i}`
     filters.push(`[${i === 1 ? '0:v' : `v${i - 1}`}][${i}:v]xfade=transition=${g.type}:duration=${fmtDur(g.durationSec)}:offset=${offset}[${outLabel}]`)
-    accDur += durationSec[i] - g.durationSec
+    accDur += chainDur[i] - g.durationSec
   }
   // 音频: acrossfade 逐段交叉淡化 (xfade 只管视频)
   //
@@ -637,23 +691,62 @@ async function mergeWithXfade(
   //    acrossfade 每段同样消耗 D 秒, 音画总时长一致 (实测 audio 5.616 vs video 5.600,
   //    16ms 差是 AAC 帧对齐误差, 听感/观感无影响)。
   // ★ 音频的交叉淡化时长【跟随该镜缝的视频转场时长】→ 音画总时长一致 (AC)
-  let accDurAudio = durationSec[0] - gap(1).durationSec
-  for (let i = 1; i < clips.length; i++) {
+  let accDurAudio = chainDur[0] - gap(1).durationSec
+  for (let i = 1; i < chainClips.length; i++) {
     const g = gap(i)
-    const isLast = i === clips.length - 1
+    const isLast = i === chainClips.length - 1
     const outLabel = isLast ? 'aout' : `a${i}`
     const inLabel = i === 1 ? '0:a' : `a${i - 1}`
     filters.push(`[${inLabel}][${i}:a]acrossfade=d=${fmtDur(g.durationSec)}:c1=tri:c2=tri[${outLabel}]`)
-    accDurAudio += durationSec[i] - g.durationSec
+    accDurAudio += chainDur[i] - g.durationSec
   }
 
-  // ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (没配 BGM → 一条滤镜都不加 → 与改动前逐样本一致)
+  // ── 音频混音层 (按顺序叠): 对白 → (BGM) → (音效) ──
+  //   每个附加输入都排在所有片段之后 → 输入序号 = chainClips.length 往后数
   let audioOut = 'aout'
+  let nextInputIndex = chainClips.length
+
+  // ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (没配 BGM → 一条滤镜都不加 → 与改动前逐样本一致)
   if (bgm) {
-    // BGM 输入排在所有 clip 之后 → 它的输入序号 = clips.length
-    const chain = buildBgmMixChain('aout', bgm.config, clips.length, accDurAudio)
+    const chain = buildBgmMixChain('aout', bgm.config, nextInputIndex, accDurAudio)
     filters.push(...chain.filters)
     audioOut = chain.audioOutLabel
+    nextInputIndex++
+  }
+
+  // ★ Sprint 40 T3: 逐镜缝音效 —— 叠在【切点】(交叉淡化的中点), 超长截断, 不循环
+  const sfxInputFiles: Array<{ path: string; gapIndex: number; startSec: number }> = []
+  const sfxPlacements: SfxPlacement[] = []
+  if (sfx?.gaps?.length) {
+    for (const g of sfx.gaps) {
+      const offset = gapOffsets[g.index]
+      if (offset == null) {
+        logTaskWarn('MergeTask', 'sfx-gap-out-of-range', {
+          gapIndex: g.index, file: g.file, gapCount: gapOffsets.length,
+          hint: '音效的镜缝序号超出范围 → 跳过',
+        })
+        continue
+      }
+      const abs = resolveSfxPath(g.file)
+      if (!abs) {
+        logTaskWarn('MergeTask', 'sfx-missing', {
+          file: g.file,
+          hint: '音效素材不在 data/media/sfx/ 里 → 跳过这个音效 (不阻断拼接)',
+        })
+        continue
+      }
+      // 切点 = 交叉淡化的中点 (音效叠在两个镜头的交界处, 不是镜头中间)
+      const cut = offset + (transitions[g.index]?.durationSec ?? D) / 2
+      const remaining = Math.max(0.05, accDurAudio - cut)
+      sfxPlacements.push({ gapIndex: g.index, file: g.file, startSec: cut, remainingSec: remaining })
+      sfxInputFiles.push({ path: abs, gapIndex: g.index, startSec: cut })
+    }
+  }
+  if (sfxPlacements.length) {
+    const chain = buildSfxMixChain(audioOut, sfx!, sfxPlacements, nextInputIndex)
+    filters.push(...chain.filters)
+    audioOut = chain.audioOutLabel
+    nextInputIndex += sfxPlacements.length
   }
 
   // ★ Sprint 39 T3: 全片统一调色 —— 套在【所有转场之后】(一次性作用于整片, 不是只作用在某几段)
@@ -671,9 +764,11 @@ async function mergeWithXfade(
 
   await new Promise<void>((resolve, reject) => {
     const cmd = ffmpeg()
-    for (const clip of clips) cmd.input(clip)
+    for (const clip of chainClips) cmd.input(clip)
     // ★ Sprint 40 T2: BGM 作为最后一路输入 (-stream_loop -1 = 循环铺满整片)
     if (bgm) cmd.input(bgm.path).inputOptions(['-stream_loop', '-1'])
+    // ★ Sprint 40 T3: 音效输入 (每个音效一路, 按放置顺序)
+    for (const s of sfxInputFiles) cmd.input(s.path)
     cmd
       .complexFilter(filters.join(';'))
       .outputOptions([
@@ -693,6 +788,11 @@ async function mergeWithXfade(
       .on('error', (err) => reject(err))
       .run()
   })
+
+  return {
+    sfxPlacements: sfxPlacements.map(p => ({ gapIndex: p.gapIndex, file: p.file, startSec: p.startSec })),
+    audioTotalSec: accDurAudio,
+  }
 }
 
 async function doMerge(
@@ -705,6 +805,10 @@ async function doMerge(
   storyboards?: Array<{ subtitleUrl?: string | null }>,
   /** ★ Sprint 40 T2: BGM 配置 (文件不在目录里 → 当作没配 + 记警告, 不阻断拼接) */
   bgmConfig?: MergeBgmConfig | null,
+  /** ★ Sprint 40 T3: 逐镜缝音效配置 */
+  sfxConfig?: MergeSfxConfig | null,
+  /** ★ Sprint 40 T4: 片头 / 集数卡配置 (默认关) */
+  titleCardConfig?: MergeTitleCardConfig | null,
 ) {
   // 输出文件 (先定路径, 归一化与两种拼接方式都写到这里)
   const outputDir = path.join(STORAGE_ROOT, 'merged')
@@ -715,7 +819,10 @@ async function doMerge(
   // ★ Sprint 39 T1: 解析编码参数 (env 可配); preset 被降级时留痕
   const encode = resolveMergeEncodeParams()
   // ★ Sprint 39 T2: 逐镜缝转场列表 (默认 = fade + 400ms; 逐镜缝覆盖优先) → 日志里要能查
-  const transitions = buildTransitionList(transitionConfig, Math.max(0, videos.length - 1))
+  //   ★ Sprint 40 T4: 开了片头 → 链里多一个片段 → 镜缝数 +1 (用户配置的镜缝序号整体 +1, 前端已处理)
+  const cardEnabled = !!titleCardConfig?.enabled
+  const chainClipCount = (cardEnabled ? 1 : 0) + videos.length
+  const transitions = buildTransitionList(transitionConfig, Math.max(0, chainClipCount - 1))
   if (encode.rejectedPreset) {
     logTaskWarn('MergeTask', 'merge-preset-rejected', {
       mergeId, episodeId,
@@ -752,10 +859,70 @@ async function doMerge(
   // ── Task B 前置: 音频 + 规格归一化 ──
   //   concat demuxer 遇流结构不一致会静默输出纯视频 (rc=0), 所以必须先统一。
   //   任一 clip 归一化失败 → throw (fail-fast, 不静默跳过)
-  const normalized = await normalizeClips(videos, encode)
+  const { files: normalized, spec: mergeSpec } = await normalizeClips(videos, encode)
   const normalizedProbes: MediaProbe[] = []
   for (const p of normalized) normalizedProbes.push(await probeMedia(p))
   const anyInputHasAudio = normalizedProbes.some(p => p.hasAudio)
+
+  // ── ★ Sprint 40 T4: 片头 / 集数卡 (默认关) ──
+  //   需要归一化后的分辨率/帧率 (片头必须与其它片段同规格才能进 xfade 链) → 放在归一化之后生成
+  let card: { path: string; durationSec: number; clipDurationSec: number } | null = null
+  let cardRender: {
+    title: string; subtitle: string; durationSec: number; background: string;
+    textColor: string; fontSize: number;
+  } | null = null
+  if (cardEnabled && titleCardConfig) {
+    const gapDurSec = transitions[0]?.durationSec ?? XFADE_DURATION
+    const epRow = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()[0]
+    // 剧名从 episode → dramaId 查 (doMerge 拿不到 dramaId)
+    const dramaRow = epRow?.dramaId != null
+      ? db.select().from(schema.dramas).where(eq(schema.dramas.id, epRow.dramaId)).all()[0]
+      : undefined
+    const cardTitle = titleCardConfig.title || dramaRow?.title || ''
+    const cardSubtitle = titleCardConfig.subtitle
+      || (epRow?.episodeNumber != null ? `第 ${epRow.episodeNumber} 集` : '')
+    const cardPath = path.join(STORAGE_ROOT, 'temp', `title-card-${uuid()}.mp4`)
+    fs.mkdirSync(path.dirname(cardPath), { recursive: true })
+    cardRender = {
+      title: cardTitle,
+      subtitle: cardSubtitle,
+      durationSec: titleCardConfig.durationSec,
+      background: titleCardConfig.background,
+      textColor: titleCardConfig.textColor,
+      fontSize: titleCardConfig.fontSize,
+    }
+    await generateTitleCard({
+      title: cardRender.title,
+      subtitle: cardRender.subtitle,
+      durationSec: cardRender.durationSec,
+      background: cardRender.background,
+      textColor: cardRender.textColor,
+      fontSize: cardRender.fontSize,
+      width: mergeSpec.width,
+      height: mergeSpec.height,
+      fps: mergeSpec.fps > 0 ? mergeSpec.fps : 24,
+      transitionDurSec: gapDurSec,
+      crf: encode.crf,
+      preset: encode.preset,
+      outputPath: cardPath,
+    })
+    // ★ 片段长度 = 卡片时长 + 交给第 1 个镜头的转场时长:
+    //   xfade 会把两个片段重叠 D 秒 → 成片总时长 = 片段总长 - 重叠 = 原时长 + 卡片时长 (正好 +2s)
+    card = {
+      path: cardPath,
+      durationSec: titleCardConfig.durationSec,
+      clipDurationSec: titleCardConfig.durationSec + gapDurSec,
+    }
+    logTaskSuccess('MergeTask', 'title-card-done', {
+      mergeId, episodeId,
+      title: cardTitle,
+      subtitle: cardSubtitle,
+      durationSec: titleCardConfig.durationSec,
+      clipDurationSec: card.clipDurationSec,
+      gapDurSec,
+      size: `${mergeSpec.width}x${mergeSpec.height}@${mergeSpec.fps}`,
+    })
+  }
 
   // ── ★ Sprint 39 T4: 字幕烧录时机 ──
   //   'compose' (默认) = 合成阶段已经烧进画面了 → 拼接阶段【不】再烧 (否则叠两层字幕)
@@ -763,7 +930,14 @@ async function doMerge(
   const stage: MergeSubtitleStage = subtitleStage === 'merge' ? 'merge' : 'compose'
   let mergedSrtPath: string | null = null
   if (stage === 'merge' && storyboards && storyboards.length) {
-    mergedSrtPath = buildFilmSrt(storyboards, normalizedProbes.map(p => p.durationSec), transitions)
+    // ★ 片头开启 → 所有镜头字幕整体后移一个卡片时长; 镜缝转场用【镜头之间】的那部分
+    const clipTransitions = card ? transitions.slice(1) : transitions
+    mergedSrtPath = buildFilmSrt(
+      storyboards,
+      normalizedProbes.map(p => p.durationSec),
+      clipTransitions,
+      card?.durationSec ?? 0,
+    )
     if (mergedSrtPath) {
       logTaskProgress('MergeTask', 'film-srt-built', {
         mergeId, episodeId, path: mergedSrtPath,
@@ -779,7 +953,7 @@ async function doMerge(
 
   if (XFADE_ENABLED && normalized.length > 1) {
     try {
-      await mergeWithXfade(
+      const xfadeResult = await mergeWithXfade(
         normalized,
         normalizedProbes.map(p => p.durationSec),
         outputPath,
@@ -788,8 +962,25 @@ async function doMerge(
         gradeConfig,
         mergedSrtPath,
         bgmSource,
+        // ★ Sprint 40 T3: 逐镜缝音效
+        sfxConfig,
+        // ★ Sprint 40 T4: 片头 (第 0 个片段)
+        card,
       )
       usedXfade = true
+      // ★ Sprint 40 T3: 音效落位记录 (flow-log 能查到哪个镜缝放了哪个音效)
+      if (xfadeResult.sfxPlacements.length) {
+        logTaskSuccess('MergeTask', 'sfx-mix-done', {
+          mergeId,
+          episodeId,
+          count: xfadeResult.sfxPlacements.length,
+          volumeDb: sfxConfig?.volumeDb ?? DEFAULT_MERGE_SFX.volumeDb,
+          gaps: xfadeResult.sfxPlacements.map(p => ({
+            gapIndex: p.gapIndex, file: p.file, startSec: Number(p.startSec.toFixed(3)),
+          })),
+          hint: '音效叠在镜缝切点 (交叉淡化的中点); 超长自动截断, 不循环',
+        })
+      }
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
         mergeId,
         clips: normalized.length,
@@ -817,7 +1008,28 @@ async function doMerge(
     const listDir = path.join(STORAGE_ROOT, 'temp')
     fs.mkdirSync(listDir, { recursive: true })
     const listPath = path.join(listDir, `${uuid()}.txt`)
-    fs.writeFileSync(listPath, normalized.map(v => `file '${v}'`).join('\n'), 'utf-8')
+    // ★ Sprint 40 T4: 片头也进回退路径 (硬切 → 片头不用多留转场时长, 用卡片时长即可)
+    let fallbackCardPath: string | null = null
+    if (card && cardRender) {
+      fallbackCardPath = path.join(STORAGE_ROOT, 'temp', `title-card-short-${uuid()}.mp4`)
+      await generateTitleCard({
+        title: cardRender.title,
+        subtitle: cardRender.subtitle,
+        durationSec: cardRender.durationSec,
+        background: cardRender.background,
+        textColor: cardRender.textColor,
+        fontSize: cardRender.fontSize,
+        width: mergeSpec.width,
+        height: mergeSpec.height,
+        fps: mergeSpec.fps > 0 ? mergeSpec.fps : 24,
+        transitionDurSec: 0,
+        crf: encode.crf,
+        preset: encode.preset,
+        outputPath: fallbackCardPath,
+      })
+    }
+    const concatFiles = fallbackCardPath ? [fallbackCardPath, ...normalized] : normalized
+    fs.writeFileSync(listPath, concatFiles.map(v => `file '${v}'`).join('\n'), 'utf-8')
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -842,13 +1054,52 @@ async function doMerge(
             '-b:a', '192k',
             '-movflags', '+faststart',
         ]
-        // ★ Sprint 40 T2: 回退路径也要铺 BGM (否则 xfade 失败时 BGM 会静默消失)
+        // ── 音频混音层 (BGM / 音效) —— 回退路径也要有, 否则 xfade 失败时它们会静默消失 ──
+        const totalDur = (fallbackCardPath ? (cardRender?.durationSec ?? 0) : 0)
+          + normalizedProbes.reduce((acc, p) => acc + (p.durationSec || 0), 0)
+        const audioFilters: string[] = []
+        let audioLabel = '0:a'
+        let nextInput = 1                       // 输入 0 = concat 列表
         if (bgmSource) {
-          const totalDur = normalizedProbes.reduce((acc, p) => acc + (p.durationSec || 0), 0)
-          const chain = buildBgmMixChain('0:a', bgmSource.config, 1, totalDur)
-          cmd.input(bgmSource.path).inputOptions(['-stream_loop', '-1'])
-          cmd.complexFilter(chain.filters.join(';'))
-          outOpts.push('-map', '0:v', '-map', `[${chain.audioOutLabel}]`)
+          const chain = buildBgmMixChain('0:a', bgmSource.config, nextInput, totalDur)
+          audioFilters.push(...chain.filters)
+          audioLabel = chain.audioOutLabel
+          nextInput++
+        }
+        // ★ Sprint 40 T3: 音效 (硬切路径的切点 = 前面各镜的累计时长)
+        const sfxFiles: Array<{ path: string; gapIndex: number; startSec: number }> = []
+        if (sfxConfig?.gaps?.length) {
+          const gapStarts: number[] = []
+          let acc = fallbackCardPath ? (cardRender?.durationSec ?? 0) : 0
+          for (let i = 0; i < normalized.length - 1; i++) {
+            gapStarts.push(acc)
+            acc += normalizedProbes[i]?.durationSec || 0
+          }
+          const placements: SfxPlacement[] = []
+          for (const g of sfxConfig.gaps) {
+            const start = gapStarts[g.index]
+            if (start == null) continue
+            const abs = resolveSfxPath(g.file)
+            if (!abs) continue
+            placements.push({
+              gapIndex: g.index, file: g.file, startSec: start,
+              remainingSec: Math.max(0.05, totalDur - start),
+            })
+            sfxFiles.push({ path: abs, gapIndex: g.index, startSec: start })
+          }
+          if (placements.length) {
+            const chain = buildSfxMixChain(audioLabel, sfxConfig, placements, nextInput)
+            audioFilters.push(...chain.filters)
+            audioLabel = chain.audioOutLabel
+            nextInput += placements.length
+          }
+        }
+        // ★ 输入顺序必须与输入序号一致: 0=concat, 1=BGM, 2..=音效
+        if (bgmSource) cmd.input(bgmSource.path).inputOptions(['-stream_loop', '-1'])
+        for (const sf of sfxFiles) cmd.input(sf.path)
+        if (audioFilters.length) {
+          cmd.complexFilter(audioFilters.join(';'))
+          outOpts.push('-map', '0:v', '-map', `[${audioLabel}]`)
         }
         cmd
           .outputOptions(outOpts)
@@ -936,11 +1187,30 @@ async function doMerge(
     anyInputHasAudio,
     // 逐镜缝转场 (一条记录里装下整个列表)
     transitions: transitions.map((t, i) => ({
-      gap: i + 1,                       // 第 1 个镜缝 = 第1镜与第2镜之间
+      gap: i + 1,                       // 第 1 个镜缝 = 第1镜与第2镜之间 (★ 开了片头时 = 片头↔第1镜)
       type: t.type,
       durationMs: Math.round(t.durationSec * 1000),
+      ...(card && i === 0 ? { note: 'title-card→clip1' } : {}),
     })),
     transitionCount: transitions.length,
+    // ★ Sprint 40 T4: 片头 (默认关 → 也要记; 开了就记标题与时长)
+    titleCard: card
+      ? {
+          enabled: true,
+          title: cardRender?.title || '',
+          subtitle: cardRender?.subtitle || '',
+          durationSec: card.durationSec,
+          clipDurationSec: card.clipDurationSec,
+        }
+      : { enabled: false },
+    // ★ Sprint 40 T3: 音效 (逐镜缝; 详细落位见 MergeTask/sfx-mix-done)
+    sfx: {
+      enabled: !!(sfxConfig?.gaps?.length),
+      volumeDb: sfxConfig?.volumeDb ?? DEFAULT_MERGE_SFX.volumeDb,
+      count: sfxConfig?.gaps?.length ?? 0,
+    },
+    // 链内片段数 (★ 开了片头 = 镜头数 + 1)
+    fragments: chainClipCount,
     // 全片调色 (默认关闭也要记)
     grade: {
       enabled: !!gradeConfig?.enabled,
@@ -975,9 +1245,11 @@ function buildFilmSrt(
   storyboards: Array<{ subtitleUrl?: string | null }>,
   durations: number[],
   transitions: Array<{ type: string; durationSec: number }>,
+  /** ★ Sprint 40 T4: 片头占用的时长 (所有镜头字幕整体后移这么多) */
+  startOffsetSec: number = 0,
 ): string | null {
   const blocks: string[] = []
-  let start = 0
+  let start = startOffsetSec
   for (let i = 0; i < storyboards.length; i++) {
     if (i > 0) start += (durations[i - 1] || 0) - (transitions[i - 1]?.durationSec || 0)
     const rel = storyboards[i]?.subtitleUrl
