@@ -166,6 +166,13 @@ export const mergeAPI = {
   status: (epId: number) => api.get(`/merge/episodes/${epId}/merge`),
   // ★ Sprint 39 T3 (PM msg-20261111-169): 拼接设置 (调色参数等, 后端持久化)
   settings: (epId: number) => api.get(`/merge/episodes/${epId}/merge/settings`),
+  // ★ Sprint 40 T2 (PM msg-20261112-171): 只保存拼接设置 (BGM 选择/音量/duck 参数), 不启动拼接
+  saveSettings: (epId: number, body: any) => api.post(`/merge/episodes/${epId}/merge/settings`, body || {}),
+}
+
+// ★ Sprint 40 T2 (PM msg-20261112-171): 素材库【只读】接口 (data/media/bgm, data/media/sfx)
+export const mediaLibraryAPI = {
+  list: (kind?: 'bgm' | 'sfx') => api.get('/media-library', kind ? { kind } : undefined),
 }
 export const agentAPI = {
   chat: (type: string, body: { message: string; drama_id: number; episode_id: number }) =>

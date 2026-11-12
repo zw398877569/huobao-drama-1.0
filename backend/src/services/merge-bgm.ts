@@ -107,6 +107,23 @@ export function validateBgmConfig(
   return { ok: errors.length === 0, config, errors }
 }
 
+/**
+ * ★ Sprint 40 T2 (PM msg-20261112-171): 【API 生成音乐】—— 本期只留口子, 不做实现 (PM 决策 D3)
+ *
+ * 前端入口已存在但是【禁用态】(disabled + 说明文案) —— 不允许做成"点了没反应"或"假成功"的按钮。
+ *
+ * TODO(未来实现, 需求方拍板后开工):
+ *   1) 新增 POST /api/v1/media-library/bgm/generate
+ *      —— 走【生成式音乐 API】: 供应商/模型与 AIConfig 里新增的音乐类配置一致
+ *         (和 TTS/音色配置同一套 baseUrl + apiKey + model 取法, 不要另起一套凭证);
+ *      —— 入参: 时长 / 风格 / 情绪提示词 (可选), 落盘文件名由服务端生成 (uuid + 扩展名);
+ *   2) 生成结果【落到 data/media/bgm/】(与用户自备素材同一个目录 → 前端下拉自动出现, 无需额外接口);
+ *      ★ 素材不进 git / 不进镜像 (PM 决策 D1) —— 与手工放进去的素材完全同权;
+ *   3) 接口返回 { file, durationSec } → 前端把该 file 写进 mergeBgm.file 并调
+ *      POST /merge/episodes/:id/merge/settings 落库 → 自动选中, 用户直接点拼接即可;
+ *   4) 生成的音频同样要支持【循环铺满 + 对白 ducking】(复用 buildBgmMixChain, 不要另写一套混音逻辑);
+ *      建议生成时约束成【无缝循环】的纯音乐 (无 vocals), 否则 ducking 的 sidechain key 会被伴奏干扰。
+ */
 export interface BgmMixChain {
   /** 要追加到 filter_complex 的片段 (顺序即拼接顺序) */
   filters: string[]

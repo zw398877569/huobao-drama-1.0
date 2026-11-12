@@ -1909,6 +1909,38 @@
                 <span class="dim" style="font-size:11px">整集视频 + 每镜字幕 + 结构化 manifest (给人工精修用)</span>
               </div>
 
+              <!-- ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
+                   默认【不加 BGM】→ 成片与改动前逐样本一致 (PM 决策 D4) -->
+              <div class="merge-config-row" style="margin-bottom: 8px">
+                <span class="dim" style="font-size:11px">BGM 铺底</span>
+                <select v-model="mergeBgm.file" class="merge-transition-select" @change="saveMergeBgmSettings">
+                  <option value="">不加 BGM (默认)</option>
+                  <option v-for="f in bgmFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
+                </select>
+                <span v-if="!bgmFiles.length" class="dim" style="font-size:11px">素材目录 data/media/bgm/ 里还没有音频文件</span>
+                <span class="dim" style="font-size:11px">音量</span>
+                <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
+                <span class="dim" style="font-size:11px">dB</span>
+                <!-- ★ API 生成音乐: 本期只做【禁用态口子】(PM 决策 D3) —— 入口在、说明在, 但不装样子 (不许假成功) -->
+                <button class="btn btn-sm" disabled title="尚未开放">AI 生成音乐</button>
+                <span class="dim" style="font-size:11px">(未开放: 将来用生成式音乐 API 生成后自动存到 data/media/bgm/ 并自动选中)</span>
+              </div>
+
+              <!-- 对白 ducking 参数 (选中了 BGM 才显示) -->
+              <div v-if="mergeBgm.file" class="merge-transition-panel" style="margin-bottom: 12px">
+                <div class="merge-transition-toolbar">
+                  <span class="dim" style="font-size:11px">对白 ducking (有人说话时 BGM 自动降下去)</span>
+                  <span class="dim" style="font-size:11px">阈值</span>
+                  <input v-model.number="mergeBgm.threshold" type="number" min="0.001" max="1" step="0.005" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
+                  <span class="dim" style="font-size:11px">压缩比</span>
+                  <input v-model.number="mergeBgm.ratio" type="number" min="1" max="20" step="1" class="merge-transition-input" style="width:48px" @change="saveMergeBgmSettings" />
+                  <span class="dim" style="font-size:11px">起控 ms</span>
+                  <input v-model.number="mergeBgm.attack" type="number" min="0.01" max="2000" step="5" class="merge-transition-input" style="width:56px" @change="saveMergeBgmSettings" />
+                  <span class="dim" style="font-size:11px">释放 ms</span>
+                  <input v-model.number="mergeBgm.release" type="number" min="0.01" max="9000" step="10" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
+                </div>
+              </div>
+
               <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)
                    精剪成片【只放本机, 不回流本项目】(PM 2026-11-12 决策 D6) -->
               <div class="dim" style="font-size:11px; margin-bottom: 12px">
@@ -2404,7 +2436,7 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Package, Loader2,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, mediaLibraryAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'
@@ -3014,6 +3046,8 @@ async function refresh() {
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
   // ★ Sprint 39 T3: 拉本集的拼接设置 (调色参数等, 后端持久化 → 下次再拼同一集仍然生效)
   await loadMergeSettings()
+  // ★ Sprint 40 T2: 拉素材库 (BGM 下拉列表)
+  await loadMediaLibrary()
 }
 
 function sleep(ms) {
@@ -3171,7 +3205,36 @@ async function loadMergeSettings() {
     const st: any = await mergeAPI.settings(epId.value)
     if (st?.grade) mergeGrade.value = { ...mergeGrade.value, ...st.grade }
     if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose') mergeSubtitleStage.value = st.subtitleStage
-  } catch { /* 拉不到就用默认值 (调色关闭 + 合成阶段烧字幕) */ }
+    // ★ Sprint 40 T2: BGM 选择 + 音量 + duck 参数 (后端持久化 → 刷新页面仍在)
+    if (st?.bgm) mergeBgm.value = { ...mergeBgm.value, ...st.bgm }
+  } catch { /* 拉不到就用默认值 (调色关闭 + 合成阶段烧字幕 + 不加 BGM) */ }
+}
+
+// ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
+//   默认不加 BGM → 成片与改动前逐样本一致 (PM 决策 D4)
+const bgmFiles = ref<Array<{ name: string; sizeBytes: number; durationSec: number }>>([])
+const mergeBgm = ref({ file: '', volumeDb: -18, threshold: 0.03, ratio: 8, attack: 15, release: 350 })
+/** 拉素材库 (data/media/bgm/ 下的音频文件) */
+async function loadMediaLibrary() {
+  try {
+    const lib: any = await mediaLibraryAPI.list('bgm')
+    bgmFiles.value = Array.isArray(lib?.items) ? lib.items : []
+  } catch {
+    bgmFiles.value = []
+  }
+}
+let bgmSaveTimer: ReturnType<typeof setTimeout> | null = null
+/** 改完 BGM 设置就存 (不用点拼接也能留住) */
+function saveMergeBgmSettings() {
+  // 防抖: 连着改几个参数时只存一次
+  if (bgmSaveTimer) clearTimeout(bgmSaveTimer)
+  bgmSaveTimer = setTimeout(async () => {
+    try {
+      await mergeAPI.saveSettings(epId.value, { bgm: { ...mergeBgm.value } })
+    } catch (e: any) {
+      toast.error(e?.message || '保存 BGM 设置失败')
+    }
+  }, 400)
 }
 
 // ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (整集视频 + 每镜字幕 + 结构化 manifest)
@@ -3222,6 +3285,8 @@ async function doMerge() {
       grade: { enabled: !!g.enabled, brightness: Number(g.brightness), contrast: Number(g.contrast), saturation: Number(g.saturation) },
       // ★ Sprint 39 T4: 字幕烧录时机 (后端会持久化 → 下次再拼同一集仍然生效)
       subtitleStage: mergeSubtitleStage.value,
+      // ★ Sprint 40 T2: BGM + 对白 ducking 参数 (后端会持久化 → 下次再拼同一集仍然生效)
+      bgm: { ...mergeBgm.value },
     })
     // ★ 立刻把后端返回的状态写进去 → 按钮马上变『拼接中...』且不可点
     //   (以前只弹一个 toast, 页面还是那个空状态 + 可点的按钮 → 用户以为没点上又点一次)
