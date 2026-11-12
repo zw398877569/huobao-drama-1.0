@@ -8,6 +8,8 @@ import {
   mergeEpisodeVideos, validateTransitionConfig, validateGradeConfig,
   readMergeSettings, writeMergeSettings,
 } from '../services/ffmpeg-merge.js'
+// ★ Sprint 40 T2: BGM 校验 (纯逻辑模块)
+import { validateBgmConfig } from '../services/merge-bgm.js'
 // ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (manifest.json + clips/ + subtitles/ + bgm/)
 import { buildMergeExportPack } from '../services/merge-export-pack.js'
 import { toSnakeCase } from '../utils/transform.js'
@@ -71,6 +73,21 @@ app.post('/episodes/:id/merge', async (c) => {
     subtitleStage = st as 'compose' | 'merge'
     writeMergeSettings(episodeId, { subtitleStage })
   }
+  // ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking —— 校验 + 持久化
+  //   (不传 bgm → 沿用已保存的; 传了但非法 → 400 且不建 merge 记录)
+  let bgm = currentSettings.bgm
+  if (body?.bgm != null) {
+    const b = validateBgmConfig(body.bgm)
+    if (!b.ok) {
+      logTaskWarn('MergeAPI', 'episode-merge-invalid-bgm', {
+        episodeId, dramaId: ep.dramaId, errors: b.errors,
+        hint: 'BGM 配置不合法 → 已拒绝, 没有新建 merge 记录',
+      })
+      return badRequest(c, `BGM 配置不合法: ${b.errors.join('; ')}`)
+    }
+    bgm = b.config
+    writeMergeSettings(episodeId, { bgm })
+  }
   if (body?.grade != null) {
     const g = validateGradeConfig(body.grade)
     if (!g.ok) {
@@ -104,7 +121,7 @@ app.post('/episodes/:id/merge', async (c) => {
 
   try {
     logTaskStart('MergeAPI', 'episode-merge', { episodeId, dramaId: ep.dramaId })
-    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade, subtitleStage })
+    const mergeId = await mergeEpisodeVideos(episodeId, ep.dramaId, { transitions: t.config, grade, subtitleStage, bgm })
     logTaskSuccess('MergeAPI', 'episode-merge', { episodeId, mergeId })
     return success(c, { merge_id: mergeId, status: 'processing' })
   } catch (err: any) {
@@ -145,6 +162,32 @@ app.get('/episodes/:id/merge/export-pack', async (c) => {
 //   前端进页面时拉一次 → 用户改完的调色参数下次再拼同一集仍然生效
 app.get('/episodes/:id/merge/settings', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  return success(c, readMergeSettings(episodeId))
+})
+
+// POST /episodes/:id/merge/settings — 【只保存设置, 不启动拼接】
+//   ★ Sprint 40 T2: BGM 选择 + 音量 + duck 参数改完就存 → 刷新页面 / 下次拼接仍然生效
+//   (拼接本身会带上 bgm 参数; 这个接口让用户不点拼接也能把设置留住)
+app.post('/episodes/:id/merge/settings', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+
+  if (body?.bgm != null) {
+    const b = validateBgmConfig(body.bgm)
+    if (!b.ok) {
+      logTaskWarn('MergeAPI', 'merge-settings-invalid-bgm', {
+        episodeId, dramaId: ep.dramaId, errors: b.errors,
+        hint: 'BGM 配置不合法 → 没有保存',
+      })
+      return badRequest(c, `BGM 配置不合法: ${b.errors.join('; ')}`)
+    }
+    writeMergeSettings(episodeId, { bgm: b.config })
+  }
+
   return success(c, readMergeSettings(episodeId))
 })
 

@@ -32,6 +32,11 @@ import { now } from '../utils/response.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 // Sprint 11 Task B/F (PM msg-20261016-001): 归一化前 ffprobe 探测音轨/分辨率/帧率
 import { probeMedia, type MediaProbe } from '../utils/ffprobe-helpers.js'
+// ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking —— 纯逻辑在独立模块 (好解耦 + 可离线断言)
+import {
+  DEFAULT_MERGE_BGM, BGM_DIR, resolveBgmPath, validateBgmConfig, buildBgmMixChain,
+  type MergeBgmConfig, type BgmMixChain,
+} from './merge-bgm.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -70,6 +75,8 @@ export async function mergeEpisodeVideos(
     transitions?: MergeTransitionConfig
     grade?: MergeGradeConfig
     subtitleStage?: MergeSubtitleStage
+    /** ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (不传 = 不加 BGM = 与改动前逐样本一致) */
+    bgm?: MergeBgmConfig | null
   },
 ): Promise<number> {
   const storyboards = db.select().from(schema.storyboards)
@@ -104,7 +111,7 @@ export async function mergeEpisodeVideos(
   const mergeId = Number(res.lastInsertRowid)
 
   // 异步执行 (★ Sprint 39 T2: 逐镜缝转场配置透传给拼接执行)
-  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade, options?.subtitleStage, composedStoryboards).catch(err => {
+  doMerge(mergeId, episodeId, videos, options?.transitions, options?.grade, options?.subtitleStage, composedStoryboards, options?.bgm).catch(err => {
     logTaskError('MergeTask', 'episode-merge', { mergeId, episodeId, error: err.message })
     console.error(`[Merge] Failed:`, err)
     db.update(schema.videoMerges)
@@ -199,10 +206,13 @@ export interface MergeGradeConfig {
 }
 export const DEFAULT_MERGE_GRADE: MergeGradeConfig = { enabled: false, brightness: 0, contrast: 1, saturation: 1 }
 export type MergeSubtitleStage = 'compose' | 'merge'
+
 export interface MergeSettings {
   grade: MergeGradeConfig
   /** ★ Sprint 39 T4: 字幕烧录时机 —— compose = 合成阶段烧 (默认, 改动前的行为); merge = 拼接阶段烧 (字幕只过 一次有损编码) */
   subtitleStage: MergeSubtitleStage
+  /** ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (默认 file='' = 不加 BGM) */
+  bgm: MergeBgmConfig
 }
 const MERGE_SETTINGS_DIR = path.join(DATA_ROOT, 'merge-settings')
 /** ★ Sprint 39 T4: 拼接阶段烧字幕时用的字体目录与样式 (与 compose 阶段逐字一致 → 字幕看起来一样) */
@@ -240,12 +250,17 @@ export function readMergeSettings(episodeId: number): MergeSettings {
     const raw = fs.readFileSync(mergeSettingsPath(episodeId), 'utf-8')
     const parsed = JSON.parse(raw)
     const v = validateGradeConfig(parsed?.grade)
+    // ★ Sprint 40 T2: BGM —— 素材被删了 → 静默降级成"不加 BGM"(但保留用户配的音量/duck 参数)
+    const b = validateBgmConfig(parsed?.bgm, BGM_DIR, false)
+    const bgm: MergeBgmConfig = b.ok ? { ...b.config } : { ...DEFAULT_MERGE_BGM }
+    if (bgm.file && !resolveBgmPath(bgm.file)) bgm.file = ''
     return {
       grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE },
       subtitleStage: parsed?.subtitleStage === 'merge' ? 'merge' : 'compose',
+      bgm,
     }
   } catch {
-    return { grade: { ...DEFAULT_MERGE_GRADE }, subtitleStage: 'compose' }
+    return { grade: { ...DEFAULT_MERGE_GRADE }, subtitleStage: 'compose', bgm: { ...DEFAULT_MERGE_BGM } }
   }
 }
 
@@ -255,6 +270,8 @@ export function writeMergeSettings(episodeId: number, patch: Partial<MergeSettin
   const next: MergeSettings = {
     grade: patch.grade ?? current.grade,
     subtitleStage: patch.subtitleStage ?? current.subtitleStage,
+    // ★ Sprint 40 T2: BGM 选择 + 参数一起持久化 (刷新页面后仍在)
+    bgm: patch.bgm ?? current.bgm,
   }
   try {
     fs.mkdirSync(MERGE_SETTINGS_DIR, { recursive: true })
@@ -555,6 +572,8 @@ async function mergeWithXfade(
   transitions: Array<{ type: string; durationSec: number }>,
   grade?: MergeGradeConfig,
   mergedSrtPath?: string | null,
+  /** ★ Sprint 40 T2: BGM 素材 (null = 不铺 BGM → filter 链与改动前逐字一致) */
+  bgm?: { path: string; config: MergeBgmConfig } | null,
 ): Promise<void> {
   // ★ Sprint 39 T2: 逐镜缝的转场 (默认全是 fade + XFADE_DURATION → 与改动前逐字一致)
   const D = XFADE_DURATION
@@ -563,6 +582,31 @@ async function mergeWithXfade(
 
   // 单个 clip 不需要转场, 直接转封装
   if (clips.length === 1) {
+    // ★ Sprint 40 T2: 加了 BGM 就不能纯 copy (音频要混) → 视频仍 copy, 音频走 filter
+    if (bgm) {
+      const chain = buildBgmMixChain('0:a', bgm.config, 1, durationSec[0])
+      await new Promise<void>((resolve, reject) => {
+        const cmd = ffmpeg()
+        cmd.input(clips[0])
+        cmd.input(bgm.path).inputOptions(['-stream_loop', '-1'])
+        cmd
+          .complexFilter(chain.filters.join(';'))
+          .outputOptions([
+            '-map', '0:v',
+            '-map', `[${chain.audioOutLabel}]`,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-ar', '48000',
+            '-b:a', '192k',
+            '-movflags', '+faststart',
+          ])
+          .output(outputPath)
+          .on('end', () => resolve())
+          .on('error', (err) => reject(err))
+          .run()
+      })
+      return
+    }
     await new Promise<void>((resolve, reject) => {
       ffmpeg(clips[0])
         .outputOptions(['-c', 'copy'])
@@ -603,6 +647,15 @@ async function mergeWithXfade(
     accDurAudio += durationSec[i] - g.durationSec
   }
 
+  // ★ Sprint 40 T2: BGM 铺底 + 对白 ducking (没配 BGM → 一条滤镜都不加 → 与改动前逐样本一致)
+  let audioOut = 'aout'
+  if (bgm) {
+    // BGM 输入排在所有 clip 之后 → 它的输入序号 = clips.length
+    const chain = buildBgmMixChain('aout', bgm.config, clips.length, accDurAudio)
+    filters.push(...chain.filters)
+    audioOut = chain.audioOutLabel
+  }
+
   // ★ Sprint 39 T3: 全片统一调色 —— 套在【所有转场之后】(一次性作用于整片, 不是只作用在某几段)
   let videoOut = 'vout'
   if (grade?.enabled) {
@@ -619,11 +672,13 @@ async function mergeWithXfade(
   await new Promise<void>((resolve, reject) => {
     const cmd = ffmpeg()
     for (const clip of clips) cmd.input(clip)
+    // ★ Sprint 40 T2: BGM 作为最后一路输入 (-stream_loop -1 = 循环铺满整片)
+    if (bgm) cmd.input(bgm.path).inputOptions(['-stream_loop', '-1'])
     cmd
       .complexFilter(filters.join(';'))
       .outputOptions([
         '-map', `[${videoOut}]`,
-        '-map', '[aout]',
+        '-map', `[${audioOut}]`,
         '-c:v', 'libx264',
         // ★ Sprint 39 T1: crf/preset 可配 (env), 默认 crf 18 + preset medium (比改动前好)
         '-preset', encode.preset,
@@ -648,6 +703,8 @@ async function doMerge(
   gradeConfig?: MergeGradeConfig,
   subtitleStage?: MergeSubtitleStage,
   storyboards?: Array<{ subtitleUrl?: string | null }>,
+  /** ★ Sprint 40 T2: BGM 配置 (文件不在目录里 → 当作没配 + 记警告, 不阻断拼接) */
+  bgmConfig?: MergeBgmConfig | null,
 ) {
   // 输出文件 (先定路径, 归一化与两种拼接方式都写到这里)
   const outputDir = path.join(STORAGE_ROOT, 'merged')
@@ -666,6 +723,21 @@ async function doMerge(
       used: encode.preset,
       hint: '比 medium 更快的 preset 会降低画质 → 已忽略 (AC: 禁止用降 preset 换速度)',
     })
+  }
+
+  // ── ★ Sprint 40 T2: BGM 素材解析 ──
+  //   文件不在 data/media/bgm/ 里 → 当作没配 (记警告), 不让整次拼接失败
+  let bgmSource: { path: string; config: MergeBgmConfig } | null = null
+  if (bgmConfig?.file) {
+    const abs = resolveBgmPath(bgmConfig.file)
+    if (abs) {
+      bgmSource = { path: abs, config: bgmConfig }
+    } else {
+      logTaskWarn('MergeTask', 'bgm-missing', {
+        mergeId, episodeId, file: bgmConfig.file,
+        hint: 'BGM 素材不在 data/media/bgm/ 里 → 这次不铺 BGM (不阻断拼接)',
+      })
+    }
   }
 
   // ── Task B 前置: 音频 + 规格归一化 ──
@@ -706,6 +778,7 @@ async function doMerge(
         transitions,
         gradeConfig,
         mergedSrtPath,
+        bgmSource,
       )
       usedXfade = true
       logTaskSuccess('MergeTask', 'xfade-merge-done', {
@@ -739,10 +812,9 @@ async function doMerge(
 
     try {
       await new Promise<void>((resolve, reject) => {
-        ffmpeg()
-          .input(listPath)
-          .inputOptions(['-f', 'concat', '-safe', '0'])
-          .outputOptions([
+        const cmd = ffmpeg()
+        cmd.input(listPath).inputOptions(['-f', 'concat', '-safe', '0'])
+        const outOpts: string[] = [
             '-fflags', '+genpts',
             '-c:v', 'libx264',
             // ★ Sprint 39 T1: 同上 (硬切回退路径也要用同一套质量参数)
@@ -760,7 +832,17 @@ async function doMerge(
             '-ar', '48000',
             '-b:a', '192k',
             '-movflags', '+faststart',
-          ])
+        ]
+        // ★ Sprint 40 T2: 回退路径也要铺 BGM (否则 xfade 失败时 BGM 会静默消失)
+        if (bgmSource) {
+          const totalDur = normalizedProbes.reduce((acc, p) => acc + (p.durationSec || 0), 0)
+          const chain = buildBgmMixChain('0:a', bgmSource.config, 1, totalDur)
+          cmd.input(bgmSource.path).inputOptions(['-stream_loop', '-1'])
+          cmd.complexFilter(chain.filters.join(';'))
+          outOpts.push('-map', '0:v', '-map', `[${chain.audioOutLabel}]`)
+        }
+        cmd
+          .outputOptions(outOpts)
           .output(outputPath)
           .on('end', () => resolve())
           .on('error', (err) => reject(err))
@@ -770,6 +852,23 @@ async function doMerge(
       try { fs.unlinkSync(listPath) } catch { /* ignore */ }
     }
     logTaskSuccess('MergeTask', 'concat-merge-done', { mergeId, clips: normalized.length })
+  }
+
+  // ── ★ Sprint 40 T2: BGM 落盘记录 (flow-log 能查到用了哪个文件/音量/四个 duck 参数/是否走了 ducking) ──
+  if (bgmSource) {
+    logTaskSuccess('MergeTask', 'bgm-mix-done', {
+      mergeId,
+      episodeId,
+      file: bgmSource.config.file,
+      volumeDb: bgmSource.config.volumeDb,
+      threshold: bgmSource.config.threshold,
+      ratio: bgmSource.config.ratio,
+      attack: bgmSource.config.attack,
+      release: bgmSource.config.release,
+      ducking: 'sidechaincompress',
+      ducked: true,
+      hint: 'BGM 已铺底; 用对白轨当 sidechain key 动态压低 (不是固定压低)',
+    })
   }
 
   // ── Task B 后置校验: 输入有有声流但输出无声流 → 记 ERROR 便于追溯 ──
