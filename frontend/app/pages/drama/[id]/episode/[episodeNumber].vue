@@ -1915,7 +1915,8 @@
                 人工精剪 (OpenChatCut 之类工具) 出来的成片【只留在你自己的电脑上, 不会回流到本项目】——
                 精剪素材来自上面导出的素材包; OpenChatCut 剪完默认落在本机
                 <span class="mono">~/Library/Application Support/OpenChatCut/public/media/uploads/</span>
-                (文件名 openchatcut-export-job-*.mp4), 建议再另存到自己方便找的位置。
+                (文件名 openchatcut-export-job-*.mp4); 请把成片复制到
+                <span class="mono">/Users/mac/Documents/aicg-dev/openChatCut-out/</span> 统一存放。
               </div>
 
               <!-- 展开的面板: 放在整行【下面】(宽度与成片一致, 内容自己滚动 → 不把视频顶出视口) -->
