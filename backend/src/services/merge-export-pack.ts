@@ -115,20 +115,31 @@ export async function buildMergeExportPack(episodeId: number): Promise<MergePack
     : []
   const sceneName = new Map<number, string>(scenes.map(s => [s.id, s.location || '']))
 
-  const allCharIds = new Set<number>()
-  for (const sb of sbs) {
-    for (const id of (parseCharIds(sb) || [])) allCharIds.add(id)
+  // ★ 角色/道具 都在【关联表】里 (storyboards 表上没有这两个列):
+  //   角色 = storyboardCharacters, 道具 = storyboardProps
+  //   ★ 踩过一次坑: 一开始去读 sb.character_ids (那列根本不存在) → manifest 里 characters[] 全是空的
+  const sbIds = sbs.map(sb => sb.id)
+  const charLinks = db.select().from(schema.storyboardCharacters)
+    .where(inArray(schema.storyboardCharacters.storyboardId, sbIds)).all()
+  const charIdsBySb = new Map<number, number[]>()
+  for (const l of charLinks) {
+    const arr = charIdsBySb.get(l.storyboardId) || []
+    arr.push(l.characterId)
+    charIdsBySb.set(l.storyboardId, arr)
   }
-  const chars = allCharIds.size
-    ? db.select().from(schema.characters).where(inArray(schema.characters.id, [...allCharIds])).all()
+  const allCharIds = [...new Set([...charIdsBySb.values()].flat())]
+  const chars = allCharIds.length
+    ? db.select().from(schema.characters).where(inArray(schema.characters.id, allCharIds)).all()
     : []
   const charName = new Map<number, string>(chars.map(c => [c.id, c.name]))
 
+  const propLinks = db.select().from(schema.storyboardProps)
+    .where(inArray(schema.storyboardProps.storyboardId, sbIds)).all()
   const propIdsBySb = new Map<number, number[]>()
-  for (const sb of sbs) {
-    const ls = db.select().from(schema.storyboardProps)
-      .where(eq(schema.storyboardProps.storyboardId, sb.id)).all()
-    propIdsBySb.set(sb.id, ls.map(l => l.propId))
+  for (const l of propLinks) {
+    const arr = propIdsBySb.get(l.storyboardId) || []
+    arr.push(l.propId)
+    propIdsBySb.set(l.storyboardId, arr)
   }
   const allPropIds = [...new Set([...propIdsBySb.values()].flat())]
   const props = allPropIds.length
@@ -172,7 +183,7 @@ export async function buildMergeExportPack(episodeId: number): Promise<MergePack
       duration_sec: duration,
       start_in_pack_sec: Number(start.toFixed(3)),
       scene: { id: sb.sceneId ?? null, name: sb.sceneId ? (sceneName.get(sb.sceneId) || null) : null },
-      characters: (parseCharIds(sb) || []).map(id => ({ id, name: charName.get(id) || '' })),
+      characters: (charIdsBySb.get(sb.id) || []).map(id => ({ id, name: charName.get(id) || '' })),
       // ★ 台词原文: 不改写 / 不翻译 / 不合并说话人
       dialogue: parsed.segments.map(sg => ({ speaker: sg.speaker, text: sg.text })),
       props: (propIdsBySb.get(sb.id) || []).map(id => ({ id, name: propName.get(id) || '' })),
@@ -211,19 +222,6 @@ export async function buildMergeExportPack(episodeId: number): Promise<MergePack
   const zipPath = path.join(PACK_DIR, zipName)
   createZipFile(entries, zipPath)
   return { zipPath, zipName, clipCount: clips.length, totalDurationSec: Number(start.toFixed(3)) }
-}
-
-/** character_ids (JSON 数组) */
-function parseCharIds(sb: any): number[] {
-  const raw = sb?.characterIds ?? sb?.character_ids
-  if (Array.isArray(raw)) return raw.map(Number).filter(Boolean)
-  if (typeof raw === 'string' && raw.trim()) {
-    try {
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed.map(Number).filter(Boolean) : []
-    } catch { return [] }
-  }
-  return []
 }
 
 function writeTempFile(name: string, content: string): string {
