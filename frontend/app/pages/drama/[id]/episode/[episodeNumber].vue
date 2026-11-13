@@ -1949,13 +1949,17 @@
                   <span style="font-size:11px">片头 / 集数卡</span>
                 </label>
                 <input v-model="mergeTitleCard.title" type="text" :placeholder="(drama?.title || '标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <input v-model="mergeTitleCard.subtitle" type="text" :placeholder="(episode?.episodeNumber ? '第 ' + episode.episodeNumber + ' 集' : '副标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                <input v-model="mergeTitleCard.subtitle" type="text" placeholder="副标题 (可留空)" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
                 <input v-model.number="mergeTitleCard.durationSec" type="number" min="1" max="10" step="0.5" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
                 <span class="dim" style="font-size:11px">秒</span>
                 <input v-model="mergeTitleCard.background" type="color" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
                 <input v-model.number="mergeTitleCard.fontSize" type="number" min="16" max="240" step="4" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
                 <span class="dim" style="font-size:11px">字号</span>
                 <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">(成片开头多 {{ mergeTitleCard.durationSec }}s, 镜缝编号整体 +1)</span>
+                <!-- ★ Sprint 40 追加单 173: 集数是【自动加】的, 与副标题不冲突 (两者都显示) -->
+                <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">
+                  集数『{{ episode?.episodeNumber ? '第 ' + episode.episodeNumber + ' 集' : '' }}』自动加在右下角
+                </span>
               </div>
 
               <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)

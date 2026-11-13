@@ -876,7 +876,7 @@ async function doMerge(
   /** 回退路径可能再生成一个短片头 → 一起记下来最后清理 */
   const cardTempFiles: string[] = []
   let cardRender: {
-    title: string; subtitle: string; durationSec: number; background: string;
+    title: string; subtitle: string; episodeBadge: string; durationSec: number; background: string;
     textColor: string; fontSize: number;
   } | null = null
   if (cardEnabled && titleCardConfig) {
@@ -887,13 +887,16 @@ async function doMerge(
       ? db.select().from(schema.dramas).where(eq(schema.dramas.id, epRow.dramaId)).all()[0]
       : undefined
     const cardTitle = titleCardConfig.title || dramaRow?.title || ''
+    // ★ Sprint 40 追加单 173: 副标题 = 用户填的 (可为空); 集数 = 自动取的, 两者【都要显示】
     const cardSubtitle = titleCardConfig.subtitle
-      || (epRow?.episodeNumber != null ? `第 ${epRow.episodeNumber} 集` : '')
+    // 集数的数据源与原来自动填副标题时【完全一致】(本集的集号, 不是镜号)
+    const cardEpisodeBadge = epRow?.episodeNumber != null ? `第 ${epRow.episodeNumber} 集` : ''
     const cardPath = path.join(STORAGE_ROOT, 'temp', `title-card-${uuid()}.mp4`)
     fs.mkdirSync(path.dirname(cardPath), { recursive: true })
     cardRender = {
       title: cardTitle,
       subtitle: cardSubtitle,
+      episodeBadge: cardEpisodeBadge,
       durationSec: titleCardConfig.durationSec,
       background: titleCardConfig.background,
       textColor: titleCardConfig.textColor,
@@ -903,6 +906,7 @@ async function doMerge(
       await generateTitleCard({
         title: cardRender.title,
         subtitle: cardRender.subtitle,
+        episodeBadge: cardRender.episodeBadge,
         durationSec: cardRender.durationSec,
         background: cardRender.background,
         textColor: cardRender.textColor,
@@ -934,6 +938,7 @@ async function doMerge(
       mergeId, episodeId,
       title: cardTitle,
       subtitle: cardSubtitle,
+      episodeBadge: cardEpisodeBadge,
       durationSec: titleCardConfig.durationSec,
       clipDurationSec: card.clipDurationSec,
       gapDurSec,
@@ -1032,6 +1037,7 @@ async function doMerge(
       await generateTitleCard({
         title: cardRender.title,
         subtitle: cardRender.subtitle,
+        episodeBadge: cardRender.episodeBadge,
         durationSec: cardRender.durationSec,
         background: cardRender.background,
         textColor: cardRender.textColor,
@@ -1226,6 +1232,7 @@ async function doMerge(
           enabled: true,
           title: cardRender?.title || '',
           subtitle: cardRender?.subtitle || '',
+          episodeBadge: cardRender?.episodeBadge || '',
           durationSec: card.durationSec,
           clipDurationSec: card.clipDurationSec,
         }

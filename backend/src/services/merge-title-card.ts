@@ -133,6 +133,8 @@ export function buildTitleCardFilter(
     titleTextFile?: string | null
     /** 副标题的 UTF-8 文本文件 */
     subtitleTextFile?: string | null
+    /** ★ Sprint 40 追加单 173: 集数角的 UTF-8 文本文件 (右下角集数卡) */
+    episodeBadgeTextFile?: string | null
   },
 ): string {
   const font = findCjkFont()
@@ -154,6 +156,17 @@ export function buildTitleCardFilter(
     filters.push(
       `drawtext=${fontOpt}:textfile='${escapeFilterPath(opts.subtitleTextFile)}':fontsize=${subSize}:fontcolor=${fg}:` +
       `x=(w-text_w)/2:y=(h*${frac.toFixed(4)})/2+${Math.round(cfg.fontSize * 0.75)}-text_h/2:expansion=none`
+    )
+  }
+  // ★ Sprint 40 追加单 173: 集数做成【右下角集数卡】(像剧集角标)
+  //   —— 独立于标题区 (小字号 + 一点底衬), 与主标题/副标题不重叠
+  if (opts.episodeBadgeTextFile) {
+    const badgeSize = Math.max(14, Math.round(cfg.fontSize * 0.3))
+    const margin = Math.max(16, Math.round(opts.width * 0.03))
+    const boxBorder = Math.max(4, Math.round(badgeSize * 0.5))
+    filters.push(
+      `drawtext=${fontOpt}:textfile='${escapeFilterPath(opts.episodeBadgeTextFile)}':fontsize=${badgeSize}:fontcolor=${fg}:` +
+      `x=w-text_w-${margin}:y=h-text_h-${margin}:box=1:boxcolor=black@0.45:boxborderw=${boxBorder}:expansion=none`
     )
   }
   // 开头淡入 (从黑 → 片头)
@@ -197,6 +210,8 @@ function runFfmpeg(args: string[]): Promise<void> {
 export async function generateTitleCard(opts: {
   title: string
   subtitle: string
+  /** ★ Sprint 40 追加单 173: 集数角 (自动取本集集号, 如 '第 1 集') —— 空 = 不画 */
+  episodeBadge: string
   durationSec: number
   background: string
   textColor: string
@@ -216,8 +231,10 @@ export async function generateTitleCard(opts: {
   fs.mkdirSync(textDir, { recursive: true })
   const titleFile = path.join(textDir, `${path.basename(opts.outputPath)}.title.txt`)
   const subtitleFile = path.join(textDir, `${path.basename(opts.outputPath)}.subtitle.txt`)
+  const badgeFile = path.join(textDir, `${path.basename(opts.outputPath)}.badge.txt`)
   if (opts.title) fs.writeFileSync(titleFile, opts.title, 'utf-8')
   if (opts.subtitle) fs.writeFileSync(subtitleFile, opts.subtitle, 'utf-8')
+  if (opts.episodeBadge) fs.writeFileSync(badgeFile, opts.episodeBadge, 'utf-8')
 
   const vf = buildTitleCardFilter(
     {
@@ -236,6 +253,7 @@ export async function generateTitleCard(opts: {
       visibleSec: opts.durationSec,
       titleTextFile: opts.title ? titleFile : null,
       subtitleTextFile: opts.subtitle ? subtitleFile : null,
+      episodeBadgeTextFile: opts.episodeBadge ? badgeFile : null,
     },
   )
 
