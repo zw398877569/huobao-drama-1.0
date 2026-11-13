@@ -40,7 +40,10 @@
             <td>{{ formatDateTime(p.scheduledAt) }}</td>
             <td>{{ formatCountdown(p.scheduledAt) }}</td>
             <td><span class="tag" :class="`tag-${p.status}`">{{ statusLabel(p.status) }}</span></td>
-            <td>{{ p.shotCount }} 镜</td>
+            <td>
+              {{ p.shotCount }} 镜
+              <div class="dim mono" style="font-size:10px" :title="shotNumbersOf(p)">{{ shotNumbersShort(p) }}</div>
+            </td>
             <td>{{ p.successCount }} / {{ p.failedCount }}</td>
             <!-- Sprint 11c: plan 总耗时 (串行生成, 约等于各单镜耗时之和) -->
             <td class="mono">{{ fmtDuration(p.planDurationSecs) }}</td>
@@ -98,10 +101,16 @@
               <button type="button" class="btn btn-sm" @click="selectNoneShots">清空</button>
             </div>
             <div class="shot-list">
-              <label v-for="sb in shots" :key="sb.id" class="shot-item">
-                <input type="checkbox" :value="sb.id" v-model="createForm.shotIds" />
+              <label v-for="sb in shots" :key="sb.id" class="shot-item" :class="{ disabled: shotConflictMap.has(sb.id) }">
+                <input type="checkbox" :value="sb.id" v-model="createForm.shotIds" :disabled="shotConflictMap.has(sb.id)" />
                 <span class="shot-num">#{{ sb.storyboardNumber ?? sb.id }}</span>
                 <span class="shot-title">{{ sb.title || sb.description || '无标题' }}</span>
+                <!-- ★ Sprint 41 追加单 176: 已在未完成计划里的镜头 → 置灰不可选, 并说明在哪条计划 -->
+                <span
+                  v-if="shotConflictMap.has(sb.id)"
+                  class="tag tag-pending"
+                  :title="'该镜头已被未完成的计划占用, 到点会生成一次 → 不能再排进别的计划'"
+                >已在计划 #{{ shotConflictMap.get(sb.id)?.planId }} ({{ formatDateTime(shotConflictMap.get(sb.id)?.scheduledAt) }})</span>
                 <!-- 已生成/未生成标识 (sprint-10-v2 user 提需求, dev 直接做, 不走 PM 派单) -->
                 <span v-if="sb.video_url || sb.videoUrl" class="tag tag-done" title="该 storyboard 已生成视频, 重新生成会覆盖">✓ 已生成</span>
                 <span v-else class="tag tag-pending dim" title="未生成视频">○ 未生成</span>
@@ -320,8 +329,48 @@ function openCreateModal() {
   createModalOpen.value = true
 }
 
+/**
+ * ★ Sprint 41 追加单 176 (PM msg-20261113-176): 已经在【未完成计划 (pending / running)】里的镜头
+ *   → 置灰不可选 (前端体验层; 后端那道校验才是真正的防呆)。
+ *   ★ done / failed / cancelled 不算占用 → 用户还能重跑一个失败的镜头。
+ */
+const shotConflictMap = computed<Map<number, { planId: number; scheduledAt: string }>>(() => {
+  const map = new Map<number, { planId: number; scheduledAt: string }>()
+  for (const p of plans.value || []) {
+    const st = p.status
+    if (st !== 'pending' && st !== 'running') continue
+    let ids: number[] = []
+    try { ids = JSON.parse(p.shotIds || '[]') } catch { ids = [] }
+    for (const raw of ids) {
+      const id = Number(raw)
+      if (!Number.isInteger(id) || map.has(id)) continue
+      map.set(id, { planId: p.id, scheduledAt: p.scheduledAt })
+    }
+  }
+  return map
+})
+
+/** 计划占用的镜头号 (列表页要能看出每条计划占了哪些镜头) */
+function shotNumbersOf(p: any): string {
+  let ids: number[] = []
+  try { ids = JSON.parse(p?.shotIds || '[]') } catch { ids = [] }
+  return ids.map((raw: any) => {
+    const id = Number(raw)
+    const sb = shots.value.find((s: any) => s.id === id)
+    const no = sb?.storyboardNumber ?? sb?.storyboard_number ?? id
+    return `#${no}`
+  }).join(', ')
+}
+function shotNumbersShort(p: any): string {
+  const s = shotNumbersOf(p)
+  if (!s) return ''
+  const parts = s.split(', ')
+  return parts.length > 6 ? parts.slice(0, 6).join(', ') + ` …共 ${parts.length} 个` : s
+}
+
 function selectAllShots() {
-  createForm.value.shotIds = shots.value.map((s) => s.id)
+  // ★ 全选不能把已在未完成计划里的镜头带进来 (否则点一下全选就重复排了)
+  createForm.value.shotIds = shots.value.filter((s) => !shotConflictMap.value.has(s.id)).map((s) => s.id)
 }
 function selectNoneShots() {
   createForm.value.shotIds = []
@@ -330,6 +379,12 @@ function selectNoneShots() {
 async function onCreate() {
   if (!canCreate.value) return
   createError.value = ''
+  // ★ Sprint 41 追加单 176: 提交前再查一次冲突 (复选框已置灰, 但表单状态可能是打开弹窗前留下的)
+  const conflictIds = createForm.value.shotIds.filter((id) => shotConflictMap.value.has(id))
+  if (conflictIds.length) {
+    createError.value = '有镜头已经在别的未完成计划里了 —— 请先取消那条计划, 或换其它镜头'
+    return
+  }
   creating.value = true
   try {
     // datetime-local 是 'YYYY-MM-DDTHH:MM' 格式 (浏览器本地时间, Asia/Shanghai), 拼秒让它成 ISO datetime 字符串
@@ -525,6 +580,9 @@ function formatDateTime(iso: string) {
   border-radius: 4px;
 }
 .shot-item:hover { background: var(--bg-0); }
+/* ★ Sprint 41 追加单 176: 已在未完成计划里的镜头 → 置灰不可选 */
+.shot-item.disabled { opacity: 0.5; cursor: not-allowed; }
+.shot-item.disabled:hover { background: transparent; }
 .shot-num {
   font-family: ui-monospace, monospace;
   font-size: 11px;
