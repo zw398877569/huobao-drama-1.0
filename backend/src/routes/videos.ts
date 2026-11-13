@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
+// ★ Sprint 41 追加单 176: 同一镜头不能被排进两个未完成的定时计划 (否则到点会生成两次、扣两次钱)
+import {
+  findEpisodeShotConflicts, formatConflictMessage, getShotNumbers,
+} from '../services/batch-schedule-guard.js'
 import { generateVideo } from '../services/video-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 // Sprint 045 QA msg-20261016-068 Bug-B: body.drama_id 缺失时按 storyboard 链路反查
@@ -126,6 +130,16 @@ app.post('/batch-schedules', async (c) => {
   const videoConfigId = body.video_config_id ? Number(body.video_config_id) : null
   const shotIds = body.shot_ids.map((n: unknown) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0)
   if (shotIds.length === 0) return badRequest(c, 'shot_ids contain no valid integer IDs')
+
+  // ★ Sprint 41 追加单 176 (PM msg-20261113-176): 【后端防呆】——
+  //   同一个镜头已经在别的【未完成计划 (pending/running)】里 → 拒绝, 不新建计划记录。
+  //   前端置灰只是体验, 绕过前端直接调接口也一样会重复生成 + 重复扣费 → 这一层必须有。
+  //   ★ done / failed / cancelled 的计划不算占用 (用户要能重跑失败的镜头)。
+  const conflicts = findEpisodeShotConflicts(episodeId, shotIds)
+  if (conflicts.length) {
+    const msg = formatConflictMessage(conflicts, getShotNumbers(conflicts.map(c => c.shotId)))
+    return badRequest(c, msg)
+  }
 
   try {
     const createdAt = now()
