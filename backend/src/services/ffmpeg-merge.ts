@@ -541,7 +541,13 @@ async function normalizeClips(
       const cmd = ffmpeg(src)
       if (!probe.hasAudio) {
         // 补一条等长静音轨 (anullsrc), 用 -shortest 截到视频长度
-        cmd.inputOptions(['-f', 'lavfi', '-t', String(probe.durationSec || 1), '-i', 'anullsrc=r=48000:cl=stereo'])
+        // ★ 必须是【独立的一路输入】: 以前把 '-f lavfi ... -i anullsrc=...' 塞进 inputOptions,
+        //   fluent-ffmpeg 会把它排在 src 前面 → 输入序号错位 (0 变成 anullsrc),
+        //   而下面的 map 仍按 0:v / 1:a 写 → 实测报 "Stream map '0:v' matches no streams"。
+        //   现在 anullsrc 是第 2 路输入 (0=src, 1=anullsrc) → 与下面的 map 一致。
+        cmd.input('anullsrc=r=48000:cl=stereo')
+          .inputFormat('lavfi')
+          .inputOptions(['-t', String(probe.durationSec || 1)])
       }
       cmd
         .outputOptions([
