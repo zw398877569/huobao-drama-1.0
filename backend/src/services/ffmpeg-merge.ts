@@ -867,6 +867,8 @@ async function doMerge(
   // ── ★ Sprint 40 T4: 片头 / 集数卡 (默认关) ──
   //   需要归一化后的分辨率/帧率 (片头必须与其它片段同规格才能进 xfade 链) → 放在归一化之后生成
   let card: { path: string; durationSec: number; clipDurationSec: number } | null = null
+  /** 回退路径可能再生成一个短片头 → 一起记下来最后清理 */
+  const cardTempFiles: string[] = []
   let cardRender: {
     title: string; subtitle: string; durationSec: number; background: string;
     textColor: string; fontSize: number;
@@ -891,21 +893,30 @@ async function doMerge(
       textColor: titleCardConfig.textColor,
       fontSize: titleCardConfig.fontSize,
     }
-    await generateTitleCard({
-      title: cardRender.title,
-      subtitle: cardRender.subtitle,
-      durationSec: cardRender.durationSec,
-      background: cardRender.background,
-      textColor: cardRender.textColor,
-      fontSize: cardRender.fontSize,
-      width: mergeSpec.width,
-      height: mergeSpec.height,
-      fps: mergeSpec.fps > 0 ? mergeSpec.fps : 24,
-      transitionDurSec: gapDurSec,
-      crf: encode.crf,
-      preset: encode.preset,
-      outputPath: cardPath,
-    })
+    try {
+      await generateTitleCard({
+        title: cardRender.title,
+        subtitle: cardRender.subtitle,
+        durationSec: cardRender.durationSec,
+        background: cardRender.background,
+        textColor: cardRender.textColor,
+        fontSize: cardRender.fontSize,
+        width: mergeSpec.width,
+        height: mergeSpec.height,
+        fps: mergeSpec.fps > 0 ? mergeSpec.fps : 24,
+        transitionDurSec: gapDurSec,
+        crf: encode.crf,
+        preset: encode.preset,
+        outputPath: cardPath,
+      })
+    } catch (err: any) {
+      const detail = err?.message || String(err)
+      logTaskError('MergeTask', 'title-card-failed', {
+        mergeId, episodeId, error: detail,
+        hint: '片头生成失败 —— 容器里的 ffmpeg 缺 drawtext 滤镜? 或找不到 Noto CJK 中文字体?',
+      })
+      throw new Error(`片头生成失败: ${detail}`)
+    }
     // ★ 片段长度 = 卡片时长 + 交给第 1 个镜头的转场时长:
     //   xfade 会把两个片段重叠 D 秒 → 成片总时长 = 片段总长 - 重叠 = 原时长 + 卡片时长 (正好 +2s)
     card = {
@@ -1028,6 +1039,7 @@ async function doMerge(
         outputPath: fallbackCardPath,
       })
     }
+    if (fallbackCardPath) cardTempFiles.push(fallbackCardPath)
     const concatFiles = fallbackCardPath ? [fallbackCardPath, ...normalized] : normalized
     fs.writeFileSync(listPath, concatFiles.map(v => `file '${v}'`).join('\n'), 'utf-8')
 
@@ -1151,6 +1163,15 @@ async function doMerge(
     if (p.startsWith(NORMALIZE_DIR)) {
       try { fs.unlinkSync(p) } catch { /* ignore */ }
     }
+  }
+  // 清理片头临时文件 (mp4 + drawtext 用的两个文本文件)
+  if (card) {
+    for (const p of [card.path, `${card.path}.title.txt`, `${card.path}.subtitle.txt`]) {
+      try { if (fs.existsSync(p)) fs.unlinkSync(p) } catch { /* ignore */ }
+    }
+  }
+  for (const p of cardTempFiles) {
+    try { if (fs.existsSync(p)) fs.unlinkSync(p) } catch { /* ignore */ }
   }
 
   // 获取时长

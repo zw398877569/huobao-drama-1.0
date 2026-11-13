@@ -11,7 +11,7 @@
  */
 import fs from 'fs'
 import path from 'path'
-import ffmpeg from 'fluent-ffmpeg'
+import { spawn } from 'child_process'
 
 export interface MergeTitleCardConfig {
   /** 是否开启片头 (默认关) */
@@ -163,6 +163,34 @@ export function buildTitleCardFilter(
 }
 
 /**
+ * 直接 spawn ffmpeg (【不走 fluent-ffmpeg】)。
+ *
+ * ★ 为什么不用 fluent-ffmpeg:
+ *   fluent-ffmpeg 在跑之前会做一次【能力检查】—— 解析 `ffmpeg -formats` 的输出, 看请求的
+ *   input format 在不在里面。而它的解析正则只认老格式的两列 ("DE xxx");
+ *   新版 ffmpeg 的 -formats 多了 device 标志列 (" D d lavfi") → 正则不匹配 →
+ *   误报 "Input format lavfi is not available"。
+ *   片头是【只要勾上就 100% 会走】的路径, 不能赌容器里 ffmpeg 的版本 → 自己拼参数自己跑。
+ */
+const FFMPEG_BIN = process.env.FFMPEG_PATH || 'ffmpeg'
+
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderr = ''
+    proc.stderr.on('data', (d: any) => {
+      stderr += String(d)
+      if (stderr.length > 8000) stderr = stderr.slice(-8000)
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-1500)}`))
+    })
+  })
+}
+
+/**
  * 生成片头卡视频 (无真实声音 → 配一条静音轨, 这样它能进 acrossfade 音频链)。
  * 产物与其它片段同分辨率/同帧率 → 能直接进 xfade。
  */
@@ -211,28 +239,25 @@ export async function generateTitleCard(opts: {
     },
   )
 
-  await new Promise<void>((resolve, reject) => {
-    ffmpeg()
-      .input(`color=c=${toFfmpegColor(opts.background)}:s=${opts.width}x${opts.height}:r=${opts.fps}:d=${clipLength}`)
-      .input('anullsrc=r=48000:cl=stereo')
-      .outputOptions([
-        '-vf', vf,
-        '-map', '0:v',
-        '-map', '1:a',
-        '-c:v', 'libx264',
-        '-preset', opts.preset,
-        '-crf', String(opts.crf),
-        '-pix_fmt', 'yuv420p',
-        '-r', String(opts.fps),
-        '-c:a', 'aac',
-        '-ar', '48000',
-        '-ac', '2',
-        '-shortest',
-        '-t', String(clipLength),
-      ])
-      .output(opts.outputPath)
-      .on('end', () => resolve())
-      .on('error', (err) => reject(err))
-      .run()
-  })
+  await runFfmpeg([
+    '-hide_banner', '-nostats', '-y',
+    // ★ lavfi 虚拟源: 必须显式 -f lavfi, 否则 ffmpeg 会把它当【文件路径】→
+    //   实机报错: color=c=0x101014:s=1344x768:r=24:d=2.4: No such file or directory
+    '-f', 'lavfi', '-i', `color=c=${toFfmpegColor(opts.background)}:s=${opts.width}x${opts.height}:r=${opts.fps}:d=${clipLength}`,
+    '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+    '-vf', vf,
+    '-map', '0:v',
+    '-map', '1:a',
+    '-c:v', 'libx264',
+    '-preset', opts.preset,
+    '-crf', String(opts.crf),
+    '-pix_fmt', 'yuv420p',
+    '-r', String(opts.fps),
+    '-c:a', 'aac',
+    '-ar', '48000',
+    '-ac', '2',
+    '-shortest',
+    '-t', String(clipLength),
+    opts.outputPath,
+  ])
 }
