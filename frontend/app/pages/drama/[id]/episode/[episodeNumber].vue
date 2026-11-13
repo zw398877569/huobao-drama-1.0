@@ -1124,12 +1124,26 @@
               <span class="tag mono">{{ ttsGeneratedCount }}/{{ ttsEligibleCount }} 已生成</span>
               <span class="tag">{{ lockedAudioConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="(pendingTTSIds?.length ?? 0) > 0" @click="batchShotTTS">
+                <button class="btn btn-sm" :disabled="(pendingTTSIds?.length ?? 0) > 0" @click="batchShotTTS()">
                   <Loader2 v-if="pendingTTSIds?.length > 0" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
                   {{  pendingTTSIds?.length ?? 0 > 0 ? '生成中…' : '批量生成'  }}
                 </button>
               </div>
+            </div>
+
+            <!-- ★ Sprint 41 T4 (PM msg-20261113-175): 批量配音的失败明细 + 只重试失败的 -->
+            <div v-if="batchTTSFailures.length" class="batch-shot-failures" style="margin-top:8px">
+              <div class="dim" style="font-size:11px; margin-bottom:4px">
+                {{ batchTTSFailures.length }} 条配音失败 ——
+                <span class="dim">『provider 临时错误』等一会儿再点重试; 『provider 报错』看原始错误</span>
+              </div>
+              <div v-for="f in batchTTSFailures" :key="f.storyboardId" class="batch-shot-failure">
+                #{{ f.shotNumber }} — {{ f.reason }}<span v-if="f.detail">（{{ f.detail }}）</span>
+              </div>
+              <button class="btn btn-sm" style="margin-top:6px" @click="batchShotTTS({ retryFailures: true })">
+                只重试失败的 {{ batchTTSFailures.length }} 条
+              </button>
             </div>
 
             <div v-if="!ttsEligibleCount" class="step-empty" style="min-height:260px">
@@ -1228,6 +1242,10 @@
             <div v-if="!batchShotRunning && batchShotFailures.length" class="batch-shot-failures">
               <div v-for="f in batchShotFailures" :key="f.storyboardId + ':' + f.frameType" class="batch-shot-failure">
                 #{{ f.shotNumber }} {{ f.frameType === 'first_frame' ? '首帧' : '尾帧' }} — {{ f.reason }}<span v-if="f.detail">（{{ f.detail }}）</span>
+              </div>
+              <div class="dim" style="font-size:11px; margin-top:4px">
+                『provider 临时错误』是上游在抖 —— 等一会儿点上面的『重试失败的 N 张』就行;
+                『依赖没就绪』要先补上一张的帧, 那一张好了后面自动接上。
               </div>
             </div>
 
@@ -2746,6 +2764,8 @@ const {
   getTTSSegments, getDialogueSpeaker,
   pendingTTSIds, isPendingTTS,
   genShotTTS, batchShotTTS,
+  // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误 + 只重试失败的入口)
+  batchTTSFailures,
   getDialogueLineCount,
   editTarget, editText, editPreview, editPreviewing, editSaving,
   openEditDialog, closeEditDialog, scheduleEditPreview, applyNormalizedDialogue, saveEditDialog,

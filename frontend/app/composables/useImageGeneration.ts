@@ -4,6 +4,13 @@ import { isTransitionShot, isCharacterEntryTransition } from '~/utils/transition
 // ★ Sprint 36 (PM msg-20261106-155): 角色档案里的【剧情道具】剥离 (前后端同语义, 改动要同步)
 import { stripPropsFromAppearance } from '~/utils/prop-guard'
 import { characterAPI, sceneAPI, propsAPI, imageAPI } from '~/composables/useApi'
+// ★ Sprint 41 (PM msg-20261113-175): 批量策略共享 (并发闸门 + 退避重试 + 可重试标记)
+import {
+  runBatchWithRetry, runWithConcurrency,
+  loadBatchConcurrency as loadSharedBatchConcurrency,
+  saveBatchConcurrency as saveSharedBatchConcurrency,
+  isRetryableMessage, stripRetryableMarker,
+} from '~/composables/useBatchPolicy'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {
@@ -40,6 +47,10 @@ export interface BatchShotFailure {
   /** provider 报错 / 依赖没就绪 / 其它 */
   reason: string
   detail?: string
+  /** ★ Sprint 41: 是不是 provider 的临时错误 (可重试) */
+  retryable?: boolean
+  /** ★ Sprint 41: 实际尝试了几次 */
+  attempts?: number
 }
 
 export function useImageGeneration(deps: Deps) {
@@ -797,8 +808,8 @@ export function useImageGeneration(deps: Deps) {
   async function genShotFrame(
     sb: any,
     frameType: string,
-    opts?: { requireRelay?: boolean; skipRelayWait?: boolean },
-  ): Promise<{ ok: boolean; reason?: 'dependency' | 'provider'; error?: string }> {
+    opts?: { requireRelay?: boolean; skipRelayWait?: boolean; attempt?: number; retryDelayMs?: number },
+  ): Promise<{ ok: boolean; reason?: 'dependency' | 'provider'; error?: string; retryable?: boolean }> {
     const key = framePendingKey(sb.id, frameType)
     // ★ Sprint 37 (PM msg-20261109-161): 记下【生成前】的帧 URL ——
     //   完成条件必须是『URL 变了』而不是『有没有帧』: 重新生成【已存在】的帧时旧图本来就在,
@@ -847,6 +858,10 @@ export function useImageGeneration(deps: Deps) {
         // ★ Sprint 28 fix_2: 这两个字段后端会记进 flow-log (ImageAPI/relay-reference + ImageAPI/reference-dropped)
         relay_shot_number: relay?.prevShotNumber ?? null,
         dropped_references: droppedRefs.length ? droppedRefs : undefined,
+        // ★ Sprint 41 T2: 把批量重试的【第几次尝试 / 间隔多少】带给后端 → 记进 flow-log
+        ...(opts?.attempt && opts.attempt > 1
+          ? { batch_attempt: opts.attempt, batch_retry_delay_ms: opts.retryDelayMs ?? null }
+          : {}),
       }
       // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
       if (imageConfigIdRef?.value != null) body.config_id = imageConfigIdRef.value
@@ -854,6 +869,7 @@ export function useImageGeneration(deps: Deps) {
       toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
       await refresh()
       let failed = false
+      let rawErr = ''
       await watchAsyncResult(() => {
         const target = ctx.sbs.value.find(s => s.id === sb.id)
         // 成功: 帧 URL 变了 (重新生成时旧图本来就在, 必须比 URL 而不是看有没有图);
@@ -865,13 +881,17 @@ export function useImageGeneration(deps: Deps) {
           pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
           if (isFailed) {
             failed = true
-            toast.error(target?.error_msg || target?.errorMsg || '首尾帧生成失败')
+            // ★ Sprint 41: 留住 provider 的原始错误文本 (失败明细要显示它, 不能只写『生成失败』)
+            rawErr = target?.error_msg || target?.errorMsg || '首尾帧生成失败'
+            toast.error(stripRetryableMarker(rawErr) || '首尾帧生成失败')
           }
         }
         return done
       })
       // ★ Sprint 38: 把结果带回给调用方 (批量调度要按成功/失败分流: 重试 / 记失败 / 继续)
-      if (failed) return { ok: false, reason: 'provider', error: '生成失败' }
+      if (failed) {
+        return { ok: false, reason: 'provider', error: rawErr || '生成失败', retryable: isRetryableMessage(rawErr) }
+      }
       const after = ctx.sbs.value.find(s => s.id === sb.id)
       const afterUrl = frameType === 'first_frame' ? getFirstFrame(after) : getLastFrame(after)
       if (!afterUrl || afterUrl === beforeUrl) return { ok: false, reason: 'provider', error: '等待超时' }
@@ -879,7 +899,11 @@ export function useImageGeneration(deps: Deps) {
     } catch (e: any) {
       pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
       toast.error(e.message)
-      return { ok: false, reason: 'provider', error: e?.message || '生成失败' }
+      return {
+        ok: false, reason: 'provider',
+        error: e?.message || '生成失败',
+        retryable: isRetryableMessage(e?.message),
+      }
     }
   }
 
@@ -899,20 +923,12 @@ export function useImageGeneration(deps: Deps) {
 
   const BATCH_CONCURRENCY_KEY = 'huobao.batchShotConcurrency'
 
+  // ★ Sprint 41: 并发配置改用共享的那一份 (★ 生图与配音共用同一个 localStorage key → 改一处两边生效)
   function loadBatchConcurrency(): number {
-    try {
-      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(BATCH_CONCURRENCY_KEY) : null
-      const v = Number(raw)
-      if (Number.isFinite(v) && v >= 1 && v <= 8) return Math.floor(v)
-    } catch { /* localStorage 不可用 → 用默认 */ }
-    return 3
+    return loadSharedBatchConcurrency()
   }
   function setBatchConcurrency(v: number) {
-    const n = Math.max(1, Math.min(8, Math.floor(Number(v) || 3)))
-    batchShotConcurrency.value = n
-    try {
-      if (typeof window !== 'undefined') window.localStorage.setItem(BATCH_CONCURRENCY_KEY, String(n))
-    } catch { /* 忽略: 存不了只是这次不记住 */ }
+    batchShotConcurrency.value = saveSharedBatchConcurrency(v)
   }
   batchShotConcurrency.value = loadBatchConcurrency()
 
@@ -959,13 +975,18 @@ export function useImageGeneration(deps: Deps) {
     return true
   }
 
-  function recordBatchFailure(sb: any, frameType: ShotFrameType, reason: string, detail?: string) {
+  function recordBatchFailure(
+    sb: any, frameType: ShotFrameType, reason: string, detail?: string,
+    extra?: { retryable?: boolean; attempts?: number },
+  ) {
     batchShotFailures.value = [...batchShotFailures.value, {
       storyboardId: sb.id,
       frameType,
       shotNumber: shotNumOf(sb),
       reason,
       detail,
+      retryable: extra?.retryable,
+      attempts: extra?.attempts,
     }]
     batchShotFailed.value = batchShotFailures.value.length
   }
@@ -990,16 +1011,39 @@ export function useImageGeneration(deps: Deps) {
     //   ★ 判据不能用『是不是链里的第一个』—— 过渡镜占着链首时, 真正的同 scene 上一镜在链外。
     const chainPrev = prevInChain(chain, sb)
     const relayOpts = chainPrev ? { requireRelay: true } : { skipRelayWait: true }
-    let result = await genShotFrame(live, frameType, relayOpts)
-    // ★ D6: 自动重试 1 次 (间隔 10 秒); 「依赖没就绪」是确定性的 → 不重试
-    if (!result.ok && result.reason !== 'dependency') {
-      await sleep(10000)
-      const live2 = liveShot(sb.id) || sb
-      result = await genShotFrame(live2, frameType, relayOpts)
-    }
+    // ★ Sprint 41 T2 (PM msg-20261113-175): 退避重试 (首次 + 最多 2 次 = 3 次尝试; 30s → 60s 递增)
+    //   ★ 只重试【可重试】的错误 (错误文本里有后端打的【可重试】标记):
+    //     『模型维护中』/『rate limit』这类值得等; 鉴权/参数/内容安全拒绝重试也没意义 → 直接交回
+    //   ★ 只重试【这一张】(不整批重跑 → 不会重复扣已经成功那些镜的钱)
+    //   ★ 「依赖没就绪」是确定性的 → 不重试 (重试也等不来)
+    let lastDelay = 0
+    const outcome = await runBatchWithRetry(
+      async (attempt) => {
+        const liveNow = liveShot(sb.id) || sb
+        const r = await genShotFrame(liveNow, frameType, {
+          ...relayOpts,
+          attempt,
+          retryDelayMs: lastDelay || undefined,
+        })
+        return { ok: r.ok, retryable: !!r.retryable, reason: r.reason, error: r.error }
+      },
+      {
+        onRetry: (_attempt, res, delayMs) => { lastDelay = delayMs },
+      },
+    )
     batchShotCurrent.value = batchShotCurrent.value.filter(x => x !== label)
-    if (result.ok) { batchShotDone.value++; return }
-    recordBatchFailure(live, frameType, result.reason === 'dependency' ? '依赖没就绪' : 'provider 报错', result.error)
+    if (outcome.ok) { batchShotDone.value++; return }
+    const res = outcome.result
+    // ★ T4: 失败明细区分两类原因 —— 用户该做的动作不同
+    const reason = res.reason === 'dependency'
+      ? '依赖没就绪 (上一镜的帧没生成, 要先补上一张)'
+      : (res.retryable
+        ? `provider 临时错误 (已自动重试 ${outcome.attempts} 次仍失败, 等一会儿再点重试)`
+        : 'provider 报错 (重试也没用, 看原始错误)')
+    recordBatchFailure(live, frameType, reason, stripRetryableMarker(res.error || ''), {
+      retryable: !!res.retryable,
+      attempts: outcome.attempts,
+    })
   }
 
   async function runBatchChain(chain: any[], filter?: Set<string>): Promise<void> {

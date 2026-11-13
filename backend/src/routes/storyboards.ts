@@ -302,6 +302,8 @@ app.put('/:id', async (c) => {
 // 然后 ffmpeg concat 拼接。解决之前"一个角色配音包含多人对话"的 bug。
 app.post('/:id/generate-tts', async (c) => {
   const id = Number(c.req.param('id'))
+  // ★ Sprint 41 T2 (PM msg-20261113-175): body 里可能带批量重试信息 (第几次尝试 / 这次等了多久)
+  const body: any = await c.req.json().catch(() => ({}))
   const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
   if (!sb) return badRequest(c, '镜头不存在')
   logTaskStart('StoryboardAPI', 'generate-tts', {
@@ -313,6 +315,9 @@ app.post('/:id/generate-tts', async (c) => {
     storyboardId: id,
     episodeId: sb.episodeId,
     dialogue: sb.dialogue,
+    // ★ Sprint 41 T2: 批量层的重试信息 (第几次尝试 / 这次等了多久) → 便于事后查"为什么重试了"
+    batch_attempt: body?.attempt ?? null,
+    batch_retry_delay_ms: body?.retry_delay_ms ?? null,
   })
 
   try {

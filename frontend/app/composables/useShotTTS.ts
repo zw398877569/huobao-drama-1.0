@@ -1,6 +1,11 @@
 import { storyboardAPI } from '~/composables/useApi'
 import { ref } from 'vue'
 import { toast } from 'vue-sonner'
+// ★ Sprint 41 (PM msg-20261113-175): 批量策略共享 (并发闸门 + 退避重试 + 可重试标记)
+import {
+  runBatchWithRetry, runWithConcurrency,
+  loadBatchConcurrency, isRetryableMessage, stripRetryableMarker,
+} from '~/composables/useBatchPolicy'
 import type { Ref, ComputedRef } from 'vue'
 
 type Deps = {
@@ -117,13 +122,35 @@ export function useShotTTS(deps: Deps) {
     }
   }
 
-  async function batchShotTTS() {
-    const pending = ctx.sbs.value.filter(sb => hasDialogue(sb) && !hasTTS(sb))
+  /**
+   * ★ Sprint 41 T2/T3/T4 (PM msg-20261113-175): 批量配音
+   *   · T3 并发闸门: 以前 Promise.allSettled 一次性全发 → 16 条必撞 RPM;
+   *     现在最多同时跑 N 条 (N = 共享的并发上限, 与批量生图同一份配置)
+   *   · T2 退避重试: provider 临时错误 (『rate limit exceeded(RPM)』等, 后端打了【可重试】标记)
+   *     → 最多 3 次尝试 (30s → 60s 递增); 不可重试的直接交回
+   *   · T4 失败明细: 点名是哪个镜 + 属于哪一类原因 + 带 provider 原始错误文本
+   */
+  const batchTTSFailures = ref<Array<{
+    storyboardId: number
+    shotNumber: number
+    reason: string
+    detail?: string
+    retryable?: boolean
+    attempts?: number
+  }>>([])
+
+  async function batchShotTTS(opts?: { retryFailures?: boolean }) {
+    const eligible = ctx.sbs.value.filter(sb => hasDialogue(sb) && !hasTTS(sb))
+    // 只重试上次失败的那些 (T4: 一键只重试失败的)
+    const pending = opts?.retryFailures
+      ? eligible.filter(sb => batchTTSFailures.value.some(f => f.storyboardId === sb.id))
+      : eligible
     if (!pending.length) {
       // pending is 0: either every eligible sb already has TTS, or no sb has dialogue at all.
       // Disambiguate via inline count (avoid cross-composable dep on ttsEligibleCount).
       const eligibleCount = ctx.sbs.value.filter(sb => hasDialogue(sb)).length
-      toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
+      if (opts?.retryFailures) toast.info('没有需要重试的配音')
+      else toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
       return
     }
     // 批量配音一次性 push 所有 id 进 pending, 模板批量按钮绑 isBatchTTSPending 整体置灰
@@ -131,12 +158,44 @@ export function useShotTTS(deps: Deps) {
     for (const id of pendingIds) {
       if (!isPendingTTS(id)) pendingTTSIds.value.push(id)
     }
+    const failures: typeof batchTTSFailures.value = []
+    let okCount = 0
     try {
-      const results = await Promise.allSettled(pending.map(sb => storyboardAPI.generateTTS(sb.id)))
-      const okCount = results.filter(r => r.status === 'fulfilled').length
-      const failCount = results.length - okCount
+      // ★ T3: 并发闸门 (与批量生图共用同一份并发配置)
+      await runWithConcurrency(pending, loadBatchConcurrency(), async (sb) => {
+        const shotNumber = Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? sb?.id ?? 0)
+        let lastDelay = 0
+        // ★ T2: 只重试【这一条】(不整批重跑 → 不重复扣已成功那些的钱)
+        const outcome = await runBatchWithRetry(
+          async (attempt) => {
+            try {
+              await storyboardAPI.generateTTS(sb.id, attempt > 1
+                ? { attempt, retry_delay_ms: lastDelay || null }
+                : undefined)
+              return { ok: true }
+            } catch (e: any) {
+              const msg = e?.message || '生成失败'
+              return { ok: false, retryable: isRetryableMessage(msg), error: msg, reason: 'provider 报错' }
+            }
+          },
+          { onRetry: (_a, _r, delayMs) => { lastDelay = delayMs } },
+        )
+        if (outcome.ok) { okCount++; return }
+        const res = outcome.result
+        failures.push({
+          storyboardId: sb.id,
+          shotNumber,
+          reason: res.retryable
+            ? `provider 临时错误 (已自动重试 ${outcome.attempts} 次仍失败, 等一会儿再点重试)`
+            : 'provider 报错 (重试也没用, 看原始错误)',
+          detail: stripRetryableMarker(res.error || ''),
+          retryable: !!res.retryable,
+          attempts: outcome.attempts,
+        })
+      })
+      batchTTSFailures.value = failures
       if (okCount) toast.success(`已生成 ${okCount} 条镜头配音`)
-      if (failCount) toast.error(`${failCount} 条镜头配音生成失败`)
+      if (failures.length) toast.error(`${failures.length} 条镜头配音生成失败`)
       await refresh()
     } finally {
       pendingTTSIds.value = pendingTTSIds.value.filter(item => !pendingIds.includes(item))
@@ -221,6 +280,8 @@ export function useShotTTS(deps: Deps) {
     getTTSSegments, getDialogueSpeaker, getDialogueLineCount,
     pendingTTSIds, isPendingTTS,
     genShotTTS, batchShotTTS,
+    // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误)
+    batchTTSFailures,
     editTarget, editText, editPreview, editPreviewing, editSaving,
     openEditDialog, closeEditDialog, scheduleEditPreview, applyNormalizedDialogue, saveEditDialog,
   }

@@ -98,7 +98,8 @@ export const storyboardAPI = {
   create: (data: any) => api.post('/storyboards', data),
   get: (id: number) => api.get(`/storyboards/${id}`),
   update: (id: number, data: any) => api.put(`/storyboards/${id}`, data),
-  generateTTS: (id: number) => api.post(`/storyboards/${id}/generate-tts`),
+  // ★ Sprint 41 T2: body 里带 batch_attempt / batch_retry_delay_ms → 后端记进 flow-log
+  generateTTS: (id: number, body?: any) => api.post(`/storyboards/${id}/generate-tts`, body || {}),
   // Sprint 18: 台词编辑弹窗的实时解析预览 (纯只读, 后端解析, 前端不自己解析)
   previewDialogue: (id: number, body: { dialogue: string }) => api.post(`/storyboards/${id}/preview-dialogue`, body),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
