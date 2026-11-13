@@ -9,6 +9,8 @@ import { v4 as uuid } from 'uuid'
 import { getAudioConfigById } from './ai.js'
 import { getTTSAdapter } from './adapters/registry.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, redactUrl } from '../utils/task-logger.js'
+// ★ Sprint 41 T1: provider 错误的可重试分类 (生图/配音共用这一份关键词表)
+import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -68,8 +70,16 @@ export async function generateTTS(params: TTSParams): Promise<string> {
 
   if (!resp.ok) {
     const errText = await resp.text()
-    logTaskError('AudioTask', 'tts-generate', { provider: config.provider, voice: params.voice, status: resp.status, error: errText })
-    throw new Error(`TTS API error ${resp.status}: ${errText}`)
+    // ★ Sprint 41 T1 (PM msg-20261113-175): 文本形式的临时错误 (例: 'rate limit exceeded(RPM)')
+    //   → 判成【可重试】并打标记 → 前端批量配音会退避重试这一条 (原来直接判死)
+    const cls = classifyProviderError(errText, resp.status)
+    const rawMsg = `TTS API error ${resp.status}: ${errText}`
+    const finalMsg = cls.retryable ? markRetryable(rawMsg) : rawMsg
+    logTaskError('AudioTask', 'tts-generate', {
+      provider: config.provider, voice: params.voice, status: resp.status, error: finalMsg,
+      retryable: cls.retryable, reason: cls.reason, matched: cls.matched,
+    })
+    throw new Error(finalMsg)
   }
 
   const result = await resp.json()

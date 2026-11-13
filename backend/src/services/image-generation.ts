@@ -6,6 +6,8 @@ import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl, truncateForLog } from '../utils/task-logger.js'
+// ★ Sprint 41 T1: provider 错误的可重试分类 (生图/配音共用这一份关键词表)
+import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { sanitizeImagePromptAggressive } from '../utils/prompt-sanitizer.js'
 // ★ Sprint 31 追加 (PM msg-20261102-137): 画面内文字保护 (mask / restore / 去标签)
 import { maskScreenText, restoreScreenText, stripScreenTextTags } from '../utils/screen-text.js'
@@ -255,9 +257,10 @@ async function processImageGeneration(id: number, config: AIConfig) {
           throw new Error(`API error ${resp.status}: ${errText}`)
         }
 
-        // 其他错误: 检查是否为临时性错误
-        const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
-        if (!TRANSIENT_STATUS.has(resp.status)) {
+        // ★ Sprint 41 T1 (PM msg-20261113-175): 临时性判定 = 状态码 OR 文本形式
+        //   (『模型维护中』这类 provider 业务错误不在状态码表里 → 以前直接判死)
+        const cls = classifyProviderError(errText, resp.status)
+        if (!cls.retryable) {
           throw new Error(`API error ${resp.status}: ${errText}`)
         }
 
@@ -266,6 +269,8 @@ async function processImageGeneration(id: number, config: AIConfig) {
           attempt: attempt + 1,
           status: resp.status,
           body: errText.slice(0, 240),
+          reason: cls.reason,
+          matched: cls.matched,
         })
         if (attempt < MAX_RETRIES - 1) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
@@ -444,8 +449,15 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         }
       }
       if (pollResp.status === 'failed') {
-        const errorMsg = pollResp.error || 'Generation failed'
-        logTaskError('ImageTask', 'poll-failed', { id, taskId, error: errorMsg })
+        const rawErr = pollResp.error || 'Generation failed'
+        // ★ Sprint 41 T1: 文本形式的临时错误 (『模型维护中』/『The model load is too high』)
+        //   → 判成【可重试】并打标记 → 前端批量层会退避重试这一张 (而不是连锁缺帧)
+        const cls = classifyProviderError(rawErr)
+        const errorMsg = cls.retryable ? markRetryable(rawErr) : rawErr
+        logTaskError('ImageTask', 'poll-failed', {
+          id, taskId, error: errorMsg,
+          retryable: cls.retryable, reason: cls.reason, matched: cls.matched,
+        })
         // 上游明确失败:直接标记 failed + 回写主表,避免被 catch 块当网络错误重试
         db.update(schema.imageGenerations)
           .set({ status: 'failed', errorMsg, updatedAt: now() })
