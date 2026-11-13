@@ -13,6 +13,10 @@ import { validateBgmConfig } from '../services/merge-bgm.js'
 // ★ Sprint 40 T3: 音效校验  ★ Sprint 40 T4: 片头配置校验
 import { validateSfxConfig } from '../services/merge-sfx.js'
 import { validateTitleCardConfig } from '../services/merge-title-card.js'
+// ★ Sprint 40 追加单 174: 僵死 merge 记录回收 (进程被杀 → 记录卡 processing → 页面死锁)
+import {
+  isStaleMerge, recoverStaleMerge, STALE_REASON_TIMEOUT,
+} from '../services/merge-stale-recovery.js'
 // ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (manifest.json + clips/ + subtitles/ + bgm/)
 import { buildMergeExportPack } from '../services/merge-export-pack.js'
 import { toSnakeCase } from '../utils/transform.js'
@@ -33,8 +37,8 @@ export function pickLatestMerge<T extends { id: number }>(merges: T[]): T | unde
  *   (纯函数 → 可离线断言; 处理中 = processing / pending)
  */
 export function pickReusableMerge(
-  merges: Array<{ id: number; status?: string | null }>,
-): { id: number; status?: string | null } | null {
+  merges: Array<{ id: number; status?: string | null; createdAt?: string | null }>,
+): { id: number; status?: string | null; createdAt?: string | null } | null {
   const running = (merges || []).filter(m => m.status === 'processing' || m.status === 'pending')
   return running.length ? running[running.length - 1] : null
 }
@@ -139,15 +143,31 @@ app.post('/episodes/:id/merge', async (c) => {
     .where(eq(schema.videoMerges.episodeId, episodeId)).all()
   const running = pickReusableMerge(merges)
   if (running) {
-    const row = running
-    logTaskProgress('MergeAPI', 'episode-merge-reuse', {
-      episodeId,
-      dramaId: ep.dramaId,
-      mergeId: row.id,
-      status: row.status,
-      hint: '本集已有处理中的拼接 → 复用这一条, 不新建记录也不再起 ffmpeg',
-    })
-    return success(c, { merge_id: row.id, status: row.status, reused: true })
+    // ★ Sprint 40 追加单 174: 先判断这条 processing 是不是已经【僵死】(进程被杀 / 服务重启过)
+    //   僵死 → 回收它 (标 failed + 留痕) 再正常起新任务
+    //   没僵死 → 保持 165 单 T2 的去重语义 (复用这一条, 不再起第二个 ffmpeg)
+    if (isStaleMerge(running)) {
+      const recovered = recoverStaleMerge(running.id, STALE_REASON_TIMEOUT)
+      const ageSec = Math.round((Date.now() - Date.parse(running.createdAt || '')) / 1000)
+      logTaskWarn('MergeAPI', 'episode-merge-stale-recovered', {
+        episodeId,
+        dramaId: ep.dramaId,
+        mergeId: running.id,
+        recovered,
+        ageSec,
+        hint: '僵死的 processing 记录已回收 → 这次正常起新任务 (不再被去重挡住)',
+      })
+    } else {
+      const row = running
+      logTaskProgress('MergeAPI', 'episode-merge-reuse', {
+        episodeId,
+        dramaId: ep.dramaId,
+        mergeId: row.id,
+        status: row.status,
+        hint: '本集已有处理中的拼接 → 复用这一条, 不新建记录也不再起 ffmpeg',
+      })
+      return success(c, { merge_id: row.id, status: row.status, reused: true })
+    }
   }
 
   try {
@@ -260,7 +280,11 @@ app.get('/episodes/:id/merge', async (c) => {
   const latest = pickLatestMerge(merges)
   if (!latest) return success(c, null)
 
-  return success(c, toSnakeCase(latest))
+  const row = toSnakeCase(latest) as Record<string, any>
+  // ★ Sprint 40 追加单 174: 告诉前端这条是不是已经僵死 (超过阈值的 processing)
+  //   → 前端别无限期显示『拼接中...』, 让用户能重新发起
+  row.stale = isStaleMerge(latest)
+  return success(c, row)
 })
 
 export default app

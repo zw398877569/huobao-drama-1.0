@@ -1962,6 +1962,11 @@
                 </span>
               </div>
 
+              <!-- ★ Sprint 40 追加单 174: 上一次拼接被中断 → 明确提示, 别让用户对着『拼接中』发呆 -->
+              <div v-if="mergeStale" class="dim" style="font-size:11px; margin-bottom: 12px">
+                上一次拼接没跑完（服务重启或进程被中断）—— 点【{{ mergeUrl ? '重新拼接' : '开始拼接' }}】重试即可。
+              </div>
+
               <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)
                    精剪成片【只放本机, 不回流本项目】(PM 2026-11-12 决策 D6) -->
               <div class="dim" style="font-size:11px; margin-bottom: 12px">
@@ -3196,8 +3201,13 @@ function hasComposed(s) { return !!getComposedVideoUrl(s) }
 //   依然能看到『拼接中』(不只靠内存里那个轮询)。后端也会去重 (已有处理中的 merge → 复用那条)。
 const merging = computed(() => {
   const st = mergeData.value?.status
-  return st === 'processing' || st === 'pending'
+  if (st !== 'processing' && st !== 'pending') return false
+  // ★ Sprint 40 追加单 174: 后端判定这条已经僵死 (超时未完成, 进程多半被杀过)
+  //   → 别无限期显示『拼接中...』, 让用户能重新发起
+  return !(mergeData.value as any)?.stale
 })
+/** ★ Sprint 40 追加单 174: 上一次拼接被中断 (页面提示用) */
+const mergeStale = computed(() => !!(mergeData.value as any)?.stale)
 
 // ★ Sprint 39 T2 (PM msg-20261111-169): 逐镜缝转场配置 (默认折叠收起, 不干扰一键拼接)
 //   与后端 XFADE_TRANSITION_TYPES 对齐 (backend/src/services/ffmpeg-merge.ts)
@@ -3410,6 +3420,12 @@ async function doMerge() {
             ...st,
             merged_url: st.merged_url || st.mergedUrl || mergeData.value?.merged_url || null,
           }
+        }
+        // ★ Sprint 40 追加单 174: 这条已经僵死 (超时未完成) → 别一直转圈, 停下来让用户重新发起
+        if (st?.stale) {
+          clearInterval(poll)
+          mergeData.value = { ...mergeData.value, status: 'failed', stale: true }
+          toast.error('上次拼接没跑完（进程可能被中断），请重新拼接')
         }
       } catch {}
       if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {

@@ -125,6 +125,8 @@ import mediaLibrary from './routes/media-library.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 import { ensureLogDir } from './utils/file-log.js'
 import { initBatchVideoScheduler } from './services/batch-video-scheduler.js'
+// ★ Sprint 40 追加单 174: 启动时回收僵死的 merge 记录 (服务重启打断拼接 → 记录卡 processing → 页面死锁)
+import { recoverStaleMergesOnStartup } from './services/merge-stale-recovery.js'
 import { logTaskError } from './utils/task-logger.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -191,6 +193,16 @@ ensureAgentDefaults()
 // (含 sprint 43 FIX-2 加的 sanitizer). apiKey fallback 顺序: 参数 > HUOBAO_API_KEY env > DB 已有 active 行复用
 applyHuobaoPreset()
 ensureLogDir()
+
+// ★ Sprint 40 追加单 174 (PM msg-20261113-174): 回收僵死的 merge 记录。
+//   服务刚起来时不可能有正在跑的拼接 → 所有 processing/pending 一律判死 (标 failed + 写明原因)。
+//   不做这一步的话: 用户重新部署服务后, 页面永远显示『拼接中...』+ 按钮禁用 + 去重挡住新任务 → 死锁。
+try {
+  const recovered = recoverStaleMergesOnStartup()
+  if (recovered > 0) console.log(`🧹 已回收僵死的 merge 记录: ${recovered} 条 (服务重启中断)`)
+} catch (err: any) {
+  logTaskError('Server', 'stale-merge-recovery-fail', { error: err?.message || String(err) })
+}
 
 // Sprint 10 PM msg-20261014-001 task D: 启动时 initBatchVideoScheduler 重建 pending plan cron jobs (backend 重启复活)
 //   fire-and-forget, 不阻塞 server.listen()
