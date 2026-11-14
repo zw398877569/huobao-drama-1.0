@@ -1,5 +1,6 @@
 import { aiConfigAPI, voicesAPI } from '~/composables/useApi'
-import { getModelLabel } from '~/composables/useSettingsAi'
+// ★ Sprint 43: AUTODL_COMFYUI_MODEL_LABELS 的 key = 项目已接入的工作流全集 (drift 脚本与后端校验)
+import { getModelLabel, AUTODL_COMFYUI_MODEL_LABELS } from '~/composables/useSettingsAi'
 import type { Ref } from 'vue'
 
 type Deps = {
@@ -49,6 +50,15 @@ export function useConfigLoading(deps: Deps) {
           models = Array.isArray(parsed) ? parsed.filter((m: any) => typeof m === 'string') : [c.model]
         } catch {
           models = [c.model]
+        }
+      }
+      // ★ Sprint 43: AutoDL 的清单跟【项目已接入的工作流全集】取并集 ——
+      //   配置里的 model 数组只是【选择器的展示清单】(后端不校验它, 只是 UI 选哪几个),
+      //   所以新接入的工作流不该要求用户先去设置页手动加一遍 → 这里直接补上。
+      //   ★ 该清单由 scripts/check-workflow-sync.js 与后端校验 (不会漂移)。
+      if (c.provider === 'autodl-comfyui') {
+        for (const id of Object.keys(AUTODL_COMFYUI_MODEL_LABELS)) {
+          if (!models.includes(id)) models.push(id)
         }
       }
       if (!models.length) continue
