@@ -310,7 +310,9 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       //   → moov (元数据) 落在文件开头, 浏览器不用把整个文件下完就能起播 (原来 moov 在末尾 → 秒开变"下完才播")
       //   ★ 只改【容器里 moov 的位置】, 编码参数 (码率/画质/分辨率/音轨) 一个字没动 → 成片规格逐字不变
       //   (拼接成片本来就有 faststart, 单镜原始视频 provider 给的也有 → 只有 compose 产出的漏了)
-      const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-movflags', '+faststart']
+      // ★ Sprint 41 单 179: 显式写死 yuv420p —— 现在实测就是 420p (输入是 420p), 但代码没写 →
+      //   以后 provider 换了格式就会悄悄退化成 yuv444p (Chrome 没有硬件解码器 → 网页里播卡)
+      const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
 
       // ★ Sprint 38 T3-D (PM msg-20261110-165): 源音轨里有我们的人声 (音驱动工作流生成) →
       //   【保留源音轨】, 只烧字幕 —— 嘴型跟着源音轨走 (同步), 环境音也一起回来。

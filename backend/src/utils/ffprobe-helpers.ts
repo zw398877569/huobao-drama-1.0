@@ -16,6 +16,14 @@ export interface MediaProbe {
   width: number
   height: number
   fps: number
+  /** ★ Sprint 41 单 179: 像素格式 (如 'yuv420p' / 'yuv444p') —— 拼接产物必须是 yuv420p (Chrome 只硬解 4:2:0) */
+  pixFmt: string
+  /** ★ 音轨编码 (如 'aac'); 没有音轨时为 '' */
+  audioCodec: string
+  /** ★ 音轨采样率 (Hz) */
+  audioSampleRate: number
+  /** ★ 音轨声道数 */
+  audioChannels: number
 }
 
 /**
@@ -27,12 +35,13 @@ export function probeMedia(filePath: string): Promise<MediaProbe> {
     ffmpeg.ffprobe(filePath, (err, data) => {
       if (err) {
         logTaskWarn('MediaProbe', 'probe-failed', { filePath, error: err.message })
-        resolve({ durationSec: 0, hasAudio: false, width: 0, height: 0, fps: 0 })
+        resolve({ durationSec: 0, hasAudio: false, width: 0, height: 0, fps: 0, pixFmt: '', audioCodec: '', audioSampleRate: 0, audioChannels: 0 })
         return
       }
       const streams = (data?.streams ?? []) as Array<Record<string, any>>
       const hasAudio = streams.some(s => s.codec_type === 'audio')
       const video = streams.find(s => s.codec_type === 'video') ?? {}
+      const audio = streams.find(s => s.codec_type === 'audio') ?? {}
       const durationSec = Number(data?.format?.duration || 0)
 
       // 帧率解析: r_frame_rate 是 "30000/1001" 这类分数, 需除零保护
@@ -54,6 +63,10 @@ export function probeMedia(filePath: string): Promise<MediaProbe> {
         width: Number(video.width || 0),
         height: Number(video.height || 0),
         fps,
+        pixFmt: String(video.pix_fmt || '').toLowerCase(),
+        audioCodec: String(audio.codec_name || '').toLowerCase(),
+        audioSampleRate: Number(audio.sample_rate || 0),
+        audioChannels: Number(audio.channels || 0),
       })
     })
   })

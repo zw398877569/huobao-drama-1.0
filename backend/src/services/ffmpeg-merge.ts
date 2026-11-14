@@ -46,6 +46,10 @@ import {
   DEFAULT_MERGE_TITLE_CARD, validateTitleCardConfig, generateTitleCard,
   type MergeTitleCardConfig,
 } from './merge-title-card.js'
+// ★ Sprint 41 单 179: 拼接产物的像素格式 + 免重编码判据 (纯逻辑模块)
+import {
+  TARGET_PIX_FMT, canCopyClipWithoutTranscode,
+} from './merge-codec-spec.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -524,17 +528,20 @@ async function normalizeClips(
   })
 
   const normalized: string[] = []
+  let copiedCount = 0
+  // ★ Sprint 41 单 179: 转码原因分布 (给 flow-log 看"为什么这个片段没能直接复制")
+  const transcodeReasons: Record<string, number> = {}
   for (let i = 0; i < absPaths.length; i++) {
     const src = absPaths[i]
     const probe = probes[i]
-    const specOk = probe.width === targetW && probe.height === targetH
-      && (probe.fps <= 0 || Math.abs(probe.fps - targetFps) <= 0.5)
-
-    // 规格一致 + 有音轨 → 不用转码, 直接用原文件
-    if (probe.hasAudio && specOk) {
+    // ★ Sprint 41 单 179: 判准要全 (分辨率/帧率/像素格式/音轨规格) —— 差一个像素格式就不能 copy
+    const copyCheck = canCopyClipWithoutTranscode(probe, { width: targetW, height: targetH, fps: targetFps })
+    if (copyCheck.ok) {
+      copiedCount++
       normalized.push(src)
       continue
     }
+    transcodeReasons[copyCheck.reason] = (transcodeReasons[copyCheck.reason] || 0) + 1
 
     const outPath = path.join(NORMALIZE_DIR, `${i}-${uuid()}.mp4`)
     await new Promise<void>((resolve, reject) => {
@@ -557,6 +564,8 @@ async function normalizeClips(
           // ★ Sprint 39 T1: 中间产物也要保住细节 (它会被最终编码再压一次) → 用同一套质量参数
           '-preset', encode.preset,
           '-crf', String(encode.crf),
+          // ★ Sprint 41 单 179: 中间产物也统一 yuv420p (否则中间格式不一致 + 最终成片会退化)
+          '-pix_fmt', TARGET_PIX_FMT,
           '-vf', `scale=${targetW}:${targetH},fps=${targetFps}`,
           '-c:a', 'aac',
           '-ar', '48000',
@@ -595,7 +604,10 @@ async function normalizeClips(
   logTaskSuccess('MergeTask', 'normalize-done', {
     clips: normalized.length,
     transcoded: normalized.filter((p, i) => p !== absPaths[i]).length,
-    target: { width: targetW, height: targetH, fps: targetFps },
+    // ★ Sprint 41 单 179: 直接复制 vs 转码, 看得清"有多少片段省掉了有损编码"
+    copied: copiedCount,
+    transcodeReasons,
+    target: { width: targetW, height: targetH, fps: targetFps, pixFmt: TARGET_PIX_FMT },
   })
   return { files: normalized, spec: { width: targetW, height: targetH, fps: targetFps } }
 }
@@ -784,6 +796,9 @@ async function mergeWithXfade(
         // ★ Sprint 39 T1: crf/preset 可配 (env), 默认 crf 18 + preset medium (比改动前好)
         '-preset', encode.preset,
         '-crf', String(encode.crf),
+        // ★ Sprint 41 单 179: 显式 yuv420p → Chrome 能硬件解码 → 网页里播成片不卡
+        //   (libx264 不写 -pix_fmt 时默认 yuv444p → 没有硬件解码器 → 软件解码 → 卡顿)
+        '-pix_fmt', TARGET_PIX_FMT,
         '-c:a', 'aac',
         '-ar', '48000',
         '-b:a', '192k',
@@ -1065,6 +1080,8 @@ async function doMerge(
             // ★ Sprint 39 T1: 同上 (硬切回退路径也要用同一套质量参数)
             '-preset', encode.preset,
             '-crf', String(encode.crf),
+            // ★ Sprint 41 单 179: 回退路径也要 yuv420p (不然回退出来的成片一样卡)
+            '-pix_fmt', TARGET_PIX_FMT,
             // ★ Sprint 39 T3: 硬切回退路径也要套全片调色 (与 xfade 路径一致)
             ...(gradeConfig?.enabled
               ? ['-vf', `eq=brightness=${gradeConfig.brightness}:contrast=${gradeConfig.contrast}:saturation=${gradeConfig.saturation}`]
