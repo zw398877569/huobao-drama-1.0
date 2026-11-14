@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-14T13:27:18.254Z",
+  "acks": {
+    "audio-driven:minimax_h3_lightx2v_v5": {
+      "what": "历史项确认: v5/v5_15s 是纯 Ref2V 不带 ref_audio_0~2; 各 Ref2V 变体的 duration 上限已按平台参数表逐个核对并覆盖 —— Ref2V 变体 minimax_h3_lightx2v_v5 不在【音驱动清单】(REF2V_AUDIO_VARIANTS) → 确认它带不带 ref_audio_0~2: 带的话必须加, 否则合成阶段会用 TTS 替换源音轨 → 声音比嘴型早 (音画不同步)",
+      "by": "PM(2026-11-14 单 184 评审)",
+      "at": "2026-11-14"
+    },
+    "audio-driven:minimax_h3_lightx2v_v5_15s": {
+      "what": "历史项确认: v5/v5_15s 是纯 Ref2V 不带 ref_audio_0~2; 各 Ref2V 变体的 duration 上限已按平台参数表逐个核对并覆盖 —— Ref2V 变体 minimax_h3_lightx2v_v5_15s 不在【音驱动清单】(REF2V_AUDIO_VARIANTS) → 确认它带不带 ref_audio_0~2: 带的话必须加, 否则合成阶段会用 TTS 替换源音轨 → 声音比嘴型早 (音画不同步)",
+      "by": "PM(2026-11-14 单 184 评审)",
+      "at": "2026-11-14"
+    },
+    "duration-cap": {
+      "what": "历史项确认: v5/v5_15s 是纯 Ref2V 不带 ref_audio_0~2; 各 Ref2V 变体的 duration 上限已按平台参数表逐个核对并覆盖 —— 每个 Ref2V 变体都要确认【duration 上限】(参数表 max=10 还是 15) → adapter 的 is15s 判断里要覆盖",
+      "by": "PM(2026-11-14 单 184 评审)",
+      "at": "2026-11-14"
+    }
+  }
+}

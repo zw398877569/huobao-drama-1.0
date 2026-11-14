@@ -20,6 +20,33 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+// ★ Sprint 44 (PM msg-20261114-184): 软提醒的【确认状态】持久化文件
+//   放项目内 (跟着 git 走 → 团队共享, 换台机器/换个人跑也认这份确认)
+//   ⚠️ 缺失或损坏 → 退回【全部软提醒都报】的保守行为 (绝不能因为读不到状态就把新问题一起吞掉)
+const ACK_FILE = path.join(__dirname, '.workflow-sop-acks.json');
+
+/** 读确认状态; 读不到/坏了 → 返回 null (调用方按"全报"处理) */
+function readAcks() {
+  try {
+    if (!fs.existsSync(ACK_FILE)) return null;
+    const raw = fs.readFileSync(ACK_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !parsed.acks || typeof parsed.acks !== 'object') return null;
+    return parsed.acks;
+  } catch {
+    return null;
+  }
+}
+
+/** 写确认状态 (记录: 确认了什么 / 什么时候 / 谁确认的) */
+function writeAcks(acks) {
+  const payload = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    acks,
+  };
+  fs.writeFileSync(ACK_FILE, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
+}
 const ADAPTER_PATH = path.join(ROOT, 'backend/src/services/adapters/autodl-comfyui-workflow.ts');
 const FRONTEND_PATH = path.join(ROOT, 'frontend/app/composables/useSettingsAi.ts');
 
@@ -179,6 +206,47 @@ function extractFrontendLabelMap(src) {
   return keys;
 }
 
+/**
+ * ★ Sprint 44: --ack / --ack-all —— 把当前未确认的软提醒写进确认状态文件
+ *   用法: node scripts/check-workflow-sync.js --ack "<key>" --by "<谁>" --note "<确认结论>"
+ *         node scripts/check-workflow-sync.js --ack-all --by "<谁>" --note "<确认结论>"
+ */
+function handleAckCli(warnings) {
+  const argv = process.argv.slice(2);
+  const ackIdx = argv.indexOf('--ack');
+  const ackAll = argv.includes('--ack-all');
+  if (ackIdx < 0 && !ackAll) return false;
+  const byIdx = argv.indexOf('--by');
+  const noteIdx = argv.indexOf('--note');
+  const by = byIdx >= 0 ? (argv[byIdx + 1] || '') : '';
+  const note = noteIdx >= 0 ? (argv[noteIdx + 1] || '') : '';
+  if (!by) {
+    console.error('✗ --ack / --ack-all 需要同时给 --by "<谁确认的>"');
+    process.exit(2);
+  }
+  const keys = ackAll
+    ? warnings.map(w => w.key)
+    : [argv[ackIdx + 1]].filter(Boolean);
+  if (!keys.length) {
+    console.error('✗ --ack 需要给提醒的 key（脚本运行时会列出可确认的 key）');
+    process.exit(2);
+  }
+  const acks = readAcks() || {};
+  const at = new Date().toISOString().slice(0, 10);
+  for (const key of keys) {
+    const w = warnings.find(x => x.key === key);
+    acks[key] = {
+      what: (note ? note + ' —— ' : '') + (w ? w.text : key),
+      by,
+      at,
+    };
+    console.log(`✓ 已确认: ${key}  (by ${by}, ${at})`);
+  }
+  writeAcks(acks);
+  console.log(`  写入 ${path.relative(ROOT, ACK_FILE)}（跟着 git 走 → 团队共享）`);
+  process.exit(0);
+}
+
 function main() {
   if (!fs.existsSync(ADAPTER_PATH)) {
     console.error(`✗ 找不到后端文件: ${ADAPTER_PATH}`);
@@ -262,13 +330,28 @@ function main() {
   const audioIdSet = new Set(audioVariants);
   for (const id of ref2vVariants) {
     if (!audioIdSet.has(id)) {
-      warnings.push(`Ref2V 变体 ${id} 不在【音驱动清单】(REF2V_AUDIO_VARIANTS) → 确认它带不带 ref_audio_0~2: 带的话必须加, 否则合成阶段会用 TTS 替换源音轨 → 声音比嘴型早 (音画不同步)`);
+      warnings.push({
+        key: `audio-driven:${id}`,
+        text: `Ref2V 变体 ${id} 不在【音驱动清单】(REF2V_AUDIO_VARIANTS) → 确认它带不带 ref_audio_0~2: 带的话必须加, 否则合成阶段会用 TTS 替换源音轨 → 声音比嘴型早 (音画不同步)`,
+      });
     }
   }
-  // ⑤ 软提醒: 新增 Ref2V 变体 → 确认 duration 上限 (1-10 还是 1-15)
+  // ⑤ 软提醒: 每个 Ref2V 变体都要确认 duration 上限 (1-10 还是 1-15)
   if (ref2vVariants.length) {
-    warnings.push('每个 Ref2V 变体都要确认【duration 上限】(参数表 max=10 还是 15) → adapter 的 is15s 判断里要覆盖');
+    warnings.push({
+      key: 'duration-cap',
+      text: '每个 Ref2V 变体都要确认【duration 上限】(参数表 max=10 还是 15) → adapter 的 is15s 判断里要覆盖',
+    });
   }
+
+  // ★ Sprint 44: 软提醒【去重】—— 已确认过的历史项不再重复刷, 只报新增的未确认项
+  //   ⚠️ 状态文件缺失/损坏 → acks = null → 全部软提醒都报 (保守行为, 绝不静默吞掉新问题)
+  const acks = readAcks();
+  const pendingWarnings = acks ? warnings.filter(w => !acks[w.key]) : warnings;
+  const confirmedCount = acks ? warnings.length - pendingWarnings.length : 0;
+
+  // ★ Sprint 44: --ack / --ack-all 在这里处理（此时 warnings 已算好）
+  handleAckCli(warnings);
 
   const allOk = !hasModelMissing && !hasModelExtra && !hasModelOrderDiff && !hasLabelMissing && !hasLabelExtra
     && hardFails.length === 0;
@@ -276,9 +359,13 @@ function main() {
   if (allOk) {
     console.log(`✓ ${backendIds.length} 个 ComfyUI 工作流，前后端完全一致（含 dropdown 中文标签 + 价格 + KNOWN + 分辨率档位）：`);
     backendIds.forEach((id, i) => console.log(`  ${String(i + 1).padStart(2, ' ')}. ${id}`));
-    if (warnings.length) {
+    if (pendingWarnings.length) {
       console.log('\n⚠️ 提醒（不阻塞，但要确认）：');
-      warnings.forEach(w => console.log('  · ' + w));
+      pendingWarnings.forEach(w => console.log('  · ' + w.text));
+      console.log('\n  确认其中一条（记录会写进 scripts/.workflow-sop-acks.json，含确认了什么/何时/谁确认的）：');
+      pendingWarnings.forEach(w => console.log(`    node scripts/check-workflow-sync.js --ack "${w.key}" --by "<你的名字>" --note "<确认结论>"`));
+    } else if (confirmedCount > 0) {
+      console.log(`\n⚠️ 另有 ${confirmedCount} 条提醒已确认过（见 scripts/.workflow-sop-acks.json），不再重复刷。`);
     }
     console.log('\n  新增工作流的完整清单见: ~/Obsidian/devflow/add-autodl-workflow.md');
     process.exit(0);
@@ -311,9 +398,9 @@ function main() {
     hardFails.forEach(f => console.error('  ✗ ' + f));
     console.error('  SOP: ~/Obsidian/devflow/add-autodl-workflow.md');
   }
-  if (warnings.length) {
+  if (pendingWarnings.length) {
     console.error('\n[提醒]');
-    warnings.forEach(w => console.error('  · ' + w));
+    pendingWarnings.forEach(w => console.error('  · ' + w.text));
   }
   console.error('\n维护四步走（详见 docs/comfyui-workflows.md 末尾）：');
   console.error('  1. 改 backend/src/services/adapters/autodl-comfyui-workflow.ts 的 WORKFLOW_* + JSDoc');
