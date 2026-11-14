@@ -409,6 +409,9 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           audioUrls: resolvedAudioUrls,
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
+          // ★ Sprint 43: 把【分辨率档位】带给 adapter (漏了它 → 用户选的 960p 会被静默换成默认档;
+          //   实机才发现: 前端传了 '960p', 但请求体里发出去的还是 '768p横')
+          resolution: vRecord.resolution,
         }
         let built = adapter.buildGenerateRequest(config, buildArgs)
         // ── Sprint 17 Task B: 首帧延续锚点 (老路径 四.2) ──
