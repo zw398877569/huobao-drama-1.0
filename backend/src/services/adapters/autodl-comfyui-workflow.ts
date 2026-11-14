@@ -236,6 +236,21 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
     'minimax_h3_image_audio_to_video_v2_15s': { levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖' },
     // ★ Sprint 34: 九图三音 15s 画质增强版 —— 分辨率字面量【带分辨率数字】
     //   默认 1088p (¥0.060/秒, 比 v5 的 1080p 便宜 40% 且更清晰)
+    // ★ Sprint 42 (PM msg-20261114-181): zm_nono / zm_u30 —— 多了 960p 档, 但【没有 1:1 方图】
+    //   (平台枚举只有 480p横/480p竖/768p横/768p竖/960p横/960p竖 六个; 同族 u24/u08 有 480p(1:1)/768p(1:1))
+    //   → 1:1 的 storyboard 落到 fallbackVert ('768p竖', 合法字面量) → 不会把 1:1 字面量发过去
+    //   ★ 默认档 = 768p (nono ¥0.050/秒, u30 ¥0.050/秒, 与现有 u24/u08 同价 → 不涨价);
+    //     960p 是可选档位 (nono ¥0.100/秒, u30 ¥0.090/秒 → 贵 80~100%, 让用户自己决定要不要为清晰度付钱)
+    'minimax_h3_zm_nono': {
+      levelsVert: ['960p竖', '768p竖', '480p竖'],
+      levelsHor: ['960p横', '768p横', '480p横'],
+      defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖',
+    },
+    'minimax_h3_zm_u30': {
+      levelsVert: ['960p竖', '768p竖', '480p竖'],
+      levelsHor: ['960p横', '768p横', '480p横'],
+      defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖',
+    },
     'minimax_h3_803': {
       levelsVert: ['1088p竖(1088*1920)', '768p竖(768*1376)', '1440p竖(1440*2560)'],
       levelsHor: ['1088p横(1920*1088)', '1440p横(2560*1440)'],
