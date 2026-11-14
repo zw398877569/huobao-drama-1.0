@@ -109,6 +109,27 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       —— 平台枚举逐字要求, 发错就报参数错。详见 RESOLUTION_PROFILES。
 */
   static readonly WORKFLOW_REF2V_803 = 'minimax_h3_803'
+  /**
+Ref2V 影视画质版（zm_nono）—— ★ Sprint 42 (PM msg-20261114-181)
+时长 1-15s，分辨率 480p/768p/960p（横竖都支持，★ 没有 1:1 方图档）
+输入：prompt + 最多 9 张参考图 + 最多 3 段参考音频（ref_audio_0~2）
+路由：用户在前端 model 弹窗显式选择
+场景：主力档 —— 影视画质（AutoDL 近 7 天调用量第二）
+注意：★ 参数表里【没有 seed】（同族其它工作流都有）→ 别无条件给这个工作流传 seed
+      ★ ref_audio 只接受 audio/mpeg 与 audio/wav（【不接受 flac】）
+价格：768p ¥0.050/秒；960p ¥0.100/秒
+*/
+  static readonly WORKFLOW_REF2V_CINEMA = 'minimax_h3_zm_nono'
+  /**
+Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
+时长 1-15s，分辨率 480p/768p/960p（横竖都支持，★ 没有 1:1 方图档）
+输入：prompt + 最多 9 张参考图 + 最多 3 段参考音频（ref_audio_0~2）
+路由：用户在前端 model 弹窗显式选择
+场景：主力档 —— 超清画质（AutoDL 近 7 天调用量第一）
+注意：★ 有 seed 参数（nono 没有）；ref_audio 接受 audio/flac、audio/mpeg、audio/wav
+价格：768p ¥0.050/秒；960p ¥0.090/秒
+*/
+  static readonly WORKFLOW_REF2V_ULTRA = 'minimax_h3_zm_u30'
 
   /** 所有 Ref2V 变体 — record.model 显式选择时识别 */
   private static readonly REF2V_VARIANTS = [
@@ -119,6 +140,9 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+    // ★ Sprint 42: zm_nono / zm_u30 (AutoDL 调用量最大的两个档位)
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_ULTRA,
   ]
 
   /**
@@ -132,6 +156,10 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+    // ★ Sprint 42: zm_nono / zm_u30 也带 ref_audio_0~2 → 必须进音驱动清单,
+    //   否则合成阶段会用 TTS 替换源音轨 → 又出现"声音比嘴型早"的音画不同步 (Sprint 38 T3-D 的坑)
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_ULTRA,
   ]
 
   /**
@@ -237,6 +265,9 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
     AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+    // ★ Sprint 42: 接入后不再走"未知工作流"兜底告警
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA,
+    AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_ULTRA,
   ]
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
@@ -527,7 +558,10 @@ Ref2V 九图三音 15s 画质增强版 (minimax_h3_803)
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED ||
       workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S ||
       // ★ Sprint 34: 九图三音 15s 画质增强版 (duration 枚举 min=1 max=15)
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803 ||
+      // ★ Sprint 42: zm_nono / zm_u30 的 duration 枚举同样是 min=1 max=15 (与同族 u24/u08 一致)
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA ||
+      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_ULTRA
     )
     const durationCap = is15s ? 15 : 10
     if (record.duration) {
