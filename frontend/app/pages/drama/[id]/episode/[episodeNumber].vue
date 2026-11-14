@@ -1705,7 +1705,8 @@
                       playsinline
                     />
                     <button class="prod-play-overlay" type="button" title="播放" @click.stop="startShotVideo(sb, false)">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="23 7 16 12 23 17 23 7"/></svg>
+                      <!-- ★ 三角 path 的视觉中心要对准圆心: x 8~19 (中心 13.5) + CSS margin-left -1.5px 抵消 -->
+                      <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="8 5 19 12 8 19"/></svg>
                     </button>
                   </template>
                   <img
@@ -1793,7 +1794,8 @@
                       playsinline
                     />
                     <button class="prod-play-overlay" type="button" title="播放" @click.stop="startShotVideo(sb, true)">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="23 7 16 12 23 17 23 7"/></svg>
+                      <!-- ★ 三角 path 的视觉中心要对准圆心: x 8~19 (中心 13.5) + CSS margin-left -1.5px 抵消 -->
+                      <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="8 5 19 12 8 19"/></svg>
                     </button>
                   </template>
                   <img
@@ -5165,13 +5167,13 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 /* ★ Sprint 41 追加单 177: 封面上的播放按钮 (默认不挂 <video>, 点了才挂) */
 .prod-play-overlay {
   position: absolute; inset: 0; margin: auto;
-  width: 46px; height: 46px; border-radius: 50%;
+  width: 52px; height: 52px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.55); color: #fff; border: none; cursor: pointer;
   transition: transform .12s ease, background .12s ease;
 }
 .prod-play-overlay:hover { background: rgba(0, 0, 0, 0.78); transform: scale(1.07); }
-.prod-play-overlay svg { margin-left: 3px; }
+.prod-play-overlay svg { margin-left: -1.5px; }
 .prod-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
 .prod-idx {
   position: absolute; top: 5px; left: 5px; font-size: 10px; font-weight: 700;
