@@ -1651,6 +1651,15 @@
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
                 {{ currentVideoModelLabel }}
               </button>
+              <!-- ★ Sprint 43: 分辨率档位下拉 (紧跟模型选择器; 选项随所选工作流变) -->
+              <select
+                v-if="videoResolutionOptions.length"
+                v-model="videoResolutionTier"
+                class="res-select"
+                title="分辨率档位 (该工作流支持的档位; 竖/横按每个镜头的画幅自动选)"
+              >
+                <option v-for="t in videoResolutionOptions" :key="t" :value="t">{{ t }}</option>
+              </select>
               <span v-if="videoConfigIds['videos']" class="tag" style="font-size:10px">自定义</span>
               <div class="ml-auto flex gap-1">
                 <!-- Sprint 13 Task E: 批量下载原始视频 (用户 2026-10-19 确认 videos 页=原始, compose 页=合成后) -->
@@ -1658,7 +1667,7 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   批量下载
                 </button>
-                <button class="btn btn-sm" @click="batchVideos(videoConfigId)">
+                <button class="btn btn-sm" @click="batchVideos(videoConfigId, videoResolutionTier)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
@@ -1726,7 +1735,7 @@
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId)">
+                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId, videoResolutionTier)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
@@ -2541,7 +2550,7 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Package, Loader2,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, mediaLibraryAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, mediaLibraryAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile, autodlResolutionAPI } from '~/composables/useApi'
 // ★ Sprint 41 追加单 177: 视频卡片懒加载 (默认只挂封面图, 点了才挂 <video>)
 import { useLazyVideoCards } from '~/composables/useLazyVideoCards'
 import { useAgent } from '~/composables/useAgent'
@@ -2918,6 +2927,51 @@ const imageConfigIds = ref<Record<string, string | null>>({})
 const videoConfigIds = ref<Record<string, string | null>>({})
 // 视频子 tab 的 ModelSelector 状态 (null = 关闭), 与 modelPopoverTab 独立
 const videoModelPopoverOpen = ref(false)
+
+// ── ★ Sprint 43 (PM msg-20261115-183): 分辨率档位下拉 (紧跟在模型选择器后面) ──
+//   ★ 选项随【所选工作流】变: 选完工作流就把该工作流支持的档位加载进下拉
+//   ★ 存的是【档位】('960p') 而不是字面量 ('960p竖') → 竖/横由每个分镜的画幅决定
+//     (用户选 960p → 竖屏镜发 '960p竖'、横屏镜发 '960p横')
+//   ★ 档位表的事实来源 = 后端 adapter 的 RESOLUTION_PROFILES (GET /videos/autodl-comfyui/resolutions)
+//     → 前端不会跟后端漂移
+const autodlResolutionTiers = ref<Record<string, { tiers: string[]; defaultTier: string }>>({})
+const videoResolutionTier = ref<string>('')
+
+/** 当前选中的视频工作流 id (从 "<configId>:<model>" 的 model 部分取) */
+const currentVideoWorkflowId = computed(() => {
+  const stored = videoConfigIds.value['videos']
+  if (!stored) return ''
+  const [, modelName] = stored.split(':')
+  return modelName || ''
+})
+/** 当前工作流支持的档位 (空 = 不是 AutoDL 工作流 / 还没选模型 / 档位表没拉到) */
+const videoResolutionOptions = computed(() => {
+  const wf = currentVideoWorkflowId.value
+  if (!wf) return []
+  return autodlResolutionTiers.value[wf]?.tiers || []
+})
+async function loadAutodlResolutionTiers() {
+  try {
+    const resp: any = await autodlResolutionAPI.list()
+    autodlResolutionTiers.value = resp?.workflows || resp?.data?.workflows || {}
+    // 档位表到了以后补一次当前选择
+    if (!videoResolutionTier.value) syncVideoResolutionTier()
+  } catch {
+    autodlResolutionTiers.value = {}
+  }
+}
+/** 把当前选择同步成【该工作流的默认档】 */
+function syncVideoResolutionTier() {
+  const wf = currentVideoWorkflowId.value
+  const def = wf ? autodlResolutionTiers.value[wf]?.defaultTier : ''
+  videoResolutionTier.value = def || videoResolutionOptions.value[0] || ''
+}
+// 换工作流 → 档位回到新工作流的默认档 (别留着上一个工作流的非法档位)
+watch(currentVideoWorkflowId, () => { syncVideoResolutionTier() })
+// 档位表是异步到的 → 到了之后同步一次
+watch(videoResolutionOptions, () => {
+  if (!videoResolutionTier.value && videoResolutionOptions.value.length) syncVideoResolutionTier()
+})
 // 模型选择器弹窗：哪个 tab 打开了选择器（null = 关闭）
 const modelPopoverTab = ref<string | null>(null)
 
@@ -3547,7 +3601,7 @@ function getRefs(sb) {
   try { return JSON.parse(raw) } catch { return [] }
 }
 
-onMounted(() => { refresh() })
+onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 </script>
 
 <style scoped>
@@ -5750,6 +5804,22 @@ onMounted(() => { refresh() })
   transition: all 0.15s;
 }
 .model-btn:hover {
+  border-color: var(--accent, #6366f1);
+  background: var(--accent-bg, rgba(99, 102, 241, 0.08));
+}
+/* ★ Sprint 43: 分辨率档位下拉 (跟模型按钮同一排, 同一套视觉) */
+.res-select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(27, 41, 64, 0.12));
+  background: var(--bg-0, #fff);
+  color: var(--text-1, #1a1a2e);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.res-select:hover {
   border-color: var(--accent, #6366f1);
   background: var(--accent-bg, rgba(99, 102, 241, 0.08));
 }

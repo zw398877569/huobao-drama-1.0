@@ -221,21 +221,22 @@ export function useVideoGeneration(deps: Deps) {
     return { tail, nextNum }
   }
 
-  async function genVid(sb: any, configId?: number | string | null) {
+  /** ★ Sprint 43: resolution = 用户选的分辨率档位 (如 '960p'; 竖/横按每个镜头的画幅自动选) */
+  async function genVid(sb: any, configId?: number | string | null, resolution?: string | null) {
     // ★ Sprint 36: 先置 pending —— 等后一镜首帧可能要几分钟, 期间按钮必须置灰,
     //   否则能重复点 → 重复提交 → 重复扣费。
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
     try {
       delete failedVideoMessages.value[sb.id]
       applyFallbackReason(sb.id, null)  // Sprint 14: 重新生成前先清掉上一轮的降级 tag
-      await genVidInner(sb, configId)
+      await genVidInner(sb, configId, resolution)
     } catch (e: any) {
       pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
       toast.error(e.message)
     }
   }
 
-  async function genVidInner(sb: any, configId?: number | string | null) {
+  async function genVidInner(sb: any, configId?: number | string | null, resolution?: string | null) {
     // ★ Sprint 29 follow-up Task C (PM msg-20261102-133): 【只取英文版】—— 不再重复翻译。
     //   数据方向 (PM 决策 D1): 中文版 = 源, 英文版 = 翻译产物; 翻译【只在保存时发生一次】。
     //   以前这里取中文版 → 后端 video-generation 再翻一次 → 每镜多一次 LLM 调用
@@ -285,6 +286,8 @@ export function useVideoGeneration(deps: Deps) {
     }
     // config_id 走复合格式 '<id>:<model>': 后端 parseConfigIdWithModel 拆开
     if (configId != null) params.config_id = configId
+    // ★ Sprint 43: 分辨率档位 (空 = 用该工作流的默认档)
+    if (resolution) params.resolution = resolution
     if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
     else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
     else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
@@ -346,7 +349,7 @@ export function useVideoGeneration(deps: Deps) {
     toast.error('视频生成超时')
   }
 
-  function batchVideos(configId?: number | string | null) {
+  function batchVideos(configId?: number | string | null, resolution?: string | null) {
     const pendingIds = ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
     if (!pendingIds.length) return
 
@@ -357,7 +360,7 @@ export function useVideoGeneration(deps: Deps) {
       for (let i = 0; i < pendingIds.length; i++) {
         const id = pendingIds[i]
         const sb = ctx.sbs.value.find(item => item.id === id)
-        if (sb) await genVid(sb, configId)
+        if (sb) await genVid(sb, configId, resolution)
         if (i < pendingIds.length - 1) await sleep(BATCH_SUBMIT_INTERVAL_MS)
       }
     }
