@@ -109,6 +109,30 @@
 - **注意**: 它是【音频工作流】—— 本镜没有配音时按既有 `no_audio_fallback` 规则退普通 Ref2V (v5)，也就用不到 1088p 档
 - **mode 字段**: 本期不传（平台默认即高质模式）
 
+### 10. `minimax_h3_zm_nono` — Ref2V 影视画质版 (zm_nono)
+
+- **用途**: 多图参考 + 多段音频 + 影视画质（AutoDL 近 7 天调用量第二的主力档位）
+- **时长**: 1-15s
+- **分辨率**: 480p / 768p / **960p**（横竖都支持）★ **没有 1:1 方图档**（平台枚举就这六个）
+- **默认档**: 768p（¥0.050/秒，与 zm_u24/zm_u08 同价 → 不涨价）；960p 是可选档（¥0.100/秒，贵 100%）
+- **输入**: `prompt` + 最多 9 张参考图 + 多段音频（ref_audio_0~2）
+- **触发条件**: 用户显式选了 `minimax_h3_zm_nono`
+- **注意（★ 别按名字臆测差异，以参数表为准）**:
+  - 参数表里【没有 seed】（同族其它工作流都有）→ 平台会报参数错。adapter 一律不传 seed → 天然安全
+  - `ref_audio` 只接受 `audio/mpeg` 与 `audio/wav`（【**不接受 flac**】）→ adapter 送 nono 前会过滤 flac 并记 flow-log
+  - 它是【音频工作流】→ 合成阶段按既有规则【保留源音轨】（Sprint 38 T3-D 的音驱动清单已含它）
+
+### 11. `minimax_h3_zm_u30` — Ref2V 超清画质版 (zm_u30)
+
+- **用途**: 多图参考 + 多段音频 + 超清画质（AutoDL 近 7 天调用量第一的主力档位）
+- **时长**: 1-15s
+- **分辨率**: 480p / 768p / **960p**（横竖都支持）★ **没有 1:1 方图档**
+- **默认档**: 768p（¥0.050/秒，与 u24/u08 同价）；960p 可选（¥0.090/秒，贵 80%）
+- **输入**: `prompt` + 最多 9 张参考图 + 多段音频（ref_audio_0~2）
+- **触发条件**: 用户显式选了 `minimax_h3_zm_u30`
+- **注意**: 参数表里【有 seed】（nono 没有）；`ref_audio` 接受 `audio/flac` / `audio/mpeg` / `audio/wav`
+- ★ 平台这几个 zm 变体的「详情」文案完全一样 → 名字不同不代表功能不同，**以参数表为准**
+
 ## 路由速查
 
 adapter 按以下优先级自动选工作流（无显式选择时）：
@@ -126,7 +150,7 @@ referenceMode = none 且没有 first/last frame
   └→ T2V: minimax_h3_lightx2v_no_pic (1-10s)
 ```
 
-用户显式选了 `zm_u24 / zm_u08 / image_audio_to_video_v2 / image_audio_to_video_v2_15s / minimax_h3_803` 时：
+用户显式选了 `zm_u24 / zm_u08 / image_audio_to_video_v2 / image_audio_to_video_v2_15s / minimax_h3_803 / zm_nono / zm_u30` 时：
 - mode 必须是 `multiple` 或 `single`，否则静默 fallback
 - fallback 时写 `task-logger` 的 `model-mode-mismatch` 日志，按 videoGenId 可查
 
@@ -135,7 +159,7 @@ referenceMode = none 且没有 first/last frame
 | 工作流 | 时长上限 |
 |--------|---------|
 | T2V / FL2V / Ref2V v5 / image_audio v2 | 1-10s |
-| Ref2V v5_15s / zm_u24 / zm_u08 / image_audio v2_15s / 803 | 1-15s |
+| Ref2V v5_15s / zm_u24 / zm_u08 / image_audio v2_15s / 803 / zm_nono / zm_u30 | 1-15s |
 
 超过上限的 duration 会被 adapter 截断到上限，不报错。
 

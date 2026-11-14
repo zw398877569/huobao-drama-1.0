@@ -17,6 +17,10 @@ export const AUTODL_COMFYUI_MODEL_LABELS: Record<string, string> = {
   minimax_h3_image_audio_to_video_v2_15s: 'Ref2V 多图+多音频 v2（1-15s）',
   // ★ Sprint 34 (PM msg-20261103-144): 九图三音 15s 画质增强版 (默认 1088p, 比 v5 的 1080p 便宜 40%)
   minimax_h3_803: 'Ref2V 九图三音 15s 画质增强版（1-15s）',
+  // ★ Sprint 42 (PM msg-20261114-181): AutoDL 调用量最大的两个档位
+  //   —— 标签【逐字照抄平台官方叫法】(平台侧就是这么写的, 别自己改写)
+  minimax_h3_zm_nono: 'H3多图多音频生视频(影视画质)',
+  minimax_h3_zm_u30: 'H3多图多音频生视频(超清画质)',
 }
 
 /**
@@ -39,6 +43,9 @@ export const AUTODL_COMFYUI_MODEL_PRICES: Record<string, string> = {
   minimax_h3_image_audio_to_video_v2_15s: '¥0.05/秒 (768p)',
   // ★ 九图三音 15s 画质增强版: 默认 1088p, 比 v5 的 1080p 便宜 40% 且更清晰
   minimax_h3_803: '¥0.06/秒 (1088p)',
+  // ★ Sprint 42: zm_nono / zm_u30 默认档都是 768p (与 u24/u08 同价 → 不涨价); 960p 更贵
+  minimax_h3_zm_nono: '¥0.05/秒 (768p)',
+  minimax_h3_zm_u30: '¥0.05/秒 (768p)',
 }
 
 /**
@@ -145,6 +152,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
           'minimax_h3_image_audio_to_video_v2',                // Ref2V  多图+多音频（口型/配乐驱动）     1-10s   480p/768p/1080p
           'minimax_h3_image_audio_to_video_v2_15s',            // Ref2V  多图+多音频 15s 长版            1-15s   480p/768p
           'minimax_h3_803',                                    // Ref2V  九图三音 15s 画质增强版           1-15s   480p/768p/1088p/1440p
+          'minimax_h3_zm_nono',                                 // Ref2V  影视画质版 (zm_nono)             1-15s   480p/768p/960p (无1:1)
+          'minimax_h3_zm_u30',                                  // Ref2V  超清画质版 (zm_u30)              1-15s   480p/768p/960p (无1:1)
           // 详细中文说明见 backend/src/services/adapters/autodl-comfyui-workflow.ts 的 JSDoc 与 docs/comfyui-workflows.md
         ],
       },
