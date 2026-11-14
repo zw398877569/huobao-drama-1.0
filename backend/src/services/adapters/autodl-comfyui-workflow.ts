@@ -586,6 +586,12 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
     // resolution: 纵横比 + 工作流 → autodl 命名 (★ 字面量按工作流派, 见 RESOLUTION_PROFILES)
     body.resolution = this.mapResolution(workflowId, record.aspectRatio)
 
+    // ★ Sprint 42 (PM msg-20261114-181): 【seed 按工作流判定】——
+    //   zm_nono 的参数表里【没有 seed】这一项, 传了平台会报参数错 (同族其它工作流都有 seed)。
+    //   本项目【一律不传 seed】(平台侧自带默认 seed) → nono 天然安全, 且现有工作流的请求体逐字不变。
+    //   ★ 若将来要加 seed (比如做『同 seed 可复现』), 必须【按工作流判定】, 不能无条件给全部工作流传。
+    //   参考: u30 有 seed (默认 548628410878779), u24/u08/803 有, nono 没有。
+
     if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_FL2V) {
       if (firstFrame) body.first_frame = firstFrame
       if (lastFrame) body.last_frame = lastFrame
@@ -649,7 +655,24 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
       })
       // ref_audio_0/1/2 — H3 多图多音频工作流的口型同步入口 (Sprint 14 核心)
       if (this.isAudioWorkflow(workflowId)) {
-        audioUrls.slice(0, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_AUDIO).forEach((url, i) => {
+        let picked = audioUrls.slice(0, AutoDLComfyUIWorkflowAdapter.REF2V_MAX_AUDIO)
+        // ★ Sprint 42 (PM msg-20261114-181): zm_nono 的 ref_audio 【只接受 audio/mpeg 与 audio/wav】
+        //   (【不接受 flac】) → 送 nono 前先把 flac 过滤掉 (本项目的配音都是 .mp3, 正常不会命中;
+        //   万一命中就丢这一段音频而不是让平台报参数错 → 整次生成失败)
+        if (workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA) {
+          const kept = picked.filter(u => !/\.flac(\?|#|$)/i.test(String(u)))
+          if (kept.length !== picked.length) {
+            logTaskWarn('VideoTask', 'audio-format-unsupported-filtered', {
+              videoGenId: record.id,
+              storyboardId: record.storyboardId,
+              workflowId,
+              droppedCount: picked.length - kept.length,
+              hint: 'zm_nono 的 ref_audio 只接受 audio/mpeg 与 audio/wav (不接受 flac) → 已过滤掉 flac',
+            })
+          }
+          picked = kept
+        }
+        picked.forEach((url, i) => {
           body[`ref_audio_${i}`] = url
         })
       }
