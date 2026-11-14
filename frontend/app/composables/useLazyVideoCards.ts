@@ -84,7 +84,8 @@ export function useLazyVideoCards(opts: LazyVideoCardsOptions) {
   // 列表刷新 (shots 换引用) → 检查有没有该拆的
   watch(() => opts.shots.value, () => { prune() })
   // 切 tab → 之前挂着的全拆掉 (DOM 本身也会被 v-if 销毁, 这里把状态也清掉)
-  if (opts.tabKey) watch(() => opts.tabKey.value, () => { clear() })
+  // ★ 用可选链: TS 不会因为 if 判断而把闭包里的 opts.tabKey 收窄 → TS18048
+  if (opts.tabKey) watch(() => opts.tabKey?.value, () => { clear() })
 
   return { activeVideos: active, isActive, start, stop, prune, clear }
 }

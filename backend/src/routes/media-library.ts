@@ -106,7 +106,13 @@ const app = new Hono()
  * GET /media-library?kind=bgm   → 只列 bgm
  * ★ 只读接口 (本文件没有 POST/PUT/DELETE)。
  */
-app.get('/media-library', async (c) => {
+// ★ Sprint 41 追加单 178 (PM msg-20261114-178): 内部路径必须是 '/' ——
+//   外面 index.ts 已经用 api.route('/media-library', mediaLibrary) 挂了一层前缀,
+//   写成 '/media-library' → 实际完整路径变成 /api/v1/media-library/media-library
+//   → 前端调 /api/v1/media-library 匹配不到 → 落到 Nuxt 的 catch-all 返回 index.html
+//   → 前端 JSON 解析炸 (Unexpected token '<') → ★ BGM/音效面板一直拿不到数据
+//   (其它路由都是 app.get('/') / app.get('/xxx') 这种【相对挂载前缀】的写法)
+app.get('/', async (c) => {
   const kindParam = c.req.query('kind')
   if (kindParam) {
     if (!MEDIA_KINDS.includes(kindParam as MediaKind)) {
