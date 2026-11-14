@@ -73,6 +73,8 @@ interface GenerateVideoParams {
   referenceImageUrls?: string[]
   duration?: number
   aspectRatio?: string
+  /** ★ Sprint 43: 用户指定的【分辨率档位】(如 '960p'; 竖/横由 aspectRatio 决定) */
+  resolution?: string
   configId?: number
   negativePrompt?: string
   seed?: number
@@ -141,6 +143,8 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
     duration: params.duration || 5,
     aspectRatio: params.aspectRatio || '16:9',
+    // ★ Sprint 43: 分辨率档位 (前端下拉选的; 空 = 用该工作流的默认档)
+    resolution: params.resolution || undefined,
     negativePrompt: params.negativePrompt || null,
     seed: params.seed || null,
     status: 'processing',

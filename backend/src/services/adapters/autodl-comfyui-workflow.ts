@@ -260,6 +260,31 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
     },
   }
 
+  /**
+   * ★ Sprint 43 (PM msg-20261115-183): 各工作流支持的【分辨率档位】(tier) 列表 + 默认档。
+   *   给前端的「分辨率」下拉用 —— 档位是"档"不是"字面量" ('960p' 而不是 '960p竖'):
+   *   竖/横由每个分镜的 aspectRatio 决定 → 用户选 960p, 竖屏镜发 '960p竖'、横屏镜发 '960p横'。
+   *   ★ 事实来源就是 RESOLUTION_PROFILES → 前端不会跟后端漂移。
+   */
+  static listResolutionTiers(): Record<string, { tiers: string[]; defaultTier: string }> {
+    const out: Record<string, { tiers: string[]; defaultTier: string }> = {}
+    for (const [wf, p] of Object.entries(AutoDLComfyUIWorkflowAdapter.RESOLUTION_PROFILES)) {
+      const tiers: string[] = []
+      for (const literal of [...p.levelsVert, ...p.levelsHor]) {
+        const t = AutoDLComfyUIWorkflowAdapter.tierOfLiteral(literal)
+        if (!tiers.includes(t)) tiers.push(t)
+      }
+      out[wf] = { tiers, defaultTier: AutoDLComfyUIWorkflowAdapter.tierOfLiteral(p.defaultVert) }
+    }
+    return out
+  }
+
+  /** 字面量 → 档位: '960p竖' → '960p'; '1088p竖(1088*1920)' → '1088p' */
+  private static tierOfLiteral(literal: string): string {
+    const m = /^(\d+p)/.exec(String(literal || ''))
+    return m ? m[1] : String(literal || '')
+  }
+
   /** 未知工作流时的兜底档位 (与改动前的 '768p竖' 逐字一致) */
   private static readonly DEFAULT_RESOLUTION_PROFILE = {
     levelsVert: ['768p竖'], levelsHor: ['768p横'], defaultVert: '768p竖', defaultHor: '768p横', fallbackVert: '768p竖',
@@ -584,7 +609,10 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
     }
 
     // resolution: 纵横比 + 工作流 → autodl 命名 (★ 字面量按工作流派, 见 RESOLUTION_PROFILES)
-    body.resolution = this.mapResolution(workflowId, record.aspectRatio)
+    body.resolution = this.mapResolution(workflowId, record.aspectRatio, record.resolution, {
+      videoGenId: record.id,
+      storyboardId: record.storyboardId,
+    })
 
     // ★ Sprint 42 (PM msg-20261114-181): 【seed 按工作流判定】——
     //   zm_nono 的参数表里【没有 seed】这一项, 传了平台会报参数错 (同族其它工作流都有 seed)。
@@ -751,12 +779,33 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
    *     (v5 / v5_15s / image_audio_to_video_v2 = 1080p; zm_u24 / zm_u08 / _15s / no_pic / lightx2v = 768p;
    *      无 aspectRatio 或 1:1 等不支持的纵横比 → 落到 fallbackVert = '768p竖')
    */
-  private mapResolution(workflowId: string, aspectRatio?: string | null): string {
+  private mapResolution(
+    workflowId: string,
+    aspectRatio?: string | null,
+    /** ★ 用户指定的【档位】(前端分辨率下拉; 空 = 用该工作流的默认档) */
+    tier?: string | null,
+    ctx?: { videoGenId?: number; storyboardId?: number | null },
+  ): string {
     const profile = AutoDLComfyUIWorkflowAdapter.RESOLUTION_PROFILES[workflowId]
       || AutoDLComfyUIWorkflowAdapter.DEFAULT_RESOLUTION_PROFILE
     if (!aspectRatio) return profile.fallbackVert
     const isVert = aspectRatio === '9:16' || aspectRatio === '3:4' || aspectRatio === '2:3' || aspectRatio === '4:5'
     const isHor = aspectRatio === '16:9' || aspectRatio === '4:3' || aspectRatio === '21:9' || aspectRatio === '3:2'
+    // ★ 用户指定的档位 → 取该档位在当前纵横比下的字面量 (1:1 按竖屏取)
+    if (tier) {
+      const pool = isHor ? profile.levelsHor : profile.levelsVert
+      const hit = pool.find(l => AutoDLComfyUIWorkflowAdapter.tierOfLiteral(l) === tier)
+      if (hit) return hit
+      logTaskWarn('VideoTask', 'resolution-tier-invalid', {
+        videoGenId: ctx?.videoGenId,
+        storyboardId: ctx?.storyboardId,
+        workflowId,
+        tier,
+        aspectRatio,
+        allowed: pool.map(l => AutoDLComfyUIWorkflowAdapter.tierOfLiteral(l)),
+        hint: '该工作流不支持这个分辨率档位 → 落到默认档 (不报错, 别整次生成失败)',
+      })
+    }
     if (isVert) return profile.defaultVert
     if (isHor) return profile.defaultHor
     // 1:1 等不支持的纵横比 → fallback (竖屏最低档)

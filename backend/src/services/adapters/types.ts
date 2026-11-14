@@ -114,6 +114,8 @@ export interface VideoGenerationRecord {
   audioUrls?: string[] | null
   duration?: number | null
   aspectRatio?: string | null
+  /** ★ Sprint 43: 用户指定的【分辨率档位】(如 '960p'; 竖/横由 aspectRatio 决定) */
+  resolution?: string | null
   /**
    * ★ Sprint 31 (PM msg-20261102-136): 本镜【显式关联】的道具图。
    *   由 video-generation.ts 从 storyboard_props → props.image_url 查出来并归一化,

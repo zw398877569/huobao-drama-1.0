@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+// ★ Sprint 43: 分辨率档位表 (给前端分辨率下拉用; 事实来源是 adapter 的 RESOLUTION_PROFILES)
+import { AutoDLComfyUIWorkflowAdapter } from '../services/adapters/autodl-comfyui-workflow.js'
 import { success, created, badRequest } from '../utils/response.js'
 // ★ Sprint 41 追加单 176: 同一镜头不能被排进两个未完成的定时计划 (否则到点会生成两次、扣两次钱)
 import {
@@ -90,6 +92,8 @@ app.post('/', async (c) => {
       referenceImageUrls: body.reference_image_urls,
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
+      // ★ Sprint 43: 前端分辨率下拉选的档位 (如 '960p')
+      resolution: body.resolution,
       negativePrompt: body.negative_prompt,
       seed: body.seed,
       configId,
@@ -316,6 +320,16 @@ app.delete('/batch-schedules/:id', async (c) => {
 })
 
 // GET /videos/:id
+/**
+ * GET /videos/autodl-comfyui/resolutions —— 各工作流支持的【分辨率档位】+ 默认档
+ *   ★ 给前端「分辨率」下拉用: 选完工作流就把该工作流的档位加载进下拉
+ *   ★ 事实来源是后端 adapter 的 RESOLUTION_PROFILES → 前端不会跟后端漂移
+ *   ★ 字面段路由必须排在 '/:id' 通配段之前 (否则会被 :id 抢先 match)
+ */
+app.get('/autodl-comfyui/resolutions', async (c) => {
+  return success(c, { workflows: AutoDLComfyUIWorkflowAdapter.listResolutionTiers() })
+})
+
 app.get('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const [row] = db.select().from(schema.videoGenerations)
