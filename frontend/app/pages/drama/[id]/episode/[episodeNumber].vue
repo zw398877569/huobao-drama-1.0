@@ -1682,6 +1682,8 @@
                       v-if="hasImg(sb)"
                       :src="'/' + getStoryboardCover(sb)"
                       class="previewable-image"
+                      loading="lazy"
+                      decoding="async"
                       @click.stop="startShotVideo(sb, false)"
                     />
                     <!-- 没有封面 → 退回 video 元素, 但 preload=none (未播放不拉数据) -->
@@ -1701,6 +1703,8 @@
                     v-else-if="hasImg(sb)"
                     :src="'/' + getStoryboardCover(sb)"
                     class="previewable-image"
+                    loading="lazy"
+                    decoding="async"
                     @click.stop="openImageViewer('/' + getStoryboardCover(sb), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
@@ -1766,6 +1770,8 @@
                       v-if="hasImg(sb)"
                       :src="'/' + getStoryboardCover(sb)"
                       class="previewable-image"
+                      loading="lazy"
+                      decoding="async"
                       @click.stop="startShotVideo(sb, true)"
                     />
                     <!-- 没有封面 → 退回 video 元素, 但 preload=none (未播放不拉数据) -->
@@ -1785,6 +1791,8 @@
                     v-else-if="hasImg(sb)"
                     :src="'/' + getStoryboardCover(sb)"
                     class="previewable-image"
+                    loading="lazy"
+                    decoding="async"
                     @click.stop="openImageViewer('/' + getStoryboardCover(sb), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
@@ -1971,7 +1979,8 @@
                   <option value="">不加 BGM (默认)</option>
                   <option v-for="f in bgmFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
                 </select>
-                <span v-if="!bgmFiles.length" class="dim" style="font-size:11px">素材目录 data/media/bgm/ 里还没有音频文件</span>
+                <span v-if="bgmLoadError" class="dim" style="font-size:11px; color: var(--error)">素材库加载失败: {{ bgmLoadError }} —— 刷新页面重试</span>
+                <span v-else-if="!bgmFiles.length" class="dim" style="font-size:11px">素材目录 data/media/bgm/ 里还没有音频文件</span>
                 <span class="dim" style="font-size:11px">音量</span>
                 <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
                 <span class="dim" style="font-size:11px">dB</span>
@@ -2061,7 +2070,10 @@
                       <option v-for="f in sfxFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
                     </select>
                   </div>
-                  <div v-if="!sfxFiles.length" class="merge-transition-row">
+                  <div v-if="sfxLoadError" class="merge-transition-row">
+                    <span class="dim" style="font-size:11px; color: var(--error)">音效库加载失败: {{ sfxLoadError }} —— 刷新页面重试</span>
+                  </div>
+                  <div v-else-if="!sfxFiles.length" class="merge-transition-row">
                     <span class="dim" style="font-size:11px">音效目录 data/media/sfx/ 里还没有音频文件</span>
                   </div>
                 </div>
@@ -3395,19 +3407,32 @@ function saveMergeTitleCardSettings() {
 const bgmFiles = ref<Array<{ name: string; sizeBytes: number; durationSec: number }>>([])
 const mergeBgm = ref({ file: '', volumeDb: -18, threshold: 0.03, ratio: 8, attack: 15, release: 350 })
 /** 拉素材库 (data/media/bgm/ 下的音频文件) */
+/**
+ * ★ Sprint 41 追加单 178 (PM msg-20261114-178): 素材库加载状态 ——
+ *   要区分【接口失败】与【目录里没素材】。以前两个 catch 都把错误吞成空列表 →
+ *   用户看到"列表是空的" → 会以为自己没放素材文件, 永远不会知道是接口坏了
+ *   (BGM/音效面板从上线起就因为后端路径写重一直拿不到数据)。
+ *   ★ 不用 toast 报错 —— 页面加载时就会拉一次 → 会刷屏; 错误显示在面板里。
+ */
+const bgmLoadError = ref('')
+const sfxLoadError = ref('')
 async function loadMediaLibrary() {
   try {
     const lib: any = await mediaLibraryAPI.list('bgm')
     bgmFiles.value = Array.isArray(lib?.items) ? lib.items : []
-  } catch {
+    bgmLoadError.value = ''
+  } catch (e: any) {
     bgmFiles.value = []
+    bgmLoadError.value = e?.message || String(e)
   }
   // ★ Sprint 40 T3: 音效素材 (复用同一个素材库接口, kind=sfx)
   try {
     const lib: any = await mediaLibraryAPI.list('sfx')
     sfxFiles.value = Array.isArray(lib?.items) ? lib.items : []
-  } catch {
+    sfxLoadError.value = ''
+  } catch (e: any) {
     sfxFiles.value = []
+    sfxLoadError.value = e?.message || String(e)
   }
 }
 let bgmSaveTimer: ReturnType<typeof setTimeout> | null = null
