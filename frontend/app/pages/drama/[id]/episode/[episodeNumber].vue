@@ -1667,14 +1667,36 @@
             <div class="prod-grid">
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
                 <div class="prod-cover">
+                  <!-- ★ Sprint 41 追加单 177: 默认【不挂 <video>】(21 个媒体实例 = 页面卡) → 只显示封面图 + 播放按钮 -->
                   <video
-                    v-if="hasVid(sb)"
+                    v-if="hasVid(sb) && shotVideoActive(sb, false)"
                     :src="'/' + getVideoUrl(sb)"
                     class="prod-video"
                     controls
                     preload="metadata"
                     playsinline
+                    @ended="stopShotVideo(sb.id)"
                   />
+                  <template v-else-if="hasVid(sb)">
+                    <img
+                      v-if="hasImg(sb)"
+                      :src="'/' + getStoryboardCover(sb)"
+                      class="previewable-image"
+                      @click.stop="startShotVideo(sb, false)"
+                    />
+                    <!-- 没有封面 → 退回 video 元素, 但 preload=none (未播放不拉数据) -->
+                    <video
+                      v-else
+                      :src="'/' + getVideoUrl(sb)"
+                      class="prod-video"
+                      controls
+                      preload="none"
+                      playsinline
+                    />
+                    <button class="prod-play-overlay" type="button" title="播放" @click.stop="startShotVideo(sb, false)">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="23 7 16 12 23 17 23 7"/></svg>
+                    </button>
+                  </template>
                   <img
                     v-else-if="hasImg(sb)"
                     :src="'/' + getStoryboardCover(sb)"
@@ -1729,22 +1751,36 @@
             <div class="prod-grid">
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
                 <div class="prod-cover">
+                  <!-- ★ Sprint 41 追加单 177: 同上 —— 默认只显示封面图, 点了才挂 <video> -->
                   <video
-                    v-if="hasComposed(sb)"
-                    :src="'/' + getComposedVideoUrl(sb)"
+                    v-if="shotVideoActive(sb, true) && (hasComposed(sb) || hasVid(sb))"
+                    :src="'/' + (hasComposed(sb) ? getComposedVideoUrl(sb) : getVideoUrl(sb))"
                     class="prod-video"
                     controls
                     preload="metadata"
                     playsinline
+                    @ended="stopShotVideo(sb.id)"
                   />
-                  <video
-                    v-else-if="hasVid(sb)"
-                    :src="'/' + getVideoUrl(sb)"
-                    class="prod-video"
-                    controls
-                    preload="metadata"
-                    playsinline
-                  />
+                  <template v-else-if="hasComposed(sb) || hasVid(sb)">
+                    <img
+                      v-if="hasImg(sb)"
+                      :src="'/' + getStoryboardCover(sb)"
+                      class="previewable-image"
+                      @click.stop="startShotVideo(sb, true)"
+                    />
+                    <!-- 没有封面 → 退回 video 元素, 但 preload=none (未播放不拉数据) -->
+                    <video
+                      v-else
+                      :src="'/' + (hasComposed(sb) ? getComposedVideoUrl(sb) : getVideoUrl(sb))"
+                      class="prod-video"
+                      controls
+                      preload="none"
+                      playsinline
+                    />
+                    <button class="prod-play-overlay" type="button" title="播放" @click.stop="startShotVideo(sb, true)">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="23 7 16 12 23 17 23 7"/></svg>
+                    </button>
+                  </template>
                   <img
                     v-else-if="hasImg(sb)"
                     :src="'/' + getStoryboardCover(sb)"
@@ -2494,6 +2530,8 @@ import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Package, Loader2,
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, mediaLibraryAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile } from '~/composables/useApi'
+// ★ Sprint 41 追加单 177: 视频卡片懒加载 (默认只挂封面图, 点了才挂 <video>)
+import { useLazyVideoCards } from '~/composables/useLazyVideoCards'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'
@@ -3213,6 +3251,24 @@ const batchDownloadEpisodeLabel = computed(() => `第${String(episodeNumber).pad
 
 function getVideoUrl(s) { return s?.video_url || s?.videoUrl || null }
 function getComposedVideoUrl(s) { return s?.composed_video_url || s?.composedVideoUrl || null }
+// ── ★ Sprint 41 追加单 177 (PM msg-20261114-177): 视频卡片懒加载 ─────────────────
+//
+// 【为什么要改】一页 21 个 <video> 元素 = Chrome 给【每个】建一个独立媒体实例 + 解码器 + 缓冲
+//   → 页面滚动/点播放都卡 (而同样文件下载到本地播完全正常 → 用户以为片子或服务坏了)。
+// ★ 关键不是"懒加载", 是【销毁】: 只做 IntersectionObserver 的话, 21 个元素还是都挂着, 解码器照样占着。
+//   所以默认【根本不渲染 <video>】, 只渲染封面图 + 播放按钮; 用户点了才把 <video> 挂进去。
+//   播完 / 切 tab / 视频被重新生成 (URL 变了) → 把那个 <video> 从 DOM 里拆掉。
+//   ★ 逻辑在 composables/useLazyVideoCards.ts (解耦 + 可离线断言); 这里只做薄包装给模板用。
+const lazyShotVideos = useLazyVideoCards({
+  shots: sbs,
+  videoUrlOf: (sb) => getVideoUrl(sb),
+  composedUrlOf: (sb) => getComposedVideoUrl(sb),
+  tabKey: prodTab,
+})
+function shotVideoActive(s: any, preferComposed: boolean) { return lazyShotVideos.isActive(s, preferComposed) }
+function startShotVideo(s: any, preferComposed: boolean) { lazyShotVideos.start(s, preferComposed) }
+function stopShotVideo(shotId: number) { lazyShotVideos.stop(shotId) }
+
 function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
@@ -5027,6 +5083,16 @@ onMounted(() => { refresh() })
 .prod-cover { position: relative; aspect-ratio: 16/9; background: var(--bg-2); overflow: hidden; }
 .prod-cover img { width: 100%; height: 100%; object-fit: cover; }
 .prod-video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
+/* ★ Sprint 41 追加单 177: 封面上的播放按钮 (默认不挂 <video>, 点了才挂) */
+.prod-play-overlay {
+  position: absolute; inset: 0; margin: auto;
+  width: 46px; height: 46px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55); color: #fff; border: none; cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+.prod-play-overlay:hover { background: rgba(0, 0, 0, 0.78); transform: scale(1.07); }
+.prod-play-overlay svg { margin-left: 3px; }
 .prod-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
 .prod-idx {
   position: absolute; top: 5px; left: 5px; font-size: 10px; font-weight: 700;
