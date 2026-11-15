@@ -1995,6 +1995,12 @@
                 <span class="dim" style="font-size:11px">音量</span>
                 <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
                 <span class="dim" style="font-size:11px">dB</span>
+                <!-- ★ Sprint 46 T1/T2 (PM msg-20261115-186): 上传音乐入口
+                     (以前只能自己往服务器目录塞 mp3 + 刷新页面才能在下拉里看到) -->
+                <button class="btn btn-sm" :disabled="bgmUploading" @click="bgmFileInput?.click()">
+                  {{ bgmUploading ? '上传中…' : '上传音乐' }}
+                </button>
+                <input ref="bgmFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onBgmFileSelected" />
                 <!-- ★ API 生成音乐: 本期只做【禁用态口子】(PM 决策 D3) —— 入口在、说明在, 但不装样子 (不许假成功) -->
                 <button class="btn btn-sm" disabled title="尚未开放">AI 生成音乐</button>
                 <span class="dim" style="font-size:11px">(未开放: 将来用生成式音乐 API 生成后自动存到 data/media/bgm/ 并自动选中)</span>
@@ -2066,6 +2072,12 @@
                     <span class="dim" style="font-size:11px">音效音量</span>
                     <input v-model.number="mergeSfxVolumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" @change="saveMergeSfxSettings" />
                     <span class="dim" style="font-size:11px">dB</span>
+                    <!-- ★ Sprint 46 T1/T2 (PM msg-20261115-186): 音效素材上传 (音效目录跟 BGM 一样是空的 → 用户会碰到一样的问题) -->
+                    <span class="dim" style="font-size:11px">音效素材</span>
+                    <button class="btn btn-sm" :disabled="sfxUploading" @click="sfxFileInput?.click()">
+                      {{ sfxUploading ? '上传中…' : '上传音效' }}
+                    </button>
+                    <input ref="sfxFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onSfxFileSelected" />
                   </div>
                   <div v-for="r in mergeTransitionRows" :key="r.index" class="merge-transition-row">
                     <span class="mono dim" style="font-size:11px; width:70px">#{{ r.index + 1 }}→#{{ r.index + 2 }}</span>
@@ -3492,17 +3504,72 @@ async function loadMediaLibrary() {
   }
 }
 let bgmSaveTimer: ReturnType<typeof setTimeout> | null = null
-/** 改完 BGM 设置就存 (不用点拼接也能留住) */
-function saveMergeBgmSettings() {
-  // 防抖: 连着改几个参数时只存一次
-  if (bgmSaveTimer) clearTimeout(bgmSaveTimer)
-  bgmSaveTimer = setTimeout(async () => {
-    try {
-      await mergeAPI.saveSettings(epId.value, { bgm: { ...mergeBgm.value } })
-    } catch (e: any) {
-      toast.error(e?.message || '保存 BGM 设置失败')
+let bgmSaveResolve: (() => void) | null = null
+/**
+ * 改完 BGM 设置就存 (不用点拼接也能留住)。
+ * ★ Sprint 46 T2 (PM msg-20261115-186): 返回 Promise —— 上传完要【自动选中并自动保存】,
+ *   上传流程得等保存真的落到后端了再提示成功 (否则用户刷新页面发现没选中)。
+ *   (行为不变: 还是 400ms 防抖; 原来的调用方忽略返回值, 不受影响)
+ */
+function saveMergeBgmSettings(): Promise<void> {
+  return new Promise((resolve) => {
+    // 防抖: 连着改几个参数时只存一次
+    if (bgmSaveTimer) { clearTimeout(bgmSaveTimer); bgmSaveTimer = null }
+    if (bgmSaveResolve) { bgmSaveResolve(); bgmSaveResolve = null }
+    bgmSaveResolve = resolve
+    bgmSaveTimer = setTimeout(async () => {
+      bgmSaveTimer = null
+      const done = bgmSaveResolve
+      bgmSaveResolve = null
+      try {
+        await mergeAPI.saveSettings(epId.value, { bgm: { ...mergeBgm.value } })
+      } catch (e: any) {
+        toast.error(e?.message || '保存 BGM 设置失败')
+      }
+      done?.()
+    }, 400)
+  })
+}
+
+// ★ Sprint 46 T2 (PM msg-20261115-186): 素材上传 (BGM / 音效 通用)
+//   上传完的链路: 上传 → 刷新素材列表 → (BGM) 自动选中 → 自动保存 → 提示成功
+//   ★ 落库的是【纯文件名】(后端拼绝对路径时要求 basename 相等) → 前端存 res.name, 不存路径/URL
+const bgmUploading = ref(false)
+const sfxUploading = ref(false)
+const bgmFileInput = ref<HTMLInputElement | null>(null)
+const sfxFileInput = ref<HTMLInputElement | null>(null)
+
+async function uploadMediaAsset(kind: 'bgm' | 'sfx', file: File) {
+  const uploading = kind === 'bgm' ? bgmUploading : sfxUploading
+  if (uploading.value) return
+  uploading.value = true
+  try {
+    const res: any = await mediaLibraryAPI.upload(kind, file)
+    await loadMediaLibrary()
+    if (kind === 'bgm' && res?.name) {
+      mergeBgm.value.file = res.name
+      await saveMergeBgmSettings()
     }
-  }, 400)
+    toast.success(`已上传 ${res?.name || file.name}`)
+  } catch (e: any) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+function onBgmFileSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''   // 清掉 → 允许连续选同一个文件再传
+  if (file) uploadMediaAsset('bgm', file)
+}
+
+function onSfxFileSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (file) uploadMediaAsset('sfx', file)
 }
 
 // ★ Sprint 40 T1 (PM msg-20261112-171): 导出素材包 (整集视频 + 每镜字幕 + 结构化 manifest)
@@ -5000,6 +5067,8 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   width: 70px; font-size: 11px; padding: 2px 4px; border-radius: 4px;
   border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
 }
+/* ★ Sprint 46 T2 (PM msg-20261115-186): 上传按钮点的是隐藏的 file input */
+.hidden-file-input { display: none; }
 
 /* ★ Sprint 39 追加单 170 (PM msg-20261112-170): 三个配置入口 (转场设置 / 字幕烧录 / 调色设置)
    移到成片【上方】, 横着并排; 容器宽度与成片播放器一致 (720px, 同 .export-video)。 */

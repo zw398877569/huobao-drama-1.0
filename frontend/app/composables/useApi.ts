@@ -175,9 +175,28 @@ export const mergeAPI = {
   saveSettings: (epId: number, body: any) => api.post(`/merge/episodes/${epId}/merge/settings`, body || {}),
 }
 
-// ★ Sprint 40 T2 (PM msg-20261112-171): 素材库【只读】接口 (data/media/bgm, data/media/sfx)
+/**
+ * ★ Sprint 46 T1 (PM msg-20261115-186): 素材上传 (BGM / 音效 通用)
+ *   ★ 不能用 api.post —— 那个封装固定发 JSON; 这里要发 multipart/form-data。
+ *   ★ 【不能】手写 Content-Type —— 浏览器要自己带 boundary, 手写会让后端解析失败。
+ */
+export async function uploadMediaFile(kind: 'bgm' | 'sfx', file: File): Promise<any> {
+  const fd = new FormData()
+  fd.append('file', file)
+  const resp = await fetch(`${BASE}/media-library/upload?kind=${kind}`, { method: 'POST', body: fd })
+  let json: any = {}
+  try { json = await resp.json() } catch { /* 非 JSON (例如网关错误页) */ }
+  if (!resp.ok || (json?.code && json.code >= 400)) {
+    throw new Error(json?.message || `上传失败 (${resp.status})`)
+  }
+  return json?.data ?? json
+}
+
+// ★ Sprint 40 T2 (PM msg-20261112-171): 素材库接口 (data/media/bgm, data/media/sfx)
+//   ★ Sprint 46 T1: 加 upload (落点跟扫描点一致 → 传完立刻能在下拉里看到)
 export const mediaLibraryAPI = {
   list: (kind?: 'bgm' | 'sfx') => api.get('/media-library', kind ? { kind } : undefined),
+  upload: (kind: 'bgm' | 'sfx', file: File) => uploadMediaFile(kind, file),
 }
 export const agentAPI = {
   chat: (type: string, body: { message: string; drama_id: number; episode_id: number }) =>
