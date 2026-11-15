@@ -438,6 +438,8 @@ ensureColumn('storyboards', 'eval_score_motion', 'REAL')
 ensureColumn('storyboards', 'eval_score_continuity', 'REAL')
 // P2 TTS 多角色分段(2026-08-24):JSON 数组存每段 speaker/text/voice/path
 ensureColumn('storyboards', 'tts_segments', 'TEXT')
+// ★ Sprint 47 单 189 (PM msg-20261115-189): 本镜剧情目的 (情绪推断最高优先级的数据源)
+ensureColumn('storyboards', 'dramatic_function', 'TEXT')
 ensureColumn('storyboards', 'eval_notes', 'TEXT')
 ensureColumn('storyboards', 'evaluated_at', 'TEXT')
 ensureColumn('storyboards', 'retake_count', 'INTEGER DEFAULT 0')

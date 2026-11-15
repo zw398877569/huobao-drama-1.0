@@ -87,6 +87,10 @@ export const episodeAPI = {
   pipelineStatus: (id: number) => api.get(`/episodes/${id}/pipeline-status`),
   // ★ Sprint 26 Task B: 删除前的规模统计 (确认框显示 N 分镜 / M 图 / K 视频)
   stats: (id: number) => api.get(`/episodes/${id}/stats`),
+  // ★ Sprint 47 单 189 (PM msg-20261115-189): 给已有剧集补齐本镜剧情目的
+  //   (来源 = episodes.planning_data 里 planner 的 intent_function, 零 LLM 成本)
+  backfillDramaticFunction: (id: number, opts?: { overwrite?: boolean }) =>
+    api.post(`/episodes/${id}/backfill-dramatic-function`, opts || {}),
   // ★ Sprint 26 Task B: 剧集软删 (后端只打 deleted_at 标记, 数据保留)
   //   ★ 修: 原来写成 api.delete(...) → 封装里根本没有 delete 方法 (只有 api.del)
   //     → 压缩后报 "t.delete is not a function" → 删除功能完全不可用。

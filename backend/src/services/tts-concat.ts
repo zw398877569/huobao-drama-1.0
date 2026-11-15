@@ -89,13 +89,19 @@ export function loadStoryboardTTSContext(storyboardId: number): {
     personality = chars.find(c => c.personality)?.personality || undefined
   }
 
-  // 2. intentFunction: sceneIntention JSON.function
+  // 2. intentFunction: ★ dramatic_function 优先 (V4 planner 落库的剧情目的, 单 189 加的列),
+  //    scene_intention JSON.function 兜底 (老路径的 LLM 意图分析结果)。
   let intentFunction: string | undefined
-  const [sb] = db.select({ sceneIntention: schema.storyboards.sceneIntention })
+  const [sb] = db.select({
+    sceneIntention: schema.storyboards.sceneIntention,
+    dramaticFunction: schema.storyboards.dramaticFunction,
+  })
     .from(schema.storyboards)
     .where(eq(schema.storyboards.id, storyboardId))
     .all()
-  if (sb?.sceneIntention) {
+  if (sb?.dramaticFunction) {
+    intentFunction = sb.dramaticFunction
+  } else if (sb?.sceneIntention) {
     try {
       const parsed = JSON.parse(sb.sceneIntention)
       intentFunction = parsed?.function || undefined

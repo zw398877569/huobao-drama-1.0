@@ -149,6 +149,10 @@ export const storyboards = sqliteTable('storyboards', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   episodeId: integer('episode_id').notNull(),
   sceneId: integer('scene_id'),
+  // ★ Sprint 47 单 189 (PM msg-20261115-189): 本镜的剧情目的 (V4 planner 的 intent_function 落库)
+  //   ★ 不复用 scene_intention: 那列被 shot-duration 的 scene-classifier 读 (climax 系数 ×1.3),
+  //     往里写会影响【时长链】(本单 T5~T9 的 scope) → 单独一列, 只给情绪推断用, 不碰时长
+  dramaticFunction: text('dramatic_function'),
   storyboardNumber: integer('storyboard_number').notNull(),
   title: text('title'),
   location: text('location'),

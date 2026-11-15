@@ -4,6 +4,9 @@ import { db, schema } from '../db/index.js'
 import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
+// ★ Sprint 47 单 189 (PM msg-20261115-189): 已有剧集补齐本镜剧情目的
+import { backfillEpisodeDramaticFunction } from '../services/dramatic-function-backfill.js'
+import { logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
 
@@ -312,6 +315,24 @@ app.get('/:episode_id/storyboards', async (c) => {
       .filter(ch => (charIdsByStoryboard.get(row.id) || []).includes(ch.id))
       .map(ch => toSnakeCase(ch)),
   })))
+})
+
+// ★ Sprint 47 单 189 (PM msg-20261115-189): 给【已有剧集】补齐本镜剧情目的
+//   来源 = episodes.planning_data 里 planner 的 intent_function (零 LLM 成本, 不用重跑拆解)
+//   body: { overwrite?: boolean } (默认只补空的)
+app.post('/:id/backfill-dramatic-function', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!getActiveEpisode(id)) return notFound(c, 'Episode not found')
+  const body = await c.req.json().catch(() => ({}))
+  const result = backfillEpisodeDramaticFunction(id, { overwrite: body?.overwrite === true })
+  if (result.source === 'none') {
+    logTaskWarn('EpisodeAPI', 'backfill-dramatic-function-no-source', { episodeId: id })
+  } else {
+    logTaskSuccess('EpisodeAPI', 'backfill-dramatic-function', {
+      episodeId: id, updated: result.updated, skipped: result.skipped, missing: result.missing,
+    })
+  }
+  return success(c, result)
 })
 
 // GET /episodes/:id/pipeline-status — 流水线进度

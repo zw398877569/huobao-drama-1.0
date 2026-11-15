@@ -872,6 +872,10 @@ export async function runStep3(opts: {
           ? JSON.stringify(cleaned.imagePromptPermanent)
           : null,
         sceneId: det.scene_id || null,
+        // ★ Sprint 47 单 189 (PM msg-20261115-189): planner 明明每镜都给了 intent_function,
+        //   之前存库时【直接丢了】 → 情绪推断的最高优先级(剧情目的)永远拿不到数据。
+        //   现在落库 (单独一列, 不写 scene_intention —— 那列会被 scene-classifier 读 → 影响时长链)。
+        dramaticFunction: det.intent_function || null,
         duration: det.duration || 10,
         // ★ Sprint 33 T3: 过渡镜标记 (从 step1_plan 按 shot_number 反查回填; 老数据/无标记 → 0 / NULL)
         // ★ Sprint 33 追加单4: schema 改成 boolean mode 后这里要写 true/false (Drizzle 写库时自动转 1/0)

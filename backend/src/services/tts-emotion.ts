@@ -41,17 +41,24 @@ const KEYWORDS_FLUENT = /生动|轻快|俏皮|诙谐|幽默|fluent|lively/
 
 /**
  * 剧情目的 → 情绪模板 (★ 最高优先级)。
- * 保持 Sprint 30 以来那张表的口径, 只是把它从第 3 位提到第 1 位。
+ *
+ * ★ Sprint 47 单 189 (PM msg-20261115-189): 按真实数据细化 —— ep21 的剧情目的分布是
+ *   铺垫1/悬念6/揭露4/反转3/情感爆发3/高潮4; 老表把 悬念+揭露+反转 全映射成 fearful
+ *   → 21 镜里 13 镜一个情绪 (等于"情绪没起伏"), 也过不了工单验收
+ *   「剧情目的不同的镜 → emotion 应不同」。现在 8 个戏型映射到 6 个情绪:
+ *   铺垫=neutral · 悬念=fearful · 揭露=calm(冷静揭示) · 反转=surprised(意外)
+ *   · 对峙/高潮/情感爆发=angry · 余韵=sad
+ *   ★ 对峙/高潮/情感爆发 同为 angry 是有意的 (三者都是情绪爆发的语义)
  */
 const INTENT_EMOTION: Record<string, TTSEmotion> = {
+  铺垫: 'neutral',
+  悬念: 'fearful',
+  揭露: 'calm',
+  反转: 'surprised',
+  对峙: 'angry',
   高潮: 'angry',
   情感爆发: 'angry',
   余韵: 'sad',
-  反转: 'fearful',
-  对峙: 'fearful',
-  悬念: 'fearful',
-  揭露: 'fearful',
-  铺垫: 'neutral',
 }
 
 /** 关键词 → 情绪 (台词兜底 / 性格基线共用) */

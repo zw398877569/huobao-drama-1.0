@@ -521,6 +521,12 @@
                 分镜模型 · {{ currentTextModelLabel }}
                 <span v-if="selectedTextConfigId" class="tag" style="font-size:10px">自定义</span>
               </button>
+              <!-- ★ Sprint 47 单 189 (PM msg-20261115-189): 给【已有剧集】补齐本镜剧情目的
+                   (来源 = 拆解计划里 planner 给的 intent_function, 零 LLM 成本, 不用重跑拆解) -->
+              <button class="btn btn-sm" :disabled="backfillingDramatic || !sbs?.length" @click="backfillDramaticFunction"
+                title="把拆解计划里的剧情目的(铺垫/高潮/对峙...)写进分镜 —— 情绪推断的最高优先级靠它, 缺了情绪就退化成'只听台词用词'">
+                {{ backfillingDramatic ? '补齐中...' : '补齐剧情目的' }}
+              </button>
               <button class="btn btn-sm" :disabled="rn || !selectedSb?.id || regeneratingOne" @click="regeneratingOne = true; (async () => { const sb = selectedSb?.id ? selectedSb : (sbs[Math.max(0, (sbs?.length ?? 0) - 1)] || sbs[0]); if (!sb?.id) { regeneratingOne = false; toast.error('没有可重生成的镜头'); return; } try { await $fetch(`/api/v1/agent/storyboard_breaker/storyboard/${sb.id}`, { method: `POST`, body: { drama_id: dramaId, episode_id: epId } }); toast.success(`镜头 #${sbs.indexOf(sb) + 1} 已重新生成`); await refresh(); } catch (err) { toast.error(err?.message || `重新生成本镜头失败`); } finally { regeneratingOne = false; } })()" title="只重做当前选中镜头的 17 字段,不影响其他镜头">
                 <Loader2 v-if="rt === 'storyboard_breaker' && regeneratingOne" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M3 4v5h5"/></svg>
@@ -2978,6 +2984,29 @@ watch(prodTab, (tab) => {
 // Sprint 6 Task E — 分镜模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, QA msg-20260930-002 修: 挪到 destructuring 块外前面)
 const selectedTextConfigId = ref<string | null>(null)
 const storyboardModelPopoverOpen = ref(false)
+
+// ★ Sprint 47 单 189 (PM msg-20261115-189): 给已有剧集补齐本镜剧情目的
+const backfillingDramatic = ref(false)
+async function backfillDramaticFunction() {
+  if (backfillingDramatic.value) return
+  backfillingDramatic.value = true
+  try {
+    const res: any = await episodeAPI.backfillDramaticFunction(epId.value)
+    if (res?.source === 'none') {
+      toast.error('这一集没有拆解计划数据 → 补不了; 只能重跑拆解, 或对单个镜头跑意图分析')
+      return
+    }
+    const parts = [`已补齐 ${res?.updated ?? 0} 个镜头的剧情目的`]
+    if (res?.skipped) parts.push(`跳过 ${res.skipped} 个已填的`)
+    if (res?.missing) parts.push(`${res.missing} 个镜没找到对应数据`)
+    toast.success(parts.join(' · '))
+    await refresh()
+  } catch (e: any) {
+    toast.error(e?.message || '补齐剧情目的失败')
+  } finally {
+    backfillingDramatic.value = false
+  }
+}
 
 // Script-stage + production agents (rewrite / extract / voice / breakdown / samples / add shot)
 const {
