@@ -31,8 +31,9 @@ import {
   computeDialogueFloor,
   SHORT_DIALOGUE_THRESHOLD,
   SHORT_DIALOGUE_MAX,
-  VIDEO_MIN_DURATION,
-  VIDEO_MAX_DURATION,
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 台词 floor 的有效口径 (与拆解校验 T9 共用同一份常量)
+  computeEffectiveDialogueFloor,
+  countDialogueChars,
   HOOK_OPENING_MIN,
   HOOK_CLOSING_MIN,
   HOOK_CLIFFHANGER_MIN,
@@ -48,100 +49,32 @@ import { classifyEpisodeScenes, type EpisodeSceneData, type SceneTag } from '../
 // Sprint 17 (PM msg-20261021-076) Task F④: 场景 Σ 密度区间约束 (老路径 轴4.5) 的告警
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 
-export { VIDEO_MIN_DURATION, VIDEO_MAX_DURATION }
-
-/**
- * 五因子粒度模型 → candidate duration (秒)  [R1]
- *  factor-1: 景别 baseline (getBaselineFor)
- *  factor-2: 密度系数 (getDensityScale from intentTemplate.durationCoefficient)
- *  factor-4: 运镜速度系数 (getMoveScale from sp.movement)
- *  → baseline.min × density × move
- *  factor-3: dialogueFloor = ceil(对白字数 / 4.5) + 1
- *  → candidate = max(floor, scaled)
- *  P3: 短对白 (<10字) 压缩到 ≤ 8s
- *  最终: [VIDEO_MIN_DURATION, VIDEO_MAX_DURATION] clamp
- */
-export function computeShotDuration(
-  sp: { shot_type: string; dialogue?: string; movement?: string },
-  intentTemplate: { durationCoefficient?: number; shotDensity?: string } | undefined,
-  // Step 3.G: scene-classifier 标记 climax 时应用 CLIMAX_BONUS_COEFFICIENT,
-  // 让该 scene 所有镜头延长 (但不破坏 intent-template 快慢节奏 + 不突破 VIDEO_MAX=15)
-  sceneTag: SceneTag = 'normal',
-): number {
-  const baseline = getBaselineFor(sp.shot_type)
-  const densityScale = intentTemplate?.durationCoefficient ?? FALLBACK_DENSITY_SCALE
-  const moveScale = getMoveScale(sp.movement)
-  // 对白按 char count (去空白), 中文 4.5 字/秒常识
-  const dialogueChars = (sp.dialogue || '').replace(/\s/g, '').length
-  const scaled = baseline.min * densityScale * moveScale
-  const floor = computeDialogueFloor(dialogueChars)
-  let candidate = Math.max(floor, scaled)
-  // Step 3.G: climax bonus (scene-classifier 3-vote 标记 climax 时)
-  //   1.3x 乘到 candidate, 让该 scene 镜头延长落点时间.
-  //   Σ 收敛时 climax 镜相对延长比例 1.3:1 仍保留 (绝对时长会被 Σ 缩, 但相对节奏稳).
-  if (sceneTag === 'climax') {
-    candidate *= CLIMAX_BONUS_COEFFICIENT
-  }
-  // P3: 短对白压缩 (< 10 字 → ≤ 8s, 避免空转)
-  if (dialogueChars > 0 && dialogueChars < SHORT_DIALOGUE_THRESHOLD) {
-    candidate = Math.min(candidate, SHORT_DIALOGUE_MAX)
-  }
-  return Math.round(candidate)
-}
-
-/**
- * 钩子保留 (O3)  [R3]
- *  idx=0 → HOOK_OPENING_MIN (3s, 开场钩子)
- *  idx=last → HOOK_CLIFFHANGER_MIN (10s, 仅 cliffhanger) 或 HOOK_CLOSING_MIN (8s)
- *  其他 → 0 (不强制)
- */
-export function getHookMin(idx: number, total: number, isCliffhanger: boolean): number {
-  if (idx === 0) return HOOK_OPENING_MIN
-  if (idx === total - 1) {
-    return isCliffhanger ? HOOK_CLIFFHANGER_MIN : HOOK_CLOSING_MIN
-  }
-  return 0
-}
-
-/**
- * 场景过渡 bonus (O2)  [R3]
- *  每个 scene 第一个镜 +0.5s (观众认知切换需要缓冲)
- */
-export function applySceneTransitionBonus(candidate: number, isFirstInScene: boolean): number {
-  return isFirstInScene ? candidate + SCENE_TRANSITION_BONUS : candidate
-}
-
-/**
- * scene 内第一镜索引集合 (Phase 2 C, 用于场景过渡 bonus)  [R3]
- *  shot_plan 按 shot_number 顺序, 同一 scene_id 第一次出现算 first
- */
-export function buildFirstInSceneIndices(
-  shot_plan: Array<{ scene_id: number }>
-): Set<number> {
-  const seenScenes = new Set<number>()
-  const firstIndices = new Set<number>()
-  shot_plan.forEach((sp, i) => {
-    if (!seenScenes.has(sp.scene_id)) {
-      seenScenes.add(sp.scene_id)
-      firstIndices.add(i)
-    }
-  })
-  return firstIndices
-}
-
-/**
- * cliffhanger 判定  [R3]
- *  检查 scene 的 intention.function 字段是否命中 CLIFFHANGER_TAGS
- *  scene.intention 不存在 → false (无 cliffhanger)
- *  Phase 3: lib/scene-classifier.ts 会加 fallback 推断 (结构位置后 30% + description 冲突词 + 场景对峙)
- */
-export function isCliffhangerScene(
-  sceneId: number,
-  sceneMap: Map<number, { intention?: { function?: string } | null }>
-): boolean {
-  const fn = sceneMap.get(sceneId)?.intention?.function
-  return fn ? CLIFFHANGER_TAGS.includes(fn as typeof CLIFFHANGER_TAGS[number]) : false
-}
+// ★ Sprint 47 T5: 纯逻辑部分拆到 services/shot-duration-rules.ts (不碰 DB → 可离线断言)
+//   这里保留 DB 相关部分 (目标时长查询 / 整集策略 / 回写) 并 re-export 纯逻辑, 旧 import 路径照常可用
+export {
+  VIDEO_MIN_DURATION,
+  VIDEO_MAX_DURATION,
+  computeShotDuration,
+  getHookMin,
+  applySceneTransitionBonus,
+  buildFirstInSceneIndices,
+  isCliffhangerScene,
+  convergeShotDurations,
+  scaleShotDurations,
+  SCENE_DENSITY_RULES,
+} from './shot-duration-rules.js'
+import {
+  computeShotDuration,
+  applySceneTransitionBonus,
+  buildFirstInSceneIndices,
+  isCliffhangerScene,
+  convergeShotDurations,
+  scaleShotDurations,
+  SCENE_DENSITY_RULES,
+  type DensityTier,
+  VIDEO_MIN_DURATION,
+  VIDEO_MAX_DURATION,
+} from './shot-duration-rules.js'
 
 /**
  * episode target 来源  [R2]
@@ -214,34 +147,6 @@ export function getEpisodeTargetSeconds(episodeId: number): number {
 
   // 3. estimator (返回 [60, 240] clamp 后的秒数)
   return estimateTargetDuration(episodeId, dramaEpisodes, episodeSceneData)
-}
-
-/**
- * Σ 收敛 (Phase 2 C)  [R2]
- *  当 Σ > target × tolerance, 按比例缩放非钩子镜头
- *  钩子镜 (idx=0, idx=last 且 cliffhanger) 强制 >= hookMin 不被缩
- *  返回新的 durations 数组 (新数组, 不修改入参)
- *
- *  QA ISSUE-002 (msg-20260920-006) 修复保留: 缩放后非钩子镜必须 >= VIDEO_MIN_DURATION=4,
- *  否则会违反 H3 硬约束 (EP=5 Σ=258s scale≈0.43 大概率触发)。
- */
-export function convergeShotDurations(
-  durations: number[],
-  episodeTargetSeconds: number,
-  isCliffhanger: (idx: number) => boolean,
-): number[] {
-  const total = durations.reduce((a, b) => a + b, 0)
-  const maxAllowed = episodeTargetSeconds * EPISODE_TARGET_TOLERANCE
-  if (total <= maxAllowed) return durations.slice()  // 不超, 不缩
-  const scale = maxAllowed / total
-  return durations.map((d, i) => {
-    const hookMin = getHookMin(i, durations.length, isCliffhanger(i))
-    if (hookMin > 0) return Math.max(d, hookMin)  // 钩子镜不缩
-    // QA ISSUE-002 (msg-20260920-006): 之前用 Math.max(1, ...) 兜底, 缩放后非钩子镜可能跌到 1-3s
-    //   违反 H3 VIDEO_MIN_DURATION=4 硬约束. EP=5 Σ=258s scale≈0.43 大概率触发.
-    //   修复: 兜底用 VIDEO_MIN_DURATION=4, 钩子镜仍保留 hook_min 不被缩
-    return Math.max(VIDEO_MIN_DURATION, Math.round(d * scale))
-  })
 }
 
 /**
@@ -329,6 +234,11 @@ export function applyDurationPolicy(
     })
   }
 
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 每镜的【台词 floor】(硬下界)
+  //   口径 = computeEffectiveDialogueFloor(countDialogueChars(dialogue)) —— 与阶段 1 算 candidate 用的是同一份
+  //   (floor 受平台 15s 上限约束: 64 字 → floor 15)
+  const dialogueFloors = shots.map((sp) => computeEffectiveDialogueFloor(countDialogueChars(sp.dialogue)))
+
   // ── 阶段 1: 逐镜五因子 + 场景过渡 + clamp  [R1 + R3]
   shots.forEach((sp, i) => {
     const intentTemplate = sp.intent_function
@@ -359,13 +269,6 @@ export function applyDurationPolicy(
   //      - 老路径的"低密度场景单镜 ≥8s"会把悬念戏的特写也拉成 8s, 节奏反而更平
   //      - PM 明确要求"不破坏 Sprint 11 R1/R2/R3 的单镜时长逻辑"
   //      → 单镜下限违反只告警, 由人工决定要不要拉长
-  const SCENE_DENSITY_RULES = {
-    high:   { minMirror: 3, sceneMinTotal: 10, sceneMaxTotal: 25 },
-    medium: { minMirror: 5, sceneMinTotal: 15, sceneMaxTotal: 35 },
-    low:    { minMirror: 8, sceneMinTotal: 25, sceneMaxTotal: 50 },
-  } as const
-  type DensityTier = keyof typeof SCENE_DENSITY_RULES
-
   // 被阶段 1.5 调整过的 scene (阶段 3 要复查有没有被 Σ 收敛压回去)
   const sceneAdjusted = new Map<number, { before: number; after: number; density: string }>()
 
@@ -408,13 +311,11 @@ export function applyDurationPolicy(
     else if (total > rule.sceneMaxTotal) scale = rule.sceneMaxTotal / total
     if (Math.abs(scale - 1) < 0.01) continue
 
-    // 拉伸时保 VIDEO_MAX, 压缩时保 VIDEO_MIN
+    // 拉伸时保 VIDEO_MAX, 压缩时保台词 floor (★ Sprint 47 T5: 场景 Σ 压缩同样不得突破台词 floor)
     let after = 0
     indices.forEach((i) => {
       const cur = shots[i].duration || 0
-      let next = Math.round(cur * scale)
-      if (scale < 1) next = Math.max(VIDEO_MIN_DURATION, next)
-      else next = Math.min(VIDEO_MAX_DURATION, next)
+      const next = scaleShotDurations([cur], scale, [dialogueFloors[i] ?? 0])[0]
       shots[i].duration = next
       after += next
     })
@@ -438,6 +339,8 @@ export function applyDurationPolicy(
     (idx) => (typeof shots[idx].scene_id === 'number'
       ? isCliffhangerScene(shots[idx].scene_id as number, sceneMap)
       : false),
+    // ★ Sprint 47 T5: 台词 floor 是收敛的硬下界 —— 缩放不得把某镜压到装不下台词
+    dialogueFloors,
   )
   shots.forEach((sp, i) => { sp.duration = converged[i] })
 
@@ -465,5 +368,63 @@ export function applyDurationPolicy(
     })
   }
 
-  return converged.reduce((a, b) => a + b, 0)
+  const convergedTotal = converged.reduce((a, b) => a + b, 0)
+
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 目标时长【对齐实际】
+  //   PM D2: 台词 floor 之和超过目标时长时, 允许整集变长 (target 跟着台词涨), 而不是压台词
+  //   回写后: 用户看到的是真实值; 下次重跑用同一个目标 (一致)
+  alignEpisodeTargetDuration(episodeId, convergedTotal, episodeTargetSeconds, dialogueFloors)
+
+  return convergedTotal
+}
+
+/**
+ * ★ Sprint 47 T5 (PM msg-20261115-188): 把收敛后的【实际总时长】回写到剧集目标时长字段。
+ *
+ * 【为什么】
+ *   · PM D2 (用户 2026-11-15 拍板): "target 允许跟着台词涨" —— 台词 floor 挡住压缩时, 整集变长是正确结果,
+ *     那目标时长就不能还停在旧值 (否则用户看到的和实际的不一样, 下次重跑也会打架)。
+ *   · 差值要【可见】: 超出目标的部分写进 flow-log (不静默)。
+ *
+ * @param actualTotal 收敛后的实际 Σ (秒)
+ * @param targetBefore 收敛前用的目标 (秒)
+ * @param dialogueFloors 各镜台词 floor (只用于日志里说明超出是被台词撑出来的)
+ */
+export function alignEpisodeTargetDuration(
+  episodeId: number,
+  actualTotal: number,
+  targetBefore: number,
+  dialogueFloors: number[] = [],
+): { updated: boolean; newTarget: number; overBy: number } {
+  const newTarget = Math.max(1, Math.round(actualTotal))
+  const overBy = Math.round((actualTotal - targetBefore * EPISODE_TARGET_TOLERANCE) * 100) / 100
+  const floorsSum = dialogueFloors.reduce((a, b) => a + b, 0)
+  // ★ 只【涨】不【跌】: 目标时长是"这一集允许有多长"的上限,
+  //   跌下去会让内容变短时被上一次的旧值压住 (目标越缩越小)。
+  //   涨上去 = 台词 floor 撑出来的长度 (PM D2: target 允许跟着台词涨) → 下次重跑不会被压回去。
+  const updated = newTarget > targetBefore
+  try {
+    if (updated) {
+      db.update(schema.episodes)
+        .set({ targetDuration: newTarget, updatedAt: new Date().toISOString() })
+        .where(eq(schema.episodes.id, episodeId)).run()
+    }
+  } catch (err: any) {
+    logTaskWarn('ShotDuration', 'episode-target-align-write-fail', {
+      episodeId, error: err?.message || String(err),
+    })
+  }
+  logTaskProgress('ShotDuration', 'episode-target-aligned', {
+    episodeId, targetBefore, actualTotal, newTarget, overBy, floorsSum,
+    hint: overBy > 0
+      ? '台词 floor 挡住了压缩 → 整集按台词变长 (PM D2: target 允许跟着台词涨)'
+      : (updated ? '目标时长已上调到实际总时长' : '实际总时长没超过目标 → 目标时长不动 (只涨不跌)'),
+  })
+  if (overBy > 0) {
+    logTaskWarn('ShotDuration', 'episode-target-exceeded-by-dialogue-floor', {
+      episodeId, targetBefore, allowed: targetBefore * EPISODE_TARGET_TOLERANCE, actualTotal, overBy, floorsSum,
+      hint: '★ 台词装不下 → 不压台词, 整集变长 (用户 2026-11-15 拍板: target 允许跟着台词涨)',
+    })
+  }
+  return { updated, newTarget, overBy }
 }

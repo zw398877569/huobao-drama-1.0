@@ -36,6 +36,8 @@ import {
   isCliffhangerScene,
   getEpisodeTargetSeconds,
   convergeShotDurations,
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 目标时长对齐实际 (target 允许跟着台词涨)
+  alignEpisodeTargetDuration,
 } from '../../services/shot-duration.js'
 import {
   getBaselineFor,
@@ -43,6 +45,9 @@ import {
   getMoveScale,
   FALLBACK_DENSITY_SCALE,
   computeDialogueFloor,
+  // ★ Sprint 47 T5: 台词 floor 的有效口径 (与收敛下界/T9 校验同一份常量)
+  computeEffectiveDialogueFloor,
+  countDialogueChars,
   SHORT_DIALOGUE_THRESHOLD,
   SHORT_DIALOGUE_MAX,
   VIDEO_MIN_DURATION,
@@ -1126,10 +1131,13 @@ export async function runGenerateShotPrompts(params: {
 
   // Σ 收敛 (Phase 2 C): 当 Σ 超过 target × tolerance, 按比例缩放非钩子镜头
   //   注意: 钩子镜 (idx=0, idx=last 且 cliffhanger) 保留时长不被压
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 每镜台词 floor (硬下界) —— 缩放不得把某镜压到装不下台词
+  const dialogueFloors = shot_plan.map((sp: any) => computeEffectiveDialogueFloor(countDialogueChars(sp.dialogue)))
   const convergedDurations = convergeShotDurations(
     shot_plan.map(sp => sp.duration),
     episodeTargetSeconds,
     (idx) => isCliffhangerScene(shot_plan[idx].scene_id, sceneMap as any),
+    dialogueFloors,
   )
   // 把 converged 值写回 shot_plan, 同时重算 totalDuration
   let convergedTotal = 0
@@ -1141,6 +1149,10 @@ export async function runGenerateShotPrompts(params: {
   db.update(schema.episodes)
     .set({ duration: Math.ceil(convergedTotal / 60), updatedAt: ts })
     .where(eq(schema.episodes.id, episodeId)).run()
+
+  // ★ Sprint 47 T5 (PM msg-20261115-188): 目标时长对齐实际 Σ
+  //   (台词 floor 挡住压缩时整集会变长 —— PM D2: target 允许跟着台词涨, 不压台词)
+  alignEpisodeTargetDuration(episodeId, convergedTotal, episodeTargetSeconds, dialogueFloors)
 
   logTaskSuccess('StoryboardTool', 'generate-shot-prompts-complete', {
     episodeId, count: shot_plan.length, totalDuration: convergedTotal, converged: convergedTotal !== shot_plan.reduce((a, sp) => a + sp.duration, 0),

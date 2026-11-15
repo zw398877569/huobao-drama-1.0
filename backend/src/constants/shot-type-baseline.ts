@@ -72,6 +72,19 @@ export function computeDialogueFloor(dialogueChars: number): number {
   return Math.ceil(dialogueChars / CHINESE_SPEECH_RATE) + DIALOGUE_FLOOR_BASE
 }
 
+// ── 台词 floor 的【有效口径】(★ Sprint 47 T5, PM msg-20261115-188) ──
+//   台词 floor = ceil(字数 / 4.5) + 1, 但它同时受平台 VIDEO_MAX_DURATION=15 约束:
+//   ★ 64 字算出 floor=16 → 平台最高 15s → 有效 floor 取 15 (否则"floor 硬下界"永远满足不了)。
+//   ★ 这是【唯一一份】台词 floor 口径 —— 收敛下界 (T5) 与拆解校验 (T9) 都读它, 不许两处各写一套。
+export function computeEffectiveDialogueFloor(dialogueChars: number): number {
+  return Math.min(computeDialogueFloor(dialogueChars), VIDEO_MAX_DURATION)
+}
+
+/** 台词有效字数 (去空白) —— 与 computeShotDuration 里的口径一致 */
+export function countDialogueChars(dialogue?: string | null): number {
+  return (dialogue || '').replace(/\s/g, '').length
+}
+
 // ── 短对白压缩规则 (P3) ────────────────────────────────────
 export const SHORT_DIALOGUE_THRESHOLD = 10  // 字
 export const SHORT_DIALOGUE_MAX = 8          // 秒
