@@ -17,7 +17,7 @@
  *   ★ whisper 报 2013 "speech 2.8 don't support whisper" → 入口挡住, 绝不下发;
  *   neutral (官方枚举里没有, 但实测能过) → 保留当默认值, 不改现有正常镜表现。
  */
-import { collectCharacterTraitText } from './character-voice-params.js'
+import { collectCharacterTraitText, isSupportedEmotion } from './character-voice-params.js'
 
 export type TTSEmotion =
   | 'happy' | 'sad' | 'angry' | 'fearful'
@@ -30,6 +30,14 @@ const KEYWORDS_TENSE = /紧张|恐惧|惊|危机|追逐|冲突|战斗|tense|fear
 const KEYWORDS_ANGRY = /愤怒|狂躁|吼|怒|angry|fury|rage|吼叫|咆哮|嘶吼|怒骂|滚开/
 const KEYWORDS_WARM = /温馨|平静|舒缓|亲密|温柔|peaceful|warm|gentle|intimate|tender/
 const KEYWORDS_JOYFUL = /欢乐|喜悦|团聚|开心|joyful|reunion|cheerful|delight/
+/**
+ * ★ Sprint 47 T3: 扩枚举 —— 惊讶 / 厌恶 / 生动 (surprised / disgusted / fluent)
+ *   ★ 这三个都是 MiniMax 官方枚举里有的 (2026-11-15 实测 speech-2.8-hd 能合成), 不是自造值
+ *   ★ 顺序有讲究: 惊讶/厌恶比"恐惧/愤怒"更具体 → 放在 sad/tense/angry 之前判
+ */
+const KEYWORDS_SURPRISED = /惊讶|诧异|竟然|没想到|出乎意料|意外|震惊|惊愕|surprised|shock/
+const KEYWORDS_DISGUSTED = /厌恶|嫌弃|反感|恶心|鄙夷|不屑|disgust|disgusted/
+const KEYWORDS_FLUENT = /生动|轻快|俏皮|诙谐|幽默|fluent|lively/
 
 /**
  * 剧情目的 → 情绪模板 (★ 最高优先级)。
@@ -50,6 +58,10 @@ const INTENT_EMOTION: Record<string, TTSEmotion> = {
 export function emotionFromKeywords(text: string | null | undefined): TTSEmotion | null {
   if (!text) return null
   const lower = text.toLowerCase()
+  // ★ T3: 更具体的情绪先判 (惊讶/厌恶/生动)
+  if (KEYWORDS_SURPRISED.test(lower)) return 'surprised'
+  if (KEYWORDS_DISGUSTED.test(lower)) return 'disgusted'
+  if (KEYWORDS_FLUENT.test(lower)) return 'fluent'
   if (KEYWORDS_SAD.test(lower)) return 'sad'
   if (KEYWORDS_TENSE.test(lower)) return 'fearful'
   if (KEYWORDS_ANGRY.test(lower)) return 'angry'
@@ -140,15 +152,38 @@ export function clampSpeed(speed: number): number {
   return Math.round(speed * 100) / 100
 }
 
-/** ★ 平台是否认这个情绪 (whisper 对 speech-2.8-hd 不支持 → 入口挡住) */
+/**
+ * ★ 平台是否认这个情绪 (whisper 对 speech-2.8-hd 不支持 → 入口挡住)。
+ *   判据统一放在 character-voice-params.ts (SUPPORTED_EMOTIONS), 这里是薄封装。
+ */
 export function isPlatformEmotion(emotion: string | null | undefined): boolean {
-  if (!emotion) return true
-  const e = String(emotion).toLowerCase()
-  if (e === 'whisper') return false
-  return [
-    'happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised',
-    'calm', 'fluent', 'neutral',
-  ].includes(e)
+  return isSupportedEmotion(emotion)
+}
+
+/**
+ * ★ Sprint 47 T3 (PM msg-20261115-188): 情绪强度 → 平台能表达的最接近杠杆。
+ *
+ * 【为什么是模拟】
+ *   MiniMax 官方枚举里【没有情绪强度参数】(voice_setting 只有 speed/vol/pitch/emotion;
+ *   voice_modify 的 intensity 是"刚劲↔轻柔"的力度, 不是情绪强度) →
+ *   所以用"刚劲/轻柔 + 音量微调"来近似表达情绪的强弱。
+ *
+ * @param strength 0~100 (0/未配 = 不启用 → 不改任何参数)
+ * @param base     角色已有的显式参数 (显式的优先, 不被推导值覆盖)
+ * @returns 需要叠加到请求上的参数 (没启用 → 空对象)
+ */
+export function emotionStrengthToParams(
+  strength: number | null | undefined,
+  base?: { vol?: number; intensity?: number } | null,
+): { vol?: number; intensity?: number } {
+  const s = Number(strength)
+  if (!Number.isFinite(s) || s <= 0) return {}
+  const k = (s - 50) / 50   // [-1, 1]
+  const out: { vol?: number; intensity?: number } = {}
+  // 强度高 → 更刚劲 (intensity 负) + 音量略高; 强度低 → 更轻柔 (正值) + 音量略低
+  if (base?.intensity == null) out.intensity = Math.round(-k * 40)
+  if (base?.vol == null) out.vol = Math.round((1 + k * 0.3) * 100) / 100
+  return out
 }
 
 /** 角色特征文本 (从 characters 行拼) —— 供 inferSpeed 用 */

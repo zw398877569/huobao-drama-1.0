@@ -5,6 +5,8 @@
  */
 import type { TTSProviderAdapter } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 47 T3 (PM msg-20261115-188): 平台不认的情绪在请求前挡住 (whisper 对 2.8 不支持 → 会报 2013)
+import { isSupportedEmotion } from '../character-voice-params.js'
 
 export interface TTSParams {
   text: string
@@ -55,7 +57,8 @@ export class MiniMaxTTSAdapter implements TTSProviderAdapter {
         // ★ Sprint 47 T1: 角色级音量/音高 (不配置时 = 1 / 0 → 与改动前逐字一致)
         vol: params.vol ?? 1,
         pitch: params.pitch ?? 0,
-        emotion: params.emotion || 'neutral',
+        // ★ Sprint 47 T3: 平台不认的取值降级 neutral (别发出去让平台报 2013)
+        emotion: isSupportedEmotion(params.emotion) ? (params.emotion || 'neutral') : 'neutral',
       },
       audio_setting: {
         sample_rate: 32000,

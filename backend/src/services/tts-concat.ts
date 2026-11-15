@@ -19,7 +19,7 @@ import { generateTTS } from './tts-generation.js'
 // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
 import { parseVoiceParams, toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
 // ★ Sprint 47 T2 (PM msg-20261115-188): 情绪推断 (剧情目的优先) + 语速解耦
-import { inferEmotion, inferSpeed, characterSpeedText } from './tts-emotion.js'
+import { inferEmotion, inferSpeed, characterSpeedText, isPlatformEmotion, emotionStrengthToParams } from './tts-emotion.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
@@ -373,7 +373,20 @@ export async function generateTTSForDialogue(
       dialogue: m.text,
       atmosphere,
     })
-    const segEmotion = rawEmotion
+    // ★ Sprint 47 T3: 平台不认的取值在【入口】挡住 (不能发出去才报错) → 降级 neutral + 告警
+    const segEmotion = isPlatformEmotion(rawEmotion) ? rawEmotion : 'neutral'
+    if (!isPlatformEmotion(rawEmotion)) {
+      logTaskWarn('TTSConcat', 'emotion-unsupported-fallback', {
+        storyboardId, episodeId, speaker: m.speaker, emotion: rawEmotion, fallback: 'neutral',
+      })
+    }
+    // ★ Sprint 47 T3: 情绪强度 (平台无强度参数 → 用刚劲/轻柔 + 音量近似; 角色显式配置优先)
+    const strengthParams = emotionStrengthToParams(speakerParams.emotionIntensity, speakerParams)
+    const baseModify = toVoiceModify(speakerParams)
+    const segVoiceModify = baseModify
+      ? { ...baseModify, ...(strengthParams.intensity != null ? { intensity: strengthParams.intensity } : {}) }
+      : (strengthParams.intensity != null ? { intensity: strengthParams.intensity } : null)
+    const segVol = speakerParams.vol ?? strengthParams.vol
     // ★ Sprint 47 T2: 语速与情绪【解耦】= 角色基线 + 场景密度 (角色级显式配置优先)
     const segSpeed = speakerParams.speed ?? inferSpeed({
       traitText: characterSpeedText(speakerChar) || ttsContext.personality,
@@ -398,9 +411,10 @@ export async function generateTTSForDialogue(
       emotion: segEmotion,
       speed: segSpeed,
       // ★ Sprint 47 T1: 角色级音量/音高/声音修饰 (undefined → 保持现状)
-      vol: speakerParams.vol,
+      // ★ Sprint 47 T3: vol 可被情绪强度推导值补上 (显式配置优先)
+      vol: segVol,
       pitch: speakerParams.pitch,
-      voiceModify: toVoiceModify(speakerParams),
+      voiceModify: segVoiceModify,
     })
     segPaths.push(segPath)
     meta.push({

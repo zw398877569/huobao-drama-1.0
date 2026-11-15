@@ -473,6 +473,10 @@
                         <input v-model.number="voiceParamsDraft[c.id].timbre" type="number" :min="VOICE_PARAM_RANGES.timbre.min" :max="VOICE_PARAM_RANGES.timbre.max" :step="VOICE_PARAM_RANGES.timbre.step" @change="saveCharVoiceParams(c)" />
                       </label>
                       <label class="voice-param-item">
+                        <span>情绪强度</span>
+                        <input v-model.number="voiceParamsDraft[c.id].emotionIntensity" type="number" :min="VOICE_PARAM_RANGES.emotionIntensity.min" :max="VOICE_PARAM_RANGES.emotionIntensity.max" :step="VOICE_PARAM_RANGES.emotionIntensity.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
                         <span>音效</span>
                         <select v-model="voiceParamsDraft[c.id].soundEffects" @change="saveCharVoiceParams(c)">
                           <option v-for="o in VOICE_SOUND_EFFECT_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
@@ -484,7 +488,7 @@
                         {{ derivingCharParams[c.id] ? '推导中…' : '按特征推导' }}
                       </button>
                       <button class="btn btn-sm" :disabled="voiceParamsBusy[c.id]" @click="clearCharVoiceParams(c)">清空</button>
-                      <span class="dim" style="font-size:11px">不配置 = 保持音色原声 (音量 1 / 音高 0); 音高半音 [-12,12], 修饰音高 [-100,100]</span>
+                      <span class="dim" style="font-size:11px">不配置 = 保持音色原声 (音量 1 / 音高 0); 音高半音 [-12,12], 修饰音高 [-100,100]; 情绪强度 0 = 不启用 (平台无强度参数, 用刚劲/轻柔+音量近似)</span>
                     </div>
                   </div>
                 </div>
@@ -3004,6 +3008,7 @@ const VOICE_PARAM_RANGES = {
   modifyPitch: { min: -100, max: 100, step: 5, def: 0 },
   intensity: { min: -100, max: 100, step: 5, def: 0 },
   timbre: { min: -100, max: 100, step: 5, def: 0 },
+  emotionIntensity: { min: 0, max: 100, step: 5, def: 0 },
 } as const
 const VOICE_SOUND_EFFECT_OPTIONS = [
   { value: '', label: '无' },

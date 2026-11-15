@@ -37,6 +37,13 @@ export interface CharacterVoiceParams {
   timbre?: number
   /** 声音修饰音 voice_modify.sound_effects —— 单选 */
   soundEffects?: SoundEffect
+  /**
+   * ★ Sprint 47 T3 (PM msg-20261115-188): 情绪强度 0~100 (0 = 不启用)
+   *   ★ 平台【没有】情绪强度参数 → 这里用平台能表达的最接近的杠杆模拟:
+   *     强情绪 → voice_modify.intensity 更刚劲 (负值) + 音量略高; 弱情绪 → 更轻柔 (正值) + 音量略低
+   *   ★ 默认不启用 (undefined) → 请求体与改动前逐字一致
+   */
+  emotionIntensity?: number
 }
 
 export type SoundEffect = 'spacious_echo' | 'auditorium_echo' | 'lofi_telephone' | 'robotic'
@@ -52,6 +59,7 @@ export const VOICE_PARAM_RANGES = {
   intensity: { min: -100, max: 100, step: 5, def: 0 },
   timbre: { min: -100, max: 100, step: 5, def: 0 },
   modifyPitch: { min: -100, max: 100, step: 5, def: 0 },
+  emotionIntensity: { min: 0, max: 100, step: 5, def: 0 },
 } as const
 
 /** 平台支持的 emotion 取值 (speech-2.8-hd: whisper 不支持, fluent 官方只说 2.6 生效 → 两者实测过再用) */
@@ -106,6 +114,11 @@ export function clampVoiceParams(input: any): CharacterVoiceParams {
   if (input.soundEffects) {
     const se = String(input.soundEffects)
     if ((SOUND_EFFECT_OPTIONS as string[]).includes(se)) out.soundEffects = se as SoundEffect
+  }
+  if (input.emotionIntensity != null) {
+    const v = clampNum(input.emotionIntensity, 0, 100)
+    // 0 = 不启用 (跟"没配"一个意思 → 请求体不出现这些字段)
+    if (v != null && v > 0) out.emotionIntensity = Math.round(v)
   }
   return out
 }
