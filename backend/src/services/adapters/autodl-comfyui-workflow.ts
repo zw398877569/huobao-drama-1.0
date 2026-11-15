@@ -22,6 +22,9 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+// ★ Sprint 47 T8 (PM msg-20261115-188): 各工作流的时长上限 —— 来自 AutoDL 工作流档案 (生成物)
+//   ★ 事实来源不在代码里硬写: 档案变了跑 node scripts/sync-workflow-duration-limits.js 即可
+import { getWorkflowDurationLimit } from '../../constants/workflow-duration-limits.js'
 import { logTaskWarn, logTaskProgress } from '../../utils/task-logger.js'
 // ★ Sprint 32 (PM msg-20261103-138): 道具图并进参考图的公共逻辑 (与 136 单同一套槽位规则)
 import { mergePropRefsIntoSlots, buildPropRefNotes } from './prop-refs.js'
@@ -130,6 +133,16 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
 价格：768p ¥0.050/秒；960p ¥0.090/秒
 */
   static readonly WORKFLOW_REF2V_ULTRA = 'minimax_h3_zm_u30'
+
+  /**
+   * ★ Sprint 47 T8 (PM msg-20261115-188): 同族里【时长上限更大】的兄弟工作流
+   *   (档案里: lightx2v_v5 = 10s, lightx2v_v5_15s = 15s; image_audio_to_video_v2 = 10s, _15s = 15s)
+   *   自动选工作流时, 本镜超出上限就自动换到它 (用户显式选的不换 → 明确报错)
+   */
+  private static readonly DURATION_SIBLING: Record<string, string> = {
+    [AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V]: AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S,
+    [AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO]: AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S,
+  }
 
   /** 所有 Ref2V 变体 — record.model 显式选择时识别 */
   private static readonly REF2V_VARIANTS = [
@@ -589,21 +602,33 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
       }
     }
 
-    // duration 上限看具体路由:
-    //   T2V/FL2V/Ref2V(v5)/image_audio_to_video_v2 = 1-10
-    //   Ref2V(v5_15s)/zm_u24/zm_u08/image_audio_to_video_v2_15s = 1-15
-    const is15s = (
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_15S ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_QUALITY ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_SPEED ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_AUDIO_15S ||
-      // ★ Sprint 34: 九图三音 15s 画质增强版 (duration 枚举 min=1 max=15)
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803 ||
-      // ★ Sprint 42: zm_nono / zm_u30 的 duration 枚举同样是 min=1 max=15 (与同族 u24/u08 一致)
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_CINEMA ||
-      workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_ULTRA
-    )
-    const durationCap = is15s ? 15 : 10
+    // duration 上限: ★ 来自 AutoDL 工作流档案 (生成物) —— 原来这里硬写"某些工作流 15, 其余 10",
+    //   结果把 FL2V/T2V (档案里其实是 15) 也压成 10 → 平台其实支持更长, 我们自己给截短了。
+    //   ★ Sprint 47 T8: 上限数据有出处, 平台改上限不用改代码。
+    const durationCap = getWorkflowDurationLimit(workflowId)
+
+    // ★ Sprint 47 T8 (PM msg-20261115-188): 提交前校验 —— 所选工作流的时长上限 >= 本镜时长
+    //   不满足时: 自动换到同族支持的上限 (仅限自动选的工作流) 或【明确报错并说明原因】(不产生请求)
+    const durCheck = this.validateDurationAgainstWorkflow(workflowId, record.duration, !!explicitModel)
+    if (!durCheck.ok) {
+      logTaskWarn('AutoDLComfyUI', 'workflow-duration-exceeds-limit', {
+        workflowId, duration: record.duration, cap: durCheck.cap,
+        storyboardId: record.storyboardId, videoGenId: record.id,
+        reason: durCheck.reason,
+      })
+      throw new Error(
+        `[视频生成] 这一镜 ${record.duration} 秒, 但工作流 ${workflowId} 最多 ${durCheck.cap} 秒 → `
+        + `换个支持更长时长的工作流, 或把这一镜的时长改短 (不会被悄悄截短)`,
+      )
+    }
+    if (durCheck.switchedTo) {
+      logTaskProgress('AutoDLComfyUI', 'workflow-switched-for-duration', {
+        from: workflowId, to: durCheck.switchedTo, duration: record.duration,
+        storyboardId: record.storyboardId, videoGenId: record.id,
+        reason: durCheck.reason,
+      })
+      workflowId = durCheck.switchedTo
+    }
     if (record.duration) {
       body.duration = Math.max(1, Math.min(durationCap, Math.floor(record.duration)))
     }
@@ -712,6 +737,34 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
   /** 该 workflow 是否接受 ref_audio_0/1/2 (H3 多图多音频工作流) */
   private isAudioWorkflow(workflowId: string): boolean {
     return (AutoDLComfyUIWorkflowAdapter.REF2V_AUDIO_VARIANTS as readonly string[]).includes(workflowId)
+  }
+
+  /**
+   * ★ Sprint 47 T8 (PM msg-20261115-188): 时长上限校验 + 同族 15s 变体自动切换。
+   *
+   * @param explicit 用户是否【显式选了这个工作流】—— 显式选的【不自动换】(Sprint 36 的口径:
+   *   不悄悄改用户的选择), 不满足就明确报错; 自动选的可自动换到同族支持上限的兄弟工作流。
+   */
+  private validateDurationAgainstWorkflow(
+    workflowId: string,
+    duration?: number | null,
+    explicit = false,
+  ): { ok: boolean; cap: number; switchedTo?: string; reason?: string } {
+    const cap = getWorkflowDurationLimit(workflowId)
+    if (!duration || duration <= cap) return { ok: true, cap }
+    if (!explicit) {
+      const sibling = AutoDLComfyUIWorkflowAdapter.DURATION_SIBLING[workflowId]
+      if (sibling && getWorkflowDurationLimit(sibling) >= duration) {
+        return {
+          ok: true, cap, switchedTo: sibling,
+          reason: `这一镜 ${duration}s 超过 ${workflowId} 的上限 ${cap}s → 自动换到 ${sibling}`,
+        }
+      }
+    }
+    return {
+      ok: false, cap,
+      reason: `这一镜 ${duration}s 超过 ${workflowId} 的时长上限 ${cap}s`,
+    }
   }
 
   /**
