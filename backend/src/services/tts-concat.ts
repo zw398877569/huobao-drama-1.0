@@ -18,6 +18,8 @@ import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
 // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
 import { parseVoiceParams, toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
+// ★ Sprint 47 T2 (PM msg-20261115-188): 情绪推断 (剧情目的优先) + 语速解耦
+import { inferEmotion, inferSpeed, characterSpeedText } from './tts-emotion.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
@@ -56,102 +58,10 @@ function validateVoiceOrThrow(voiceId: string, where: string): void {
 
 // ============ 2026-09-23 问题 3 — TTS 自然度优化 ============
 
-/** atmosphere 关键词 → MiniMax emotion 枚举 */
-type TTSEmotion = 'happy' | 'sad' | 'angry' | 'fearful' | 'neutral'
-
-/**
- * 关键词表 (2026-09-25 PM msg-20260924-004 扩充: 加 sad/tense/angry 词条):
- *   - sad: 加 泪痕|哽咽|颤抖|啜泣|哭泣|泪流|崩溃|挽留|哀求|求你 (高频情绪词)
- *   - tense: 加 搏斗|对峙|剑拔弩张|心跳 (动作冲突)
- *   - angry: 加 吼叫|咆哮|嘶吼|怒骂|滚开 (愤怒口吻)
- */
-const KEYWORDS_SAD = /悲伤|告别|哀悼|压抑|沉重|凄凉|lonely|farewell|melancholy|grief|sorrow|泪痕|哽咽|颤抖|啜泣|哭泣|泪流|崩溃|挽留|哀求|求你/
-const KEYWORDS_TENSE = /紧张|恐惧|惊|危机|追逐|冲突|战斗|tense|fearful|panic|threat|chase|conflict|搏斗|对峙|剑拔弩张|心跳|快跑|逃跑|逃|躲|害怕|恐惧感|怕|惊吓/
-const KEYWORDS_ANGRY = /愤怒|狂躁|吼|怒|angry|fury|rage|吼叫|咆哮|嘶吼|怒骂|滚开/
-const KEYWORDS_WARM = /温馨|平静|舒缓|亲密|温柔|peaceful|warm|gentle|intimate|tender/
-const KEYWORDS_JOYFUL = /欢乐|喜悦|团聚|开心|joyful|reunion|cheerful|delight/
-
-/**
- * 推断源优先级 (PM msg-20260924-004 D1):
- *   1. dialogue 最高 — 台词是最直接的情感表达
- *   2. personality 次之 — 角色基线情绪
- *   3. intentFunction — 剧情目的映射 (高潮→angry/fearful, 余韵→sad, 铺垫→neutral, 反转→fearful)
- *   4. atmosphere 兜底 — 视觉氛围 (deprecated 不推荐, 但保留兼容老调用方)
- *   5. 全无信号 → neutral, speed=1.0
- *
- * 关键词命中 → emotion + speed
- */
-function inferFromText(text: string | null | undefined): { emotion: TTSEmotion; speed: number } | null {
-  if (!text) return null
-  const lower = text.toLowerCase()
-  if (KEYWORDS_SAD.test(lower)) return { emotion: 'sad', speed: 0.88 }
-  if (KEYWORDS_TENSE.test(lower)) return { emotion: 'fearful', speed: 1.12 }
-  if (KEYWORDS_ANGRY.test(lower)) return { emotion: 'angry', speed: 1.1 }
-  if (KEYWORDS_WARM.test(lower)) return { emotion: 'neutral', speed: 0.95 }
-  if (KEYWORDS_JOYFUL.test(lower)) return { emotion: 'happy', speed: 1.0 }
-  return null
-}
-
-function inferFromIntentFunction(intentFunction: string | null | undefined): { emotion: TTSEmotion; speed: number } | null {
-  if (!intentFunction) return null
-  // 剧情目的 → 默认 emotion 模板
-  // 高潮 → angry/fearful (紧张激烈)
-  // 余韵 → sad (收尾哀伤)
-  // 反转 → fearful (突然转折)
-  // 铺垫 → neutral (平静铺垫)
-  // 揭露 → tense (默认 fearful)
-  // 对峙 → fearful
-  // 悬念 → fearful
-  // 情感爆发 → angry
-  switch (intentFunction) {
-    case '高潮':
-    case '情感爆发':
-      return { emotion: 'angry', speed: 1.1 }
-    case '余韵':
-      return { emotion: 'sad', speed: 0.9 }
-    case '反转':
-    case '对峙':
-    case '悬念':
-    case '揭露':
-      return { emotion: 'fearful', speed: 1.08 }
-    case '铺垫':
-      return { emotion: 'neutral', speed: 1.0 }
-    default:
-      return null
-  }
-}
-
-/**
- * 2026-09-25 PM msg-20260924-004 refactor: 不再只读 atmosphere, 改用 dialogue + personality +
- * intentFunction 三字段联合推断, atmosphere 仅作兜底兼容.
- *
- * 返回首个非 null 推断结果. 优先级: dialogue > personality > intentFunction > atmosphere.
- */
-function inferTTSParams(opts: {
-  dialogue?: string | null
-  personality?: string | null
-  intentFunction?: string | null
-  atmosphere?: string | null
-}): { emotion: TTSEmotion; speed: number } {
-  // 1. dialogue 最高优先级
-  let result = inferFromText(opts.dialogue)
-  if (result) return result
-
-  // 2. personality (角色基线情绪)
-  result = inferFromText(opts.personality)
-  if (result) return result
-
-  // 3. intentFunction 剧情目的模板
-  result = inferFromIntentFunction(opts.intentFunction)
-  if (result) return result
-
-  // 4. atmosphere 兜底 (deprecated, 保留兼容)
-  result = inferFromText(opts.atmosphere)
-  if (result) return result
-
-  // 5. 全无信号
-  return { emotion: 'neutral', speed: 1.0 }
-}
+// ★ Sprint 47 T2 (PM msg-20261115-188): 情绪推断 + 语速解耦已挪到 services/tts-emotion.ts
+//   新优先级: 剧情目的 → 角色性格基线 → 台词情绪词 → 视觉氛围 (旧: 台词 → 性格 → 剧情目的 → 氛围)
+//   语速不再由情绪决定 (旧: sad→0.88 / fearful→1.12 / angry→1.1 硬绑定) → 角色基线 + 场景密度, 默认 1.0
+//   旧函数 inferFromText / inferFromIntentFunction / inferTTSParams 已删除 (口径见新模块)
 
 /**
  * 从 storyboardId 查 personality + intentFunction (dialogue + atmosphere 已由 caller 传入).
@@ -281,6 +191,21 @@ function loadDramaCharacters(episodeId: number) {
 }
 
 /**
+ * ★ Sprint 47 T2: 找该说话人对应的角色行 (旁白找 name='旁白' 的角色)。
+ */
+function findSpeakerCharacter(
+  episodeId: number,
+  speaker: string,
+  isNarrator: boolean,
+  chars?: ReturnType<typeof loadDramaCharacters>,
+) {
+  const list = chars ?? loadDramaCharacters(episodeId)
+  return isNarrator
+    ? list.find((x) => x.name === NARRATOR_SPEAKER_NAME)
+    : list.find((x) => x.name === speaker)
+}
+
+/**
  * ★ Sprint 47 T1 (PM msg-20261115-188): 取该说话人的角色级语音参数。
  *   没配 → 空对象 → 主链路请求体与改动前逐字一致 (vol=1 / pitch=0 / 无 voice_modify)。
  */
@@ -290,11 +215,18 @@ function getSpeakerVoiceParams(
   isNarrator: boolean,
   chars?: ReturnType<typeof loadDramaCharacters>,
 ): CharacterVoiceParams {
-  const list = chars ?? loadDramaCharacters(episodeId)
-  const c = isNarrator
-    ? list.find((x) => x.name === NARRATOR_SPEAKER_NAME)
-    : list.find((x) => x.name === speaker)
-  return parseVoiceParams(c?.voiceParams ?? null)
+  return parseVoiceParams(findSpeakerCharacter(episodeId, speaker, isNarrator, chars)?.voiceParams ?? null)
+}
+
+/**
+ * ★ Sprint 47 T2: 场景密度 = 同一场景在【本集】里的镜头数 (语速的第二个来源)。
+ */
+function getSceneShotDensity(storyboardId: number): number | null {
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+  if (!sb?.sceneId) return null
+  const rows = db.select().from(schema.storyboards).where(eq(schema.storyboards.sceneId, sb.sceneId)).all()
+  const same = rows.filter((r) => r.episodeId === sb.episodeId && !r.deletedAt).length
+  return same || null
 }
 
 function getVoiceForSpeaker(episodeId: number, speaker: string, isNarrator: boolean): string {
@@ -410,22 +342,19 @@ export async function generateTTSForDialogue(
   // 2026-09-25 PM msg-20260924-004: 改用 dialogue + personality + intentFunction 三字段联合推断, atmosphere 仅作兜底
   //   dialogue 优先 (caller 传入), personality + intentFunction 从 DB 查 (loadStoryboardTTSContext helper)
   const ttsContext = loadStoryboardTTSContext(storyboardId)
-  const ttsParams = inferTTSParams({
-    dialogue,
-    personality: ttsContext.personality,
-    intentFunction: ttsContext.intentFunction,
-    atmosphere, // deprecated 兜底, 保留兼容
-  })
+  // ★ Sprint 47 T2: 情绪按【每个说话人】单独推断 (原来整镜只算一次, 且台词优先)
+  //   新优先级: 剧情目的 → 该角色性格 → 该段台词 → 氛围
+  //   语速与情绪解耦: 角色基线(性格/年龄) + 场景密度; 角色级显式配置优先
+  const sceneDensity = getSceneShotDensity(storyboardId)
   const meta: TTSSegmentMeta[] = []
   const segPaths: string[] = []
 
   logTaskStart('TTSConcat', 'infer-tts-params', {
-    atmosphere: atmosphere || '(empty)',   // deprecated 兜底源
-    dialogue: dialogue || '(empty)',       // 最高优先级
-    personality: ttsContext.personality || '(empty)',  // 角色基线情绪
-    intentFunction: ttsContext.intentFunction || '(empty)',  // 剧情目的模板
-    emotion: ttsParams.emotion,
-    speed: ttsParams.speed,
+    atmosphere: atmosphere || '(empty)',   // deprecated 兜底源 (最低优先级)
+    intentFunction: ttsContext.intentFunction || '(empty)',  // ★ 最高优先级: 剧情目的
+    personality: ttsContext.personality || '(empty)',  // 角色性格基线
+    sceneDensity: sceneDensity ?? '(unknown)',
+    note: 'emotion/speed 逐段推断 (T2: 剧情目的优先 + 语速与情绪解耦)',
   })
 
   // ★ Sprint 47 T1 (PM msg-20261115-188): 角色列表只查一次 (音色 + 角色级语音参数都用它)
@@ -436,11 +365,24 @@ export async function generateTTSForDialogue(
     const voice = getVoiceForSpeaker(episodeId, m.speaker, m.isNarrator)
     // ★ Sprint 47 T1: 角色级语音参数 (vol/pitch/语速/声音修饰) —— 没配就是空对象 = 保持现状
     const speakerParams = getSpeakerVoiceParams(episodeId, m.speaker, m.isNarrator, dramaCharacters)
-    const segSpeed = speakerParams.speed ?? ttsParams.speed
+    const speakerChar = findSpeakerCharacter(episodeId, m.speaker, m.isNarrator, dramaCharacters)
+    // ★ Sprint 47 T2: 每段的情绪 = 剧情目的 → 该角色性格 → 该段台词 → 氛围
+    const rawEmotion = inferEmotion({
+      intentFunction: ttsContext.intentFunction,
+      personality: speakerChar?.personality ?? ttsContext.personality,
+      dialogue: m.text,
+      atmosphere,
+    })
+    const segEmotion = rawEmotion
+    // ★ Sprint 47 T2: 语速与情绪【解耦】= 角色基线 + 场景密度 (角色级显式配置优先)
+    const segSpeed = speakerParams.speed ?? inferSpeed({
+      traitText: characterSpeedText(speakerChar) || ttsContext.personality,
+      sceneDensity,
+    })
     logTaskProgress('TTSConcat', 'generate-segment', {
       index: i, speaker: m.speaker, isNarrator: m.isNarrator, voice,
       textLen: m.text.length,
-      emotion: ttsParams.emotion,
+      emotion: segEmotion,
       speed: segSpeed,
       vol: speakerParams.vol,
       pitch: speakerParams.pitch,
@@ -453,7 +395,7 @@ export async function generateTTSForDialogue(
       text: finalText,
       voice,
       configId: configId ?? undefined,
-      emotion: ttsParams.emotion,
+      emotion: segEmotion,
       speed: segSpeed,
       // ★ Sprint 47 T1: 角色级音量/音高/声音修饰 (undefined → 保持现状)
       vol: speakerParams.vol,
