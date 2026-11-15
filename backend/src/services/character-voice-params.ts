@@ -175,25 +175,138 @@ export interface CharacterTraitSource {
 }
 
 /**
- * 把角色各种字段拼成一段文本 (自动推导的输入)。
- * permanent_traits 是结构化 JSON (category/value) → age/body 两个维度优先取它。
+ * ★ Sprint 47 单 189 (PM msg-20261115-189): 推导规则按【项目里数据的真实形态】重写。
+ *
+ * 【现象 A/B 的根因】
+ *   角色年龄在项目里是【结构化字段】permanent_traits 的 category='age' → 值形如 "17岁" / "45岁" / "30岁左右";
+ *   ★ 不是自然语言 → 老规则在自由文本里找"少年/青年/中年/老年"永远找不到 → 年龄维度对所有角色都不生效。
+ *   ★ 体型规则吃的是【拼接后的自由文本】→ 祝英台 face 里的"清瘦鹅蛋脸"命中了"瘦" → 被当瘦小体型
+ *     → 17 岁的祝英台和 19 岁的梁山伯推出来一模一样。
+ *
+ * 【新口径】
+ *   · 年龄: 只从结构化 age trait 解析 (数值优先, "30岁左右" 取前面的数字; 非数值才按词兜底)
+ *   · 体型: ★ 只从结构化 body trait 判断 (自由文本里的脸型/外貌词不会再误触发)
+ *   · 性别: 结构化 gender trait (女 +0.5 / 男 -0.5 → 同龄不同性别也能区分)
+ *   · 性格: 自由文本 personality → 只影响【刚劲/轻柔】(intensity), 音高以年龄为主来源
  */
-export function collectCharacterTraitText(src: CharacterTraitSource): string {
-  const parts: string[] = []
-  const push = (s?: string | null) => { if (s) parts.push(s) }
+export interface ParsedCharacterTraits {
+  /** 结构化 gender trait 的值 ('女' / '男' / '') */
+  gender: '男' | '女' | ''
+  /** 从 age trait 解析出的年龄 (null = 没解析出来) */
+  ageYears: number | null
+  /** age trait 的原始文本 */
+  ageText: string
+  /** 结构化 body trait 拼起来的文本 (★ 只有 body 类别) */
+  bodyText: string
+}
 
+/** 从 permanent_traits (结构化 JSON) 里取 age / gender / body */
+export function parseCharacterTraits(src: CharacterTraitSource): ParsedCharacterTraits {
+  const out: ParsedCharacterTraits = { gender: '', ageYears: null, ageText: '', bodyText: '' }
   if (src.permanentTraits) {
     try {
       const parsed = JSON.parse(src.permanentTraits)
       if (Array.isArray(parsed)) {
         for (const t of parsed) {
           const cat = String(t?.category || '')
-          // age / body 是音高音量推导最需要的两个维度; face/hair/outfit 对声音没意义
-          if (cat === 'age' || cat === 'body') push(String(t?.value || ''))
+          const val = String(t?.value || '')
+          if (!val) continue
+          if (cat === 'age') {
+            if (!out.ageText) out.ageText = val
+          } else if (cat === 'gender') {
+            if (!out.gender) out.gender = /女/.test(val) ? '女' : /男/.test(val) ? '男' : ''
+          } else if (cat === 'body') {
+            // ★ body 类别可能有多条 (身形 + 手部) → 全拼起来
+            out.bodyText += ' ' + val
+          }
         }
       }
-    } catch { /* 不是合法 JSON → 忽略, 走自由文本兜底 */ }
+    } catch { /* 不是合法 JSON → 当没有结构化特征 */ }
   }
+  const m = out.ageText.match(/(\d{1,3})\s*岁/)
+  if (m) out.ageYears = Number(m[1])
+  return out
+}
+
+/**
+ * ★ 解析年龄 (结构化优先, 老数据兜底走自由文本)。
+ *   · 结构化 age trait: "17岁" / "45岁" / "30岁左右" → 取数字 (★ 这是项目里年龄的真实形态)
+ *   · 老数据 (没有结构化 age) → 自由文本兜底 ("45岁" / 七旬 / 花甲 / 少年 / 中年 ...)
+ *     ★ 年龄词不会出现在脸型描述里, 所以自由文本兜底是安全的 (体型不行, 见上)
+ */
+export function resolveCharacterAge(
+  src: CharacterTraitSource,
+  traits?: ParsedCharacterTraits,
+): { years: number | null; text: string } {
+  const t = traits ?? parseCharacterTraits(src)
+  if (t.ageYears != null || t.ageText) return { years: t.ageYears, text: t.ageText }
+  const free = `${src.appearancePermanent || ''} ${src.description || ''}`
+  const m = free.match(/(\d{1,3})\s*岁/)
+  if (m) return { years: Number(m[1]), text: m[0] }
+  if (/七旬|古稀|耄耋/.test(free)) return { years: 70, text: '七旬' }
+  if (/花甲|六旬/.test(free)) return { years: 60, text: '花甲' }
+  if (/不惑|五旬/.test(free)) return { years: 50, text: '不惑' }
+  if (/而立/.test(free)) return { years: 30, text: '而立' }
+  if (/弱冠/.test(free)) return { years: 20, text: '弱冠' }
+  if (/总角|童年|幼时/.test(free)) return { years: 10, text: '总角' }
+  const words = [
+    '少年老成', '少年', '少女', '儿童', '孩童', '童声', '初中', '高中',
+    '青年', '年轻', '中年', '壮年', '老年', '老人', '大爷', '奶奶', '年迈', '老者',
+  ]
+  for (const w of words) {
+    if (free.includes(w)) return { years: null, text: w }
+  }
+  return { years: null, text: '' }
+}
+
+/** 年龄分档 (DEV 定, 满足工单要求: 少年/青年音高偏高, 老年音高偏低且音量偏小, 中年居中) */
+export interface AgeBucket {
+  /** 音高偏移 (半音) */
+  pitch: number
+  /** 音量系数 */
+  volScale: number
+  /** 分档名 (调试/回执用) */
+  label: string
+}
+
+export function ageBucketOf(years: number | null, ageText: string = ''): AgeBucket {
+  let y = years
+  if (y == null) {
+    // 非数值 → 按词兜底 (planner 万一写成 "少年"/"中年" 这种)
+    if (/少年|少女|儿童|孩童|童声|少年老成|初中|高中/.test(ageText)) y = 16
+    else if (/青年|年轻|青年人/.test(ageText)) y = 22
+    else if (/中年|壮年/.test(ageText)) y = 38
+    else if (/老年|老人|老妪|大爷|奶奶|年迈|老者|古稀|花甲/.test(ageText)) y = 60
+  }
+  if (y == null) return { pitch: 0, volScale: 1, label: '未知' }
+  if (y < 18) return { pitch: 3, volScale: 1, label: '少年/少女' }
+  if (y < 30) return { pitch: 1, volScale: 1, label: '青年' }
+  if (y < 45) return { pitch: 0, volScale: 1, label: '中年' }
+  return { pitch: -3, volScale: 0.85, label: '年长/老年' }
+}
+
+/**
+ * ★ 体型关键词 (★ 只在【结构化 body trait】里匹配, 不碰自由文本)
+ *   注意: "结实" / "粗壮" 不算魁梧 —— 家丁的体型是"中等身材结实, 手臂粗壮" (中等身材, 不是魁梧)
+ */
+const BODY_BULKY = /魁梧|高大|壮硕|壮实|威猛|虎背|膀大腰圆/
+const BODY_SLIM = /瘦小|瘦弱|纤细|娇小|瘦削|单薄|清瘦/
+
+/** 性格关键词 → 只影响刚劲/轻柔 (intensity), 不再改音高 (音高以年龄为主来源) */
+const PERSONALITY_STIFF = /沉稳|威严|严肃|冷酷|刚毅|不苟言笑|阴郁|冷峻|老成/
+const PERSONALITY_LIVELY = /活泼|开朗|热情|外向|急躁|张扬|跳脱|冒失/
+const PERSONALITY_GENTLE = /温柔|慈祥|和蔼|体贴|亲和/
+
+/**
+ * 把角色各种字段拼成一段文本 (自动推导的输入)。
+ * permanent_traits 是结构化 JSON (category/value) → age/body 两个维度优先取它。
+ */
+export function collectCharacterTraitText(src: CharacterTraitSource): string {
+  const parts: string[] = []
+  const push = (s?: string | null) => { if (s) parts.push(s) }
+  const traits = parseCharacterTraits(src)
+  if (traits.ageText) push(traits.ageText)
+  if (traits.bodyText) push(traits.bodyText)
   push(src.appearancePermanent)
   push(src.description)
   push(src.personality)
@@ -205,47 +318,42 @@ export function collectCharacterTraitText(src: CharacterTraitSource): string {
  * ★ 自动推导角色的默认语音参数 (纯函数 → 可离线断言)。
  *
  * 规则 (DEV 定, 满足工单要求: 少年/青年音高偏高, 老年音高偏低且音量偏小, 中年居中):
- *   · 年龄: 少年/少女 +3 / 青年 +1 / 中年 0 / 老年 -3 且音量 ×0.85
- *   · 体型: 魁梧/高大 音量 +0.2 且 intensity -20(刚劲) / 瘦小/纤细 音量 -0.05 且 intensity +10(轻柔)
- *   · 性格: 沉稳/冷酷 → intensity -15(刚劲) 且音高 -1 / 活泼/急躁 → intensity +15(轻柔) 且音高 +1 / 温柔 → intensity +10
+ *   · 年龄 (结构化 age): 少年/少女(<18) +3 · 青年(18-29) +1 · 中年(30-44) 0 · 年长/老年(>=45) -3 且音量 ×0.85
+ *   · 性别 (结构化 gender): 女 +0.5 / 男 -0.5 (半音) → 同龄不同性别也能区分
+ *   · 体型 (★ 只看结构化 body): 魁梧 → 音量 +0.2 且刚劲(intensity -20); 瘦小 → 音量 -0.05 且轻柔(intensity +10)
+ *   · 性格 (personality 自由文本): 沉稳/威严 → intensity -15; 活泼/急躁 → +15; 温柔/慈祥 → +10
  *
  * ★ 推导结果只是【建议值】: 调用方落库后才生效 (不配置 = 保持现状)。
  */
 export function deriveCharacterVoiceParams(src: CharacterTraitSource): CharacterVoiceParams {
-  const text = collectCharacterTraitText(src)
+  const traits = parseCharacterTraits(src)
+  const resolvedAge = resolveCharacterAge(src, traits)
+  const age = ageBucketOf(resolvedAge.years, resolvedAge.text)
   const p: CharacterVoiceParams = {}
 
-  // ── 年龄 ──
-  if (/少年|少女|儿童|孩童|孩子|童声|少年老成|初中|高中/.test(text)) {
-    p.pitch = 3
-  } else if (/青年|年轻|青年人/.test(text)) {
-    p.pitch = 1
-  } else if (/中年|壮年/.test(text)) {
-    p.pitch = 0
-  } else if (/老年|老人|老妪|大爷|奶奶|年迈|老者|古稀|花甲|老爷爷|老奶奶/.test(text)) {
-    p.pitch = -3
-    p.vol = 0.85
-  }
+  // 音高: 年龄为主 + 性别微调
+  let pitch = age.pitch
+  if (traits.gender === '女') pitch += 0.5
+  else if (traits.gender === '男') pitch -= 0.5
+  if (pitch !== 0) p.pitch = Math.round(pitch)
 
-  // ── 体型 ──
-  if (/魁梧|高大|壮硕|壮实|威猛|虎背|魁|膀大腰圆/.test(text)) {
+  // 音量: 年龄 (年长偏小)
+  if (age.volScale !== 1) p.vol = age.volScale
+
+  // 体型: ★ 只看结构化 body trait
+  if (BODY_BULKY.test(traits.bodyText)) {
     p.vol = (p.vol ?? 1) + 0.2
     p.intensity = -20
-  } else if (/瘦小|瘦弱|纤细|娇小|瘦削|单薄|瘦/.test(text)) {
+  } else if (BODY_SLIM.test(traits.bodyText)) {
     p.vol = (p.vol ?? 1) - 0.05
     p.intensity = 10
   }
 
-  // ── 性格 ──
-  if (/沉稳|内敛|严肃|冷酷|刚毅|不苟言笑|阴郁|威严|冷峻/.test(text)) {
-    p.intensity = (p.intensity ?? 0) - 15
-    p.pitch = (p.pitch ?? 0) - 1
-  } else if (/活泼|开朗|热情|外向|急躁|张扬|跳脱|冒失/.test(text)) {
-    p.intensity = (p.intensity ?? 0) + 15
-    p.pitch = (p.pitch ?? 0) + 1
-  } else if (/温柔|慈祥|和蔼|体贴|亲和/.test(text)) {
-    p.intensity = (p.intensity ?? 0) + 10
-  }
+  // 性格: 只影响刚劲/轻柔
+  const personality = src.personality || ''
+  if (PERSONALITY_STIFF.test(personality)) p.intensity = (p.intensity ?? 0) - 15
+  else if (PERSONALITY_LIVELY.test(personality)) p.intensity = (p.intensity ?? 0) + 15
+  else if (PERSONALITY_GENTLE.test(personality)) p.intensity = (p.intensity ?? 0) + 10
 
   return clampVoiceParams(p)
 }
