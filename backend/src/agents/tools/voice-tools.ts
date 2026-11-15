@@ -13,6 +13,10 @@ import { generateTTS } from '../../services/tts-generation.js'
 // ★ Sprint 47 T4 (PM msg-20261115-188): 音色清单 (list_voices + assign_voice 的白名单校验)
 import { assertVoiceInLibrary } from '../../services/voice-library.js'
 import { loadVoiceLibrary } from '../../services/voice-library-db.js'
+// ★ Sprint 47 T10 (PM msg-20261115-188): 试听样本的实测特征 (语速/音高/停顿)
+import {
+  analyzeAudioFeatures, formatAudioFeatures, cacheAudioFeatures, getCachedAudioFeatures,
+} from '../../services/audio-features.js'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {
@@ -63,6 +67,8 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
         suitable_for: v.description || `${v.language || '通用'}角色`,
         language: v.language,
         provider,
+        // ★ T10: 已经试听过的音色 → 带上实测特征 (没试听过就没有, 不编造)
+        measured_features: getCachedAudioFeatures(v.id),
       }))
 
       const payload = {
@@ -156,7 +162,7 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
   // 每次 preview 自动 lazy cleanup 24h+ 旧样本
   const previewVoiceTts = createTool({
     id: 'preview_voice_tts',
-    description: 'Generate a short TTS preview (3-5s) for a candidate voice. Returns base64 audio so you can HEAR the voice and evaluate age/gender/emotion match. Always preview >=2 candidates before assign_voice.',
+    description: 'Generate a short TTS preview (3-5s) for a candidate voice. Returns base64 audio so you can HEAR the voice, PLUS measured features (语速/音高/停顿) — 你自己感知不到音高语速, 只能靠这些实测数值判断. Always preview >=2 candidates before assign_voice, and use the SAME text for every candidate so the numbers are comparable.',
     inputSchema: z.object({
       text: z.string().describe('台词片段, 建议 5-15 字, 反映角色说话风格'),
       voice_id: z.string().describe('候选 voice id (from list_voices)'),
@@ -171,13 +177,30 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
         speed ?? 1.0,
         emotion ?? 'neutral',
       )
+      // ★ Sprint 47 T10 (PM msg-20261115-188): 实测特征 (语速 / 音高 / 停顿)
+      //   ★ 从生成的样本音频里【实测】(不是估算): ffmpeg 解码 → RMS 分帧 → 自相关算基频
+      //   ★ 数值随音频一起返回 → agent 能"看数值 + 听音色"双重判断 (它自己听不出音高语速)
+      let features: any = null
+      try {
+        features = await analyzeAudioFeatures(result.audioPath, text)
+        cacheAudioFeatures(voice_id, features)
+      } catch (err: any) {
+        logTaskWarn('VoiceTool', 'preview-features-failed', { voiceId: voice_id, error: err?.message })
+      }
       return {
         voice_id,
         audio_path: result.relativePath,
         audio_base64: result.base64,
         file_size: result.fileSize,
         duration_ms: result.durationMs,
-        instruction: '听 base64 audio 评估音色是否匹配: (1) 性别 (2) 年龄段 (3) 情绪 (4) 整体气质. 满意再调 assign_voice.',
+        features,
+        feature_summary: features ? formatAudioFeatures(features) : '特征不可用 (音频没解出来)',
+        instruction: [
+          '评估音色是否匹配: (1) 性别 (2) 年龄段 (3) 情绪 (4) 整体气质.',
+          '★ 你【感知不到音高/语速/停顿】→ 这三个只能看 features 里的【实测数值】.',
+          '★ 对比多个候选音色时用【同一条文本 + 同样语速设置】→ 数值才严格可比.',
+          '满意再调 assign_voice.',
+        ].join(' '),
       }
     },
   })
