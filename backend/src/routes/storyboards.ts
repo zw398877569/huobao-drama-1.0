@@ -5,6 +5,8 @@ import { success, created, now, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
 import { generateTTSForDialogue } from '../services/tts-concat.js'
+// ★ Sprint 47 T7 (PM msg-20261115-188): 超长镜拆分
+import { splitShotIfNeeded } from '../services/storyboard-split.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
@@ -393,6 +395,28 @@ app.delete('/:id', async (c) => {
   return success(c)
 })
 
+
+// ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (单镜上限 12 秒)
+//   拆完: 两镜的配音按新台词重新生成 (T6 的实测回写会顺手把镜长对齐到音频长度)
+app.post('/:id/split', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const outcome = await splitShotIfNeeded(id, { useLlm: body?.use_llm !== false })
+  if (!outcome.split) {
+    return success(c, outcome)
+  }
+  // ★ 配音按新拆的台词重新生成 (失败不阻断拆分 → 用户可以手动重配)
+  const ttsResults: Array<{ storyboardId: number; ok: boolean; error?: string }> = []
+  for (const newId of outcome.newShotIds || []) {
+    try {
+      const r = await generateTTSForDialogue(newId, outcome.episodeId ?? 0, undefined, undefined)
+      ttsResults.push({ storyboardId: newId, ok: !r.ignored })
+    } catch (err: any) {
+      ttsResults.push({ storyboardId: newId, ok: false, error: err?.message || String(err) })
+    }
+  }
+  return success(c, { ...outcome, tts: ttsResults })
+})
 
 // POST /storyboards/:id/analyze-intention
 // Run scene_intention analysis for a single storyboard and persist the result

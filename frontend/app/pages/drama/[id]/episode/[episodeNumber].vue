@@ -599,6 +599,14 @@
                   <span class="detail-head-sub">{{ selectedSb.title || `镜头 ${sbs.indexOf(selectedSb) + 1}` }} · {{ selectedSb.shot_type || selectedSb.shotType || '未设置景别' }}</span>
                   </div>
                   <span class="tag mono">{{ (selectedSb.duration || 10) }}s</span>
+                  <!-- ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (上限 12 秒)
+                       不超 12 秒的镜不用拆 (拆镜会让节奏变碎) → 按钮禁用并说明 -->
+                  <button class="btn btn-sm" :disabled="splittingShotId === selectedSb?.id || (selectedSb?.duration || 0) <= 12"
+                    @click="splitShot(selectedSb)"
+                    title="这一镜超过 12 秒时按语义拆成两镜 (台词不切在句子中间); 拆完配音会按新台词重新生成">
+                    <Loader2 v-if="splittingShotId === selectedSb?.id" :size="11" class="animate-spin" />
+                    {{ splittingShotId === selectedSb?.id ? '拆分中...' : '拆分此镜' }}
+                  </button>
                   <button class="btn btn-ghost btn-icon ml-auto" style="color:var(--error)" @click="deleteShot(selectedSb)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                   </button>
@@ -2984,6 +2992,31 @@ watch(prodTab, (tab) => {
 // Sprint 6 Task E — 分镜模型选择器 state (TDZ fix: 必须在 useEpisodeAgents 调用前定义, QA msg-20260930-002 修: 挪到 destructuring 块外前面)
 const selectedTextConfigId = ref<string | null>(null)
 const storyboardModelPopoverOpen = ref(false)
+
+// ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (单镜上限 12 秒)
+const splittingShotId = ref<number | null>(null)
+async function splitShot(sb: any) {
+  if (!sb?.id || splittingShotId.value) return
+  splittingShotId.value = sb.id
+  try {
+    const res: any = await storyboardAPI.split(sb.id)
+    if (!res?.split) {
+      toast.error(
+        res?.reason === 'not_over_limit'
+          ? '这一镜不超过 12 秒, 不用拆'
+          : '这一镜拆不了 (台词只有一句且没有可断的边界 → 不能从句子中间切断)',
+      )
+      return
+    }
+    const nums = (res?.newShotNumbers || []).join(' / ')
+    toast.success(`已拆成两镜 (#${nums}); 配音会按新台词重新生成, 首帧图需要再点一次生成`)
+    await refresh()
+  } catch (e: any) {
+    toast.error(e?.message || '拆分失败')
+  } finally {
+    splittingShotId.value = null
+  }
+}
 
 // ★ Sprint 47 单 189 (PM msg-20261115-189): 给已有剧集补齐本镜剧情目的
 const backfillingDramatic = ref(false)

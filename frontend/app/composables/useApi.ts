@@ -109,6 +109,8 @@ export const storyboardAPI = {
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
   evaluate: (id: number) => api.post(`/storyboards/${id}/evaluate`),
   retake: (id: number, body: { dimension: string; user_note?: string }) => api.post(`/storyboards/${id}/retake`, body),
+  // ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (单镜上限 12 秒)
+  split: (id: number) => api.post(`/storyboards/${id}/split`, {}),
   del: (id: number) => api.del(`/storyboards/${id}`),
 }
 
