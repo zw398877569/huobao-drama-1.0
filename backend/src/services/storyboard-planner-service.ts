@@ -40,6 +40,8 @@ export { Step1Schema, Step2Schema, ShotDetailsItemSchema } from '../prompt-templ
 export type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js'
 // Sprint 18 (QA msg-20261021-078): 台词角色白名单 + 落库前规范化
 import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
+// ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段的台词 floor 校验 (与 T5 收敛下界同一个常量)
+import { checkDialogueFloor, formatDialogueFloorViolations } from '../constants/shot-type-baseline.js'
 import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
@@ -568,6 +570,19 @@ export async function runStep2(opts: {
     }
   }
 
+  // ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段就校验【台词装不下的镜】——
+  //   口径与 T5 的收敛硬下界同一个常量 (computeEffectiveDialogueFloor)。
+  //   ★ 不静默产出: 装不下就报错让拆解重试 (而不是等后面被压坏 → 台词念到一半没了)。
+  const floorViolations = checkDialogueFloor(result.shot_details as any)
+  if (floorViolations.length > 0) {
+    const detail = formatDialogueFloorViolations(floorViolations)
+    logTaskWarn('StoryboardPlanner', 'step2-dialogue-floor-violation', {
+      episodeId, count: floorViolations.length, detail,
+      hint: '这一轮拆解里有镜的时长装不下台词 → 让 LLM 重出 (时长按 ceil(字数/4.5)+1 算, 受 15s 上限约束)',
+    })
+    throw new Error(`[拆解] 有 ${floorViolations.length} 个镜的时长装不下台词: ${detail}`)
+  }
+
   await savePlanningData(episodeId, {
     step2_done_at: now(),
     step2_details: result.shot_details,
@@ -656,6 +671,16 @@ export async function runStep3(opts: {
   //     阶段 2 (整集 R2):     Σ 收敛到自动 target, 钩子镜豁免 + 非钩子镜不低于 4s
   //   VIDEO_MAX=15 是 H3 平台硬上限 (用户 2026-10-16 拍板 D2), 严禁放宽。
   const convergedTotalDuration = applyDurationPolicy(episodeId, validatedDetails)
+  // ★ Sprint 47 T9 (PM msg-20261115-188): 收敛之后【再校验一次】—— 落库前保证没有装不下台词的镜
+  //   (T5 已让收敛尊重 floor, 这道是兜底: 口径同一个常量)
+  const step3Violations = checkDialogueFloor(validatedDetails as any)
+  if (step3Violations.length > 0) {
+    const detail = formatDialogueFloorViolations(step3Violations)
+    logTaskWarn('StoryboardPlanner', 'step3-dialogue-floor-violation', {
+      episodeId, count: step3Violations.length, detail,
+    })
+    throw new Error(`[拆解] 收敛后仍有 ${step3Violations.length} 个镜装不下台词: ${detail}`)
+  }
   // ★ Sprint 33 追加单2 (PM msg-20261103-149): 过渡镜豁免全局时长策略 —— duration 强制 2s。
   //   applyDurationPolicy 是 Sprint 11 起的既有机制 (五因子估算 → 钩子保护 → Σ 收敛), 它不认识
   //   is_transition → 会把过渡镜的 2s 重算成 5.5s (而且它的 clamp 下限是 4s, 连钩子豁免也救不回)。

@@ -105,6 +105,47 @@ export function computeWrittenBackDuration(
 }
 
 /**
+ * ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段的【台词装不下】校验。
+ *   ★ 口径与 T5 的收敛硬下界【完全一致】(同一个 computeEffectiveDialogueFloor) —— 不两处各写一套。
+ *   用途: 拆解产出时就把装不下的镜挑出来 (报错让拆解重试), 别等后面被压坏。
+ */
+export interface DialogueFloorViolation {
+  index: number
+  shotNumber?: number
+  /** 该镜算出来的时长 (秒) */
+  duration: number
+  /** 该镜的台词 floor (秒) */
+  floor: number
+  /** 台词有效字数 */
+  chars: number
+}
+
+export function checkDialogueFloor(shots: Array<{
+  dialogue?: string | null
+  duration?: number | null
+  shot_number?: number | null
+}>): DialogueFloorViolation[] {
+  const violations: DialogueFloorViolation[] = []
+  shots.forEach((sp, index) => {
+    const chars = countDialogueChars(sp.dialogue)
+    if (chars <= 0) return
+    const floor = computeEffectiveDialogueFloor(chars)
+    const duration = Number(sp.duration ?? 0)
+    if (duration < floor) {
+      violations.push({ index, shotNumber: sp.shot_number ?? undefined, duration, floor, chars })
+    }
+  })
+  return violations
+}
+
+/** 校验失败的提示 (给 LLM retry 用, 也是给用户看的) */
+export function formatDialogueFloorViolations(violations: DialogueFloorViolation[]): string {
+  return violations.slice(0, 5).map((v) =>
+    `镜#${v.shotNumber ?? v.index + 1}: 台词 ${v.chars} 字, 镜长 ${v.duration}s 装不下 (至少要 ${v.floor}s)`,
+  ).join('; ') + (violations.length > 5 ? ` …共 ${violations.length} 处` : '')
+}
+
+/**
  * ★ Sprint 47 T6 (PM msg-20261115-188): 合成阶段的【音频裁切目标长度】。
  *   以前只按 videoDuration (视频实测时长) 裁 → 音频比画面长时【台词念到一半没了】。
  *   现在取三者最大: 视频实测时长 / TTS 实测音频时长 / 回写后的镜长 → 音频只补静音, 不裁。
