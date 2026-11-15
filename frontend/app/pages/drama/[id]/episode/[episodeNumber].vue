@@ -1983,6 +1983,14 @@
               <div class="merge-group">
                 <div class="merge-group-title">音频</div>
                 <div class="merge-group-body">
+                  <!-- ★ Sprint 46 T1 (PM msg-20261115-186): 上传音乐入口
+                       (以前只能自己往服务器目录塞 mp3 + 刷新页面才能在下拉里看到)
+                       ★ PM 2026-11-15 调整: 放在【BGM 铺底】前面 (先上传, 再选) -->
+                  <button class="btn btn-sm" :disabled="bgmUploading" @click="bgmFileInput?.click()">
+                    {{ bgmUploading ? '上传中…' : '上传音乐' }}
+                  </button>
+                  <input ref="bgmFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onBgmFileSelected" />
+
                   <!-- ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
                        默认【不加 BGM】→ 成片与改动前逐样本一致 (PM 决策 D4) -->
                   <div class="merge-field">
@@ -1998,13 +2006,6 @@
                     <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
                     <span class="dim" style="font-size:11px">dB</span>
                   </div>
-
-                  <!-- ★ Sprint 46 T1 (PM msg-20261115-186): 上传音乐入口
-                       (以前只能自己往服务器目录塞 mp3 + 刷新页面才能在下拉里看到) -->
-                  <button class="btn btn-sm" :disabled="bgmUploading" @click="bgmFileInput?.click()">
-                    {{ bgmUploading ? '上传中…' : '上传音乐' }}
-                  </button>
-                  <input ref="bgmFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onBgmFileSelected" />
 
                   <!-- ★ API 生成音乐: 本期只做【禁用态口子】(PM 决策 D3) —— 入口在、说明在, 但不装样子 (不许假成功)
                        ★ Sprint 46 T3: 那句很长的未开放说明收进 title, 不再占一整行 -->
