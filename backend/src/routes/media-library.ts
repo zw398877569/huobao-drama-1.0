@@ -18,6 +18,16 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { success, badRequest } from '../utils/response.js'
 import { probeDuration } from '../utils/ffprobe-helpers.js'
+// ★ Sprint 46 T1 (PM msg-20261115-186): 上传校验拆到 services/media-upload.ts (纯函数 → 可离线断言)
+//   白名单从那边引入 —— 上传与扫描必须用【同一份】清单, 否则会出现"传得上去但列不出来"。
+import {
+  AUDIO_EXTENSIONS as AUDIO_EXTENSION_LIST,
+  MAX_UPLOAD_BYTES,
+  isSupportedAudioFile,
+  sanitizeUploadFilename,
+  saveUploadedMediaFile,
+  validateUploadSize,
+} from '../services/media-upload.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 /** data 根目录 (容器内 = /app/data, 与后端其它模块保持一致) */
@@ -28,7 +38,7 @@ export const MEDIA_KINDS = ['bgm', 'sfx'] as const
 export type MediaKind = (typeof MEDIA_KINDS)[number]
 
 /** 认得的音频扩展名 (小写比较) */
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus'])
+const AUDIO_EXTENSIONS = new Set(AUDIO_EXTENSION_LIST)
 /** 一次最多探测多少个文件的时长 (每个 ffprobe 都是一个子进程, 太多会把请求拖死) */
 const MAX_PROBE_FILES = 200
 /** ffprobe 并发上限 */
@@ -112,6 +122,72 @@ const app = new Hono()
 //   → 前端调 /api/v1/media-library 匹配不到 → 落到 Nuxt 的 catch-all 返回 index.html
 //   → 前端 JSON 解析炸 (Unexpected token '<') → ★ BGM/音效面板一直拿不到数据
 //   (其它路由都是 app.get('/') / app.get('/xxx') 这种【相对挂载前缀】的写法)
+/**
+ * ★ Sprint 46 T1 (PM msg-20261115-186): POST /media-library/upload —— 上传音频素材 (BGM / 音效通用)
+ *   ★ 内部路径必须是【相对挂载前缀】('/upload') → 完整路径 = /api/v1/media-library/upload
+ *     (写成 '/media-library/upload' 会变成 /api/v1/media-library/media-library/upload → 前端 404)
+ *   ★ 落点必须是 data/media/{kind}/ (跟列表扫描【同一个目录】) → 否则"传上去了但下拉框里不出现"
+ *   ★ 返回的 name 是【纯文件名】→ 前端落库就存它 (带路径会被后端判非法 → 静默不铺 BGM)
+ *   ★ 重名不覆盖 → 409 + 明确提示 (别让用户以为选的是新文件)
+ */
+app.post('/upload', async (c) => {
+  const kindParam = c.req.query('kind') || 'bgm'
+  if (!MEDIA_KINDS.includes(kindParam as MediaKind)) {
+    return badRequest(c, `kind 不合法 (可选: ${MEDIA_KINDS.join(' / ')})`)
+  }
+  const kind = kindParam as MediaKind
+
+  // ★ 先看 Content-Length → 超大直接拒, 别把整个 body 读进内存
+  const lenHeader = c.req.header('content-length')
+  if (lenHeader) {
+    const len = Number(lenHeader)
+    if (Number.isFinite(len) && len > MAX_UPLOAD_BYTES + 1024 * 1024) {
+      return badRequest(c, `文件太大 (上限 ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`)
+    }
+  }
+
+  let body: Record<string, any>
+  try {
+    body = await c.req.parseBody()
+  } catch (e: any) {
+    return badRequest(c, `上传内容解析失败: ${e?.message || e}`)
+  }
+  const file = body['file']
+  if (!file || typeof file === 'string' || !(file instanceof File)) {
+    return badRequest(c, '没有收到文件 (表单字段名要用 file)')
+  }
+
+  const nameCheck = sanitizeUploadFilename(file.name)
+  if (!nameCheck.ok) return badRequest(c, nameCheck.message)
+  const filename = nameCheck.filename
+
+  if (!isSupportedAudioFile(filename)) {
+    const ext = path.extname(filename) || filename
+    return badRequest(c, `格式不支持【${ext}】—— 只支持 ${AUDIO_EXTENSION_LIST.join(' ')}`)
+  }
+
+  const sizeCheck = validateUploadSize(file.size)
+  if (!sizeCheck.ok) return badRequest(c, sizeCheck.message)
+
+  const data = Buffer.from(await file.arrayBuffer())
+  const saved = saveUploadedMediaFile(kind, filename, data)
+  if (!saved.ok) {
+    if (saved.code === 'duplicate') {
+      return c.json({ code: 409, message: saved.message }, 409)
+    }
+    return badRequest(c, saved.message)
+  }
+
+  const durationSec = await probeDuration(saved.file.absPath)
+  return success(c, {
+    kind,
+    name: saved.file.filename,
+    sizeBytes: saved.file.sizeBytes,
+    durationSec,
+    dir: `data/media/${kind}`,
+  })
+})
+
 app.get('/', async (c) => {
   const kindParam = c.req.query('kind')
   if (kindParam) {
