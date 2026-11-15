@@ -2087,16 +2087,6 @@
                 上一次拼接没跑完（服务重启或进程被中断）—— 点【{{ mergeUrl ? '重新拼接' : '开始拼接' }}】重试即可。
               </div>
 
-              <!-- ★ Sprint 40 T5 (PM msg-20261112-171): 精剪成片的位置提示 (只是一行文字, 不是输入框/按钮)
-                   精剪成片【只放本机, 不回流本项目】(PM 2026-11-12 决策 D6) -->
-              <div class="dim" style="font-size:11px; margin-bottom: 12px">
-                人工精剪 (OpenChatCut 之类工具) 出来的成片【只留在你自己的电脑上, 不会回流到本项目】——
-                精剪素材来自上面导出的素材包; OpenChatCut 剪完默认落在本机
-                <span class="mono">~/Library/Application Support/OpenChatCut/public/media/uploads/</span>
-                (文件名 openchatcut-export-job-*.mp4); 请把成片复制到
-                <span class="mono">/Users/mac/Documents/aicg-dev/openChatCut-out/</span> 统一存放。
-              </div>
-
               <!-- 展开的面板: 放在整行【下面】(宽度与成片一致, 内容自己滚动 → 不把视频顶出视口) -->
               <!-- ★ Sprint 39 T2: 逐镜缝转场配置 (默认折叠收起) -->
                 <div v-if="mergeTransitionsOpen" class="merge-transition-panel">
