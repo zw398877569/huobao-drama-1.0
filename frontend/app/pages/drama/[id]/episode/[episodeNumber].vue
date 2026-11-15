@@ -1947,99 +1947,139 @@
           </div>
           <div v-else class="export-split">
             <div class="export-main">
-              <!-- ★ Sprint 39 追加单 170 (PM msg-20261112-170): 三个配置入口移到成片【上方】+ 横着并排
-                   (有成片 / 没拼过 两种状态都在上方 —— 用户要能在拼接之前就改字幕时机和调色) -->
-              <div class="merge-config-row">
-                <button class="btn btn-sm merge-config-btn" @click="mergeTransitionsOpen = !mergeTransitionsOpen">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  转场设置
-                  <span class="dim" style="font-size:11px">{{ mergeTransitionRows.length }} 个镜缝</span>
-                </button>
+              <!-- ★ Sprint 46 T3 (PM msg-20261115-186): 拼接导出区【分组成组】——
+                   以前是一堆散控件混排 (类按钮控件 / 下拉 / 数字输入 / 颜色 / 复选框 / 禁用按钮),
+                   标签宽度还不一样 → 看着乱、标签和控件对不齐。
+                   现在按【画面与字幕 / 音频 / 片头集数卡 / 导出素材包】分四组, 每组内部用
+                   .merge-field 统一 (标签固定宽度右对齐 + 控件同行), 组与组之间有边框分隔。 -->
+              <div class="merge-group">
+                <div class="merge-group-title">画面与字幕</div>
+                <div class="merge-group-body">
+                  <button class="btn btn-sm merge-config-btn" @click="mergeTransitionsOpen = !mergeTransitionsOpen">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    转场设置
+                    <span class="dim" style="font-size:11px">{{ mergeTransitionRows.length }} 个镜缝</span>
+                  </button>
 
-                <!-- ★ Sprint 39 T4: 字幕烧录时机 (默认在合成阶段烧 = 改动前的行为) -->
-                <div class="merge-config-item">
-                  <span class="dim" style="font-size:11px">字幕烧录</span>
-                  <select v-model="mergeSubtitleStage" class="merge-transition-select">
-                    <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
-                    <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
-                  </select>
+                  <!-- ★ Sprint 39 T4: 字幕烧录时机 (默认在合成阶段烧 = 改动前的行为) -->
+                  <div class="merge-field">
+                    <span class="merge-field-label">字幕烧录</span>
+                    <select v-model="mergeSubtitleStage" class="merge-transition-select">
+                      <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
+                      <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
+                    </select>
+                  </div>
+
+                  <!-- ★ Sprint 39 T3: 全片统一调色 (默认关闭; 参数后端持久化) -->
+                  <button class="btn btn-sm merge-config-btn" @click="mergeGradeOpen = !mergeGradeOpen">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20z"/></svg>
+                    调色设置
+                    <span class="dim" style="font-size:11px">{{ mergeGrade.enabled ? '已开启' : '默认关闭' }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- ★ Sprint 46 T3: 音频组 (BGM 铺底 + ducking + 音效素材上传) -->
+              <div class="merge-group">
+                <div class="merge-group-title">音频</div>
+                <div class="merge-group-body">
+                  <!-- ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
+                       默认【不加 BGM】→ 成片与改动前逐样本一致 (PM 决策 D4) -->
+                  <div class="merge-field">
+                    <span class="merge-field-label">BGM 铺底</span>
+                    <select v-model="mergeBgm.file" class="merge-transition-select" @change="saveMergeBgmSettings">
+                      <option value="">不加 BGM (默认)</option>
+                      <option v-for="f in bgmFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
+                    </select>
+                  </div>
+
+                  <div class="merge-field">
+                    <span class="merge-field-label">音量</span>
+                    <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
+                    <span class="dim" style="font-size:11px">dB</span>
+                  </div>
+
+                  <!-- ★ Sprint 46 T1 (PM msg-20261115-186): 上传音乐入口
+                       (以前只能自己往服务器目录塞 mp3 + 刷新页面才能在下拉里看到) -->
+                  <button class="btn btn-sm" :disabled="bgmUploading" @click="bgmFileInput?.click()">
+                    {{ bgmUploading ? '上传中…' : '上传音乐' }}
+                  </button>
+                  <input ref="bgmFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onBgmFileSelected" />
+
+                  <!-- ★ API 生成音乐: 本期只做【禁用态口子】(PM 决策 D3) —— 入口在、说明在, 但不装样子 (不许假成功)
+                       ★ Sprint 46 T3: 那句很长的未开放说明收进 title, 不再占一整行 -->
+                  <button class="btn btn-sm" disabled title="未开放: 将来用生成式音乐 API 生成后自动存到素材库并自动选中">AI 生成音乐</button>
                 </div>
 
-                <!-- ★ Sprint 39 T3: 全片统一调色 (默认关闭; 参数后端持久化) -->
-                <button class="btn btn-sm merge-config-btn" @click="mergeGradeOpen = !mergeGradeOpen">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20z"/></svg>
-                  调色设置
-                  <span class="dim" style="font-size:11px">{{ mergeGrade.enabled ? '已开启' : '默认关闭' }}</span>
-                </button>
+                <div v-if="bgmLoadError" class="merge-note merge-note-error">素材库加载失败: {{ bgmLoadError }} —— 刷新页面重试</div>
+                <!-- ★ Sprint 46 T3: 不再显示"素材目录 data/media/bgm/ 里还没有音频文件"这种路径教学文字 -->
+                <div v-else-if="!bgmFiles.length" class="merge-note">还没有音频素材 —— 点【上传音乐】选一个本地音频文件</div>
+
+                <!-- 对白 ducking 参数 (选中了 BGM 才显示) -->
+                <div v-if="mergeBgm.file" class="merge-transition-panel">
+                  <div class="merge-transition-toolbar">
+                    <span class="dim" style="font-size:11px">对白 ducking (有人说话时 BGM 自动降下去)</span>
+                    <span class="dim" style="font-size:11px">阈值</span>
+                    <input v-model.number="mergeBgm.threshold" type="number" min="0.001" max="1" step="0.005" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
+                    <span class="dim" style="font-size:11px">压缩比</span>
+                    <input v-model.number="mergeBgm.ratio" type="number" min="1" max="20" step="1" class="merge-transition-input" style="width:48px" @change="saveMergeBgmSettings" />
+                    <span class="dim" style="font-size:11px">起控 ms</span>
+                    <input v-model.number="mergeBgm.attack" type="number" min="0.01" max="2000" step="5" class="merge-transition-input" style="width:56px" @change="saveMergeBgmSettings" />
+                    <span class="dim" style="font-size:11px">释放 ms</span>
+                    <input v-model.number="mergeBgm.release" type="number" min="0.01" max="9000" step="10" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- ★ Sprint 46 T3: 片头 / 集数卡组 -->
+              <div class="merge-group">
+                <div class="merge-group-title">片头 / 集数卡</div>
+                <div class="merge-group-body">
+                  <!-- ★ Sprint 40 T4 (PM msg-20261112-171): 片头 / 集数卡 (默认关)
+                       开启后: 成片开头多一段标题卡 → 总时长 +N 秒, 镜缝编号整体 +1 (片头占第 0 个片段) -->
+                  <label style="display:flex; align-items:center; gap:5px; cursor:pointer">
+                    <input type="checkbox" v-model="mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                    <span style="font-size:11px">启用</span>
+                  </label>
+                  <div class="merge-field">
+                    <span class="merge-field-label">标题</span>
+                    <input v-model="mergeTitleCard.title" type="text" :placeholder="(drama?.title || '标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                  </div>
+                  <div class="merge-field">
+                    <span class="merge-field-label">副标题</span>
+                    <input v-model="mergeTitleCard.subtitle" type="text" placeholder="副标题 (可留空)" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                  </div>
+                  <div class="merge-field">
+                    <span class="merge-field-label">时长</span>
+                    <input v-model.number="mergeTitleCard.durationSec" type="number" min="1" max="10" step="0.5" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                    <span class="dim" style="font-size:11px">秒</span>
+                  </div>
+                  <div class="merge-field">
+                    <span class="merge-field-label">底色</span>
+                    <input v-model="mergeTitleCard.background" type="color" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                  </div>
+                  <div class="merge-field">
+                    <span class="merge-field-label">字号</span>
+                    <input v-model.number="mergeTitleCard.fontSize" type="number" min="16" max="240" step="4" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
+                  </div>
+                  <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">(成片开头多 {{ mergeTitleCard.durationSec }}s, 镜缝编号整体 +1)</span>
+                  <!-- ★ Sprint 40 追加单 173: 集数是【自动加】的, 与副标题不冲突 (两者都显示) -->
+                  <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">
+                    集数『{{ episode?.episodeNumber ? '第 ' + episode.episodeNumber + ' 集' : '' }}』自动加在右下角
+                  </span>
+                </div>
               </div>
 
               <!-- ★ Sprint 40 T1: 导出素材包 (ZIP) —— 人工精修的输入包 -->
-              <div class="merge-config-row" style="margin-bottom: 12px">
-                <button class="btn btn-sm" :disabled="exportingPack" @click="exportMergePack">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  {{ exportingPack ? '正在打包...' : '导出素材包 (ZIP)' }}
-                </button>
-                <span class="dim" style="font-size:11px">整集视频 + 每镜字幕 + 结构化 manifest (给人工精修用)</span>
-              </div>
-
-              <!-- ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking
-                   默认【不加 BGM】→ 成片与改动前逐样本一致 (PM 决策 D4) -->
-              <div class="merge-config-row" style="margin-bottom: 8px">
-                <span class="dim" style="font-size:11px">BGM 铺底</span>
-                <select v-model="mergeBgm.file" class="merge-transition-select" @change="saveMergeBgmSettings">
-                  <option value="">不加 BGM (默认)</option>
-                  <option v-for="f in bgmFiles" :key="f.name" :value="f.name">{{ f.name }} · {{ f.durationSec.toFixed(1) }}s</option>
-                </select>
-                <span v-if="bgmLoadError" class="dim" style="font-size:11px; color: var(--error)">素材库加载失败: {{ bgmLoadError }} —— 刷新页面重试</span>
-                <span v-else-if="!bgmFiles.length" class="dim" style="font-size:11px">素材目录 data/media/bgm/ 里还没有音频文件</span>
-                <span class="dim" style="font-size:11px">音量</span>
-                <input v-model.number="mergeBgm.volumeDb" type="number" min="-60" max="0" step="1" class="merge-transition-input" style="width:56px" :disabled="!mergeBgm.file" @change="saveMergeBgmSettings" />
-                <span class="dim" style="font-size:11px">dB</span>
-                <!-- ★ Sprint 46 T1/T2 (PM msg-20261115-186): 上传音乐入口
-                     (以前只能自己往服务器目录塞 mp3 + 刷新页面才能在下拉里看到) -->
-                <button class="btn btn-sm" :disabled="bgmUploading" @click="bgmFileInput?.click()">
-                  {{ bgmUploading ? '上传中…' : '上传音乐' }}
-                </button>
-                <input ref="bgmFileInput" type="file" class="hidden-file-input" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" @change="onBgmFileSelected" />
-                <!-- ★ API 生成音乐: 本期只做【禁用态口子】(PM 决策 D3) —— 入口在、说明在, 但不装样子 (不许假成功) -->
-                <button class="btn btn-sm" disabled title="尚未开放">AI 生成音乐</button>
-                <span class="dim" style="font-size:11px">(未开放: 将来用生成式音乐 API 生成后自动存到 data/media/bgm/ 并自动选中)</span>
-              </div>
-
-              <!-- 对白 ducking 参数 (选中了 BGM 才显示) -->
-              <div v-if="mergeBgm.file" class="merge-transition-panel" style="margin-bottom: 12px">
-                <div class="merge-transition-toolbar">
-                  <span class="dim" style="font-size:11px">对白 ducking (有人说话时 BGM 自动降下去)</span>
-                  <span class="dim" style="font-size:11px">阈值</span>
-                  <input v-model.number="mergeBgm.threshold" type="number" min="0.001" max="1" step="0.005" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
-                  <span class="dim" style="font-size:11px">压缩比</span>
-                  <input v-model.number="mergeBgm.ratio" type="number" min="1" max="20" step="1" class="merge-transition-input" style="width:48px" @change="saveMergeBgmSettings" />
-                  <span class="dim" style="font-size:11px">起控 ms</span>
-                  <input v-model.number="mergeBgm.attack" type="number" min="0.01" max="2000" step="5" class="merge-transition-input" style="width:56px" @change="saveMergeBgmSettings" />
-                  <span class="dim" style="font-size:11px">释放 ms</span>
-                  <input v-model.number="mergeBgm.release" type="number" min="0.01" max="9000" step="10" class="merge-transition-input" style="width:64px" @change="saveMergeBgmSettings" />
+              <div class="merge-group">
+                <div class="merge-group-title">导出素材包</div>
+                <div class="merge-group-body">
+                  <button class="btn btn-sm" :disabled="exportingPack" @click="exportMergePack">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    {{ exportingPack ? '正在打包...' : '导出素材包 (ZIP)' }}
+                  </button>
+                  <span class="dim" style="font-size:11px">整集视频 + 每镜字幕 + 结构化 manifest (给人工精修用)</span>
                 </div>
-              </div>
-
-              <!-- ★ Sprint 40 T4 (PM msg-20261112-171): 片头 / 集数卡 (默认关)
-                   开启后: 成片开头多一段标题卡 → 总时长 +N 秒, 镜缝编号整体 +1 (片头占第 0 个片段) -->
-              <div class="merge-config-row" style="margin-bottom: 8px">
-                <label style="display:flex; align-items:center; gap:5px; cursor:pointer">
-                  <input type="checkbox" v-model="mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                  <span style="font-size:11px">片头 / 集数卡</span>
-                </label>
-                <input v-model="mergeTitleCard.title" type="text" :placeholder="(drama?.title || '标题')" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <input v-model="mergeTitleCard.subtitle" type="text" placeholder="副标题 (可留空)" class="merge-transition-input" style="width:110px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <input v-model.number="mergeTitleCard.durationSec" type="number" min="1" max="10" step="0.5" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <span class="dim" style="font-size:11px">秒</span>
-                <input v-model="mergeTitleCard.background" type="color" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <input v-model.number="mergeTitleCard.fontSize" type="number" min="16" max="240" step="4" class="merge-transition-input" style="width:52px" :disabled="!mergeTitleCard.enabled" @change="saveMergeTitleCardSettings" />
-                <span class="dim" style="font-size:11px">字号</span>
-                <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">(成片开头多 {{ mergeTitleCard.durationSec }}s, 镜缝编号整体 +1)</span>
-                <!-- ★ Sprint 40 追加单 173: 集数是【自动加】的, 与副标题不冲突 (两者都显示) -->
-                <span v-if="mergeTitleCard.enabled" class="dim" style="font-size:11px">
-                  集数『{{ episode?.episodeNumber ? '第 ' + episode.episodeNumber + ' 集' : '' }}』自动加在右下角
-                </span>
               </div>
 
               <!-- ★ Sprint 40 追加单 174: 上一次拼接被中断 → 明确提示, 别让用户对着『拼接中』发呆 -->
@@ -2096,8 +2136,9 @@
                   <div v-if="sfxLoadError" class="merge-transition-row">
                     <span class="dim" style="font-size:11px; color: var(--error)">音效库加载失败: {{ sfxLoadError }} —— 刷新页面重试</span>
                   </div>
+                  <!-- ★ Sprint 46 T3: 不再显示"音效目录 data/media/sfx/ 里还没有音频文件"这种路径教学文字 -->
                   <div v-else-if="!sfxFiles.length" class="merge-transition-row">
-                    <span class="dim" style="font-size:11px">音效目录 data/media/sfx/ 里还没有音频文件</span>
+                    <span class="dim" style="font-size:11px">还没有音效素材 —— 点【上传音效】添加</span>
                   </div>
                 </div>
 
@@ -5070,6 +5111,26 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 /* ★ Sprint 46 T2 (PM msg-20261115-186): 上传按钮点的是隐藏的 file input */
 .hidden-file-input { display: none; }
 
+/* ★ Sprint 46 T3 (PM msg-20261115-186): 拼接导出区【分组成组】
+   以前是一堆散控件混排 (类按钮控件 / 下拉 / 数字输入 / 颜色 / 复选框 / 禁用按钮),
+   标签宽度各不相同 + 各行起始位置不齐 → 看着乱、标签和控件对不齐。
+   现在: 4 组 (画面与字幕 / 音频 / 片头集数卡 / 导出素材包), 组内用 .merge-field 统一
+   (标签固定宽度右对齐 + 控件同行), 组之间有边框分隔。
+   ★ 窄屏 (<900px) 时组内改成竖排, 但【标签仍与控件同一行】(不再出现"标签在上、控件在下")。 */
+.merge-group {
+  width: 100%; max-width: 720px;
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.merge-group-title { font-size: 11px; font-weight: 700; color: var(--text-3); }
+.merge-group-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.merge-field { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.merge-field-label { font-size: 11px; color: var(--text-3); min-width: 46px; text-align: right; }
+.merge-group .merge-transition-select { height: 25px; padding: 0 6px; font-size: 12px; width: 220px; }
+.merge-note { font-size: 11px; color: var(--text-3); }
+.merge-note-error { color: var(--error); }
+
 /* ★ Sprint 39 追加单 170 (PM msg-20261112-170): 三个配置入口 (转场设置 / 字幕烧录 / 调色设置)
    移到成片【上方】, 横着并排; 容器宽度与成片播放器一致 (720px, 同 .export-video)。 */
 .merge-config-row {
@@ -5088,6 +5149,11 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   .merge-config-row { flex-direction: column; align-items: stretch; }
   .merge-config-item { justify-content: space-between; }
   .merge-config-row .merge-transition-select { width: 100%; }
+  /* ★ Sprint 46 T3: 分组内竖排 —— 但标签跟控件仍在同一行 (不再"标签在上、控件在下") */
+  .merge-group-body { flex-direction: column; align-items: stretch; gap: 6px; }
+  .merge-field { width: 100%; justify-content: flex-start; }
+  .merge-field-label { text-align: left; min-width: 0; flex: 0 0 auto; }
+  .merge-group .merge-transition-select { flex: 1; width: auto; min-width: 0; }
 }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
