@@ -13,6 +13,8 @@ import { now } from '../utils/response.js'
 import { generateTTS } from './tts-generation.js'
 import { generateTTSForDialogue } from './tts-concat.js'
 import { parseDialogueSegments } from '../utils/dialogue-parser.js'
+// ★ Sprint 47 T6 (PM msg-20261115-188): 音频裁切目标长度 (不许硬裁台词)
+import { computeComposeAudioTarget } from '../constants/shot-type-baseline.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
@@ -168,6 +170,24 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
     const videoProbe = await probeMedia(videoPath)
     const videoDuration = videoProbe.durationSec > 0 ? videoProbe.durationSec : (sb.duration || 10)
 
+    // ★ Sprint 47 T6 (PM msg-20261115-188): 最终音轨长度 —— 音频【不许被硬裁】
+    //   以前: 音频 atrim 到 videoDuration (视频实测时长) → 音频比视频长时【台词念到一半没了】,
+    //          字幕时间轴也超出音轨 (工单现象: 21 个镜里 14 个装不下)。
+    //   现在: 目标 = max(视频实测时长, TTS 实测音频时长, 回写后的镜长) → 音频只补静音, 不裁。
+    //   ★ 镜长那一项是 T6 的回写值 (配音时按实测音频长度回写) → 视频生成会按更长的镜长来。
+    const ttsAudioDuration = audioPath ? await probeDuration(audioPath) : 0
+    const ttsAudioTarget = computeComposeAudioTarget(videoDuration, ttsAudioDuration, sb.duration || 0)
+    if (ttsAudioTarget > videoDuration + 0.05) {
+      logTaskProgress('ComposeTask', 'compose-audio-target-extended', {
+        storyboardId,
+        videoDuration: Number(videoDuration.toFixed(3)),
+        ttsAudioDuration: Number((ttsAudioDuration || 0).toFixed(3)),
+        shotDuration: sb.duration,
+        audioTarget: Number(ttsAudioTarget.toFixed(3)),
+        hint: '★ 台词音频比画面长 → 音频不再被硬裁 (Sprint 47 T6)',
+      })
+    }
+
     // 2. 生成字幕文件（SRT）— Sprint 11 Task E (PM msg-20261016-001)
     //   修前: 单条字幕 + join(' ') 挤成一大坨 + 时间轴用 sb.duration 估算值写死
     //         → 多角色对白全部一起出, 跟配音逐句输出完全对不上; FontSize=20 在竖屏几乎看不清
@@ -227,6 +247,14 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
           let end = start + segDuration
           // 累积超出画面时提前截断, 避免字幕溢出
           if (start >= videoDuration) break
+          // ★ Sprint 47 T6: 字幕结束时间不许超出【最终音轨长度】(工单: 现状里有时间轴超出音轨的字幕)
+          //   超了 → 显式夹住 + 记一条告警 (不静默)
+          if (end > ttsAudioTarget) {
+            logTaskWarn('ComposeTask', 'subtitle-cue-exceeds-audio', {
+              storyboardId, cueIndex: i, end: Number(end.toFixed(3)), audioTarget: Number(ttsAudioTarget.toFixed(3)),
+            })
+            end = ttsAudioTarget
+          }
           // 最后一段: 结束时间对齐视频实际时长 (不超画面)
           if (i === segments.length - 1 && end > videoDuration) {
             end = videoDuration
@@ -357,7 +385,8 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
         //
         //   仍保留 `-map -0:a`: 显式 strip 输入 0 (H3 原视频) 的音轨,
         //   防止 H3 自带 BGM/环境音跟 TTS 配音叠加混进成品。
-        const align = `[1:a]apad,atrim=0:${videoDuration.toFixed(3)},asetpts=N/SR/TB[aout]`
+        // ★ Sprint 47 T6: 裁切目标改成【最终音轨长度】(含实测音频 + 回写后的镜长) → 台词不被硬裁
+        const align = `[1:a]apad,atrim=0:${ttsAudioTarget.toFixed(3)},asetpts=N/SR/TB[aout]`
         outputOptions.push(
           '-filter_complex', align,
           '-map', '0:v',
@@ -369,6 +398,8 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
         logTaskProgress('ComposeTask', 'compose-align-audio', {
           storyboardId,
           videoDuration: Number(videoDuration.toFixed(3)),
+          ttsAudioDuration: Number((ttsAudioDuration || 0).toFixed(3)),
+          audioTarget: Number(ttsAudioTarget.toFixed(3)),
           hasTts: true,
           // ★ Sprint 38 T3-D: 为什么没用源音轨 (便于以后排查)
           sourceVoiceReason: sourceVoice.reason,

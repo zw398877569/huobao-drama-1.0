@@ -89,6 +89,34 @@ export function countDialogueChars(dialogue?: string | null): number {
 export const SHORT_DIALOGUE_THRESHOLD = 10  // 字
 export const SHORT_DIALOGUE_MAX = 8          // 秒
 
+// ── 配音实测回写镜长 (★ Sprint 47 T6, PM msg-20261115-188) ──
+//   台词 floor (T5) 是按【字数估】的, 真实合成出来的音频可能更长 (语速/停顿/语气词)
+//   → 镜长没跟上, 合成阶段音频就被裁到画面时长 → 台词念到一半没了。
+//   配音完成后用 ffprobe 实测的音频长度回写镜长 (只涨不跌 + 幂等)。
+export const TTS_DURATION_MARGIN_SEC = 0.5   // 留白: 盖住语速微调 (T1/T2) 与视频实际时长的小偏差
+
+export function computeWrittenBackDuration(
+  currentDuration: number,
+  audioSec: number,
+  margin: number = TTS_DURATION_MARGIN_SEC,
+): number {
+  if (!(audioSec > 0)) return currentDuration
+  return Math.max(currentDuration, Math.ceil(audioSec + margin))
+}
+
+/**
+ * ★ Sprint 47 T6 (PM msg-20261115-188): 合成阶段的【音频裁切目标长度】。
+ *   以前只按 videoDuration (视频实测时长) 裁 → 音频比画面长时【台词念到一半没了】。
+ *   现在取三者最大: 视频实测时长 / TTS 实测音频时长 / 回写后的镜长 → 音频只补静音, 不裁。
+ */
+export function computeComposeAudioTarget(
+  videoDuration: number,
+  ttsAudioDuration: number,
+  shotDuration: number,
+): number {
+  return Math.max(videoDuration || 0, ttsAudioDuration || 0, shotDuration || 0)
+}
+
 // ── 视频 API 硬约束 ─────────────────────────────────────────
 export const VIDEO_MIN_DURATION = 4  // H3 模型硬约束下限
 export const VIDEO_MAX_DURATION = 15 // H3 模型硬约束上限

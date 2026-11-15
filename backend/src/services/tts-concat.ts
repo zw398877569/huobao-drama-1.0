@@ -16,8 +16,12 @@ import { execFileSync } from 'child_process'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
+// ★ Sprint 47 T6 (PM msg-20261115-188): ffprobe 实测音频时长 → 回写镜长
+import { probeDuration } from '../utils/ffprobe-helpers.js'
 // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
 import { parseVoiceParams, toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
+// ★ Sprint 47 T6 (PM msg-20261115-188): 实测音频 → 回写镜长 (口径是纯函数, 便于离线断言)
+import { computeWrittenBackDuration, TTS_DURATION_MARGIN_SEC } from '../constants/shot-type-baseline.js'
 // ★ Sprint 47 T2 (PM msg-20261115-188): 情绪推断 (剧情目的优先) + 语速解耦
 import { inferEmotion, inferSpeed, characterSpeedText, isPlatformEmotion, emotionStrengthToParams } from './tts-emotion.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
@@ -468,5 +472,60 @@ export async function generateTTSForDialogue(
     outPath: relativePath,
   })
 
+  // ★ Sprint 47 T6 (PM msg-20261115-188): 用【实测音频时长】回写该镜的镜长 (第二道保险)
+  //   第一道是 T5 的台词 floor (按字数估); 这里用真实合成出来的音频长度 → 精确
+  //   ★ 只涨不跌 + 幂等: max(当前镜长, 实测音频 + 余量) → 重跑配音不会让镜长来回跳
+  //   ★ 留白 0.5s: 盖住语速微调 (T1/T2 改了语速后音频时长会变) 与视频实际时长的小偏差
+  await writeBackShotDurationByAudio(storyboardId, outAbs)
+
   return { audioPath: relativePath, segments: meta, ignored: false }
+}
+
+/** ★ Sprint 47 T6: 配音音频实测时长 → 回写镜长的留白量 (秒) —— 口径在 constants 里 (纯函数可断言) */
+export { TTS_DURATION_MARGIN_SEC }
+
+/**
+ * ★ Sprint 47 T6 (PM msg-20261115-188): 用实测音频时长回写该镜的镜长。
+ *
+ * 【为什么】
+ *   台词 floor (T5) 是按字数【估】的 → 实际合成出来可能更长 (语速/停顿/语气词)。
+ *   镜长没跟上 → 合成阶段音频被裁到画面时长 → 【台词念到一半没了】, 字幕时间轴也超出音轨。
+ *   这里用 ffprobe 实测的音频长度回写镜长 → 视频生成会按更长的镜长来, 台词装得下。
+ *
+ * 【口径】只涨不跌 + 幂等: newDuration = max(当前镜长, ceil(实测音频 + 留白))
+ */
+export async function writeBackShotDurationByAudio(
+  storyboardId: number,
+  audioAbsPath: string,
+): Promise<{ before: number; after: number; audioSec: number; written: boolean } | null> {
+  try {
+    if (!audioAbsPath || !fs.existsSync(audioAbsPath)) return null
+    const audioSec = await probeDuration(audioAbsPath)
+    if (!(audioSec > 0)) return null
+    const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+    const before = Number(sb?.duration ?? 0)
+    const after = computeWrittenBackDuration(before, audioSec, TTS_DURATION_MARGIN_SEC)
+    const written = after > before
+    if (written) {
+      db.update(schema.storyboards)
+        .set({ duration: after, updatedAt: new Date().toISOString() })
+        .where(eq(schema.storyboards.id, storyboardId))
+        .run()
+    }
+    logTaskProgress('TTSConcat', 'shot-duration-written-back', {
+      storyboardId,
+      before,
+      after,
+      audioSec: Number(audioSec.toFixed(3)),
+      margin: TTS_DURATION_MARGIN_SEC,
+      written,
+      hint: '★ 台词音频实测时长 → 镜长 (只涨不跌) → 视频按更长的镜长来, 台词不会被硬裁',
+    })
+    return { before, after, audioSec, written }
+  } catch (err: any) {
+    logTaskWarn('TTSConcat', 'shot-duration-writeback-fail', {
+      storyboardId, error: err?.message || String(err),
+    })
+    return null
+  }
 }
