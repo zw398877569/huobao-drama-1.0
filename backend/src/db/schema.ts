@@ -94,6 +94,10 @@ export const characters = sqliteTable('characters', {
   localPath: text('local_path'),
   voiceSampleUrl: text('voice_sample_url'),
   voiceProvider: text('voice_provider'),
+  // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 JSON
+  //   {vol?, pitch?, speed?, modifyPitch?, intensity?, timbre?, soundEffects?}
+  //   ★ 空 = 不配置 → 主链路请求体与改动前逐字一致 (vol=1 / pitch=0 / 无 voice_modify)
+  voiceParams: text('voice_params'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),

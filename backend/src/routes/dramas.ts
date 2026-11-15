@@ -5,6 +5,10 @@ import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { getActiveVideoConfigLabel } from '../services/ai.js'
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数的批量自动推导
+import {
+  deriveCharacterVoiceParams, serializeVoiceParams, isVoiceParamsEmpty,
+} from '../services/character-voice-params.js'
 
 const app = new Hono()
 
@@ -162,6 +166,43 @@ app.delete('/:id', async (c) => {
 })
 
 // PUT /dramas/:id/characters - Save characters
+/**
+ * ★ Sprint 47 T1 (PM msg-20261115-188): 为整个 drama 的角色【批量按特征推导语音参数】。
+ *   前端音色页一个按钮搞定 (不然要一个一个点) —— 推导值直接落库, 用户还能逐个再手改。
+ */
+app.post('/:id/characters/voice-params/derive', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [drama] = db.select().from(schema.dramas).where(eq(schema.dramas.id, id)).all()
+  if (!drama) return notFound(c, 'Drama not found')
+  const chars = db.select().from(schema.characters)
+    .where(eq(schema.characters.dramaId, id)).all()
+  const items: Array<{ id: number; name: string; params: any }> = []
+  let changed = 0
+  for (const ch of chars) {
+    if (ch.deletedAt) continue
+    const derived = deriveCharacterVoiceParams({
+      name: ch.name,
+      role: ch.role,
+      description: ch.description,
+      personality: ch.personality,
+      appearancePermanent: ch.appearancePermanent,
+      permanentTraits: ch.permanentTraits,
+    })
+    if (isVoiceParamsEmpty(derived)) {
+      items.push({ id: ch.id, name: ch.name, params: {} })
+      continue
+    }
+    const serialized = serializeVoiceParams(derived)
+    db.update(schema.characters)
+      .set({ voiceParams: serialized, updatedAt: now() })
+      .where(eq(schema.characters.id, ch.id))
+      .run()
+    changed++
+    items.push({ id: ch.id, name: ch.name, params: derived })
+  }
+  return success(c, { dramaId: id, total: chars.length, changed, items })
+})
+
 app.put('/:id/characters', async (c) => {
   const dramaId = Number(c.req.param('id'))
   const body = await c.req.json()

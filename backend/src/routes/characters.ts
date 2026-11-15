@@ -1,7 +1,12 @@
 import { Hono } from 'hono'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, badRequest, now } from '../utils/response.js'
+import { success, badRequest, notFound, now } from '../utils/response.js'
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
+import {
+  parseVoiceParams, clampVoiceParams, serializeVoiceParams,
+  deriveCharacterVoiceParams, isVoiceParamsEmpty,
+} from '../services/character-voice-params.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
@@ -83,6 +88,41 @@ app.put('/:id', async (c) => {
   return success(c)
 })
 
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数
+//   GET /characters/:id/voice-params → { params (已存), derived (按角色特征自动推导的建议值) }
+//   PUT /characters/:id/voice-params → 存 (params 传空对象 = 清空 = 回到"不配置", 请求体逐字保持现状)
+app.get('/:id/voice-params', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [ch] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!ch) return notFound(c, 'Character not found')
+  const params = parseVoiceParams(ch.voiceParams ?? null)
+  const derived = deriveCharacterVoiceParams({
+    name: ch.name,
+    role: ch.role,
+    description: ch.description,
+    personality: ch.personality,
+    appearancePermanent: ch.appearancePermanent,
+    permanentTraits: ch.permanentTraits,
+  })
+  return success(c, { id, params, derived, empty: isVoiceParamsEmpty(params) })
+})
+
+app.put('/:id/voice-params', async (c) => {
+  const id = Number(c.req.param('id'))
+  let body: any = {}
+  try { body = await c.req.json() } catch { body = {} }
+  const [ch] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!ch) return notFound(c, 'Character not found')
+  const raw = body?.params ?? body?.voice_params ?? body ?? {}
+  const params = clampVoiceParams(raw)
+  const serialized = serializeVoiceParams(params)
+  db.update(schema.characters)
+    .set({ voiceParams: serialized, updatedAt: now() })
+    .where(eq(schema.characters.id, id))
+    .run()
+  return success(c, { id, params, saved: !!serialized })
+})
+
 // DELETE /characters/:id
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
@@ -104,7 +144,14 @@ app.post('/:id/generate-voice-sample', async (c) => {
 
   try {
     logTaskStart('VoiceSample', 'generate', { characterId: id, characterName: char.name, episodeId: ep.id, voice: char.voiceStyle })
-    const audioPath = await generateVoiceSample(char.name, char.voiceStyle, ep.audioConfigId ?? undefined)
+    // ★ Sprint 47 T1 (PM msg-20261115-188): 试听用该角色的语音参数 (跟成片同一套表现)
+    const charVoiceParams = parseVoiceParams(char.voiceParams ?? null)
+    const audioPath = await generateVoiceSample(
+      char.name,
+      char.voiceStyle,
+      ep.audioConfigId ?? undefined,
+      charVoiceParams,
+    )
     db.update(schema.characters)
       .set({ voiceSampleUrl: audioPath, updatedAt: now() })
       .where(eq(schema.characters.id, id)).run()

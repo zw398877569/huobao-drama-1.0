@@ -12,6 +12,12 @@ export interface TTSParams {
   speed?: number
   model?: string
   emotion?: string
+  // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级音量/音高 + 声音修饰
+  //   vol: (0,10] 默认 1 / pitch: 整数 [-12,12] 默认 0
+  //   voiceModify: 顶层 voice_modify {pitch, intensity, timbre, sound_effects} (刻度 [-100,100], 与上面 pitch 不同刻度!)
+  vol?: number
+  pitch?: number
+  voiceModify?: { pitch?: number; intensity?: number; timbre?: number; sound_effects?: string } | null
 }
 
 export interface TTSResult {
@@ -46,8 +52,9 @@ export class MiniMaxTTSAdapter implements TTSProviderAdapter {
       voice_setting: {
         voice_id: params.voice,
         speed: params.speed ?? 1,
-        vol: 1,
-        pitch: 0,
+        // ★ Sprint 47 T1: 角色级音量/音高 (不配置时 = 1 / 0 → 与改动前逐字一致)
+        vol: params.vol ?? 1,
+        pitch: params.pitch ?? 0,
         emotion: params.emotion || 'neutral',
       },
       audio_setting: {
@@ -57,6 +64,12 @@ export class MiniMaxTTSAdapter implements TTSProviderAdapter {
         channel: 1,
       },
       subtitle_enable: false,
+    }
+
+    // ★ Sprint 47 T1: 声音修饰 (顶层 voice_modify) —— 同步接口也支持 (官方 speech-t2a-http 顶层字段)
+    //   不配置时【不出现】这个 key → 请求体与改动前逐字一致
+    if (params.voiceModify && Object.keys(params.voiceModify).length > 0) {
+      body.voice_modify = params.voiceModify
     }
 
     return { url, method: 'POST', headers, body }

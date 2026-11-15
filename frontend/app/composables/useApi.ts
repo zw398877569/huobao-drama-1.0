@@ -111,6 +111,13 @@ export const storyboardAPI = {
 export const characterAPI = {
   get: (id: number) => api.get(`/characters/${id}`),
   update: (id: number, data: any) => api.put(`/characters/${id}`, data),
+  // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
+  //   GET → { params (已存), derived (按角色特征自动推导的建议值) }
+  voiceParams: (id: number) => api.get(`/characters/${id}/voice-params`),
+  //   PUT params 传空对象 = 清空 = 回到"不配置" (主链路请求体逐字保持现状)
+  saveVoiceParams: (id: number, params: any) => api.put(`/characters/${id}/voice-params`, { params }),
+  //   为整个 drama 的角色批量按特征推导并落库
+  deriveVoiceParams: (dramaId: number) => api.post(`/dramas/${dramaId}/characters/voice-params/derive`),
   voiceSample: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
   generateImage: (id: number, episodeId: number, configId?: number | string | null) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId, config_id: configId }),
   batchImages: (ids: number[], episodeId: number, configId?: number | string | null) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId, config_id: configId }),

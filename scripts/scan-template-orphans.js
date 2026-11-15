@@ -72,12 +72,14 @@ function extractScriptDeclarations(script) {
   const declared = new Set()
 
   // function foo(...) { ... }
-  const fnRe = /^function\s+([A-Za-z_$][\w$]*)\s*\(/gm
+  // ★ Sprint 47 T1: 允许 async 前缀 —— 原来漏掉 async function 声明 →
+  //   模板里调 async 函数会被误报成"孤儿引用" (2026-11-15 实测踩到)
+  const fnRe = /^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm
   let m
   while ((m = fnRe.exec(script))) declared.add(m[1])
 
   // const foo = function / const arrow = (...) => / const arrow = x =>
-  const constArrowRe = /^const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:function\s*\(|\([^)]*\)\s*=>|\w+\s*=>)/gm
+  const constArrowRe = /^const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\s*\(|\([^)]*\)\s*=>|\w+\s*=>)/gm
   while ((m = constArrowRe.exec(script))) declared.add(m[1])
 
   // const foo = reactive({...}) / ref(...) / computed(...)

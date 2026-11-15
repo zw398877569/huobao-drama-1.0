@@ -495,6 +495,9 @@ ensureColumn('characters', 'appearance_permanent', 'TEXT')
 ensureColumn('characters', 'permanent_traits', 'TEXT')
 ensureColumn('characters', 'permanent_outfit', 'TEXT')
 
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰) JSON 列
+ensureColumn('characters', 'voice_params', 'TEXT')
+
 // 2026-10-10 V2 治本 (PM msg-20261010-001) — storyboards 加 shot 瞬时剧情态两列
 //   image_prompt_plot_state / video_prompt_plot_state 由 planner agent LLM 在 shot JSON 中填,
 //   拼接 imagePrompt / videoPrompt 时按 permanent + plot_state 两段拼装, 物理隔离防 plot_state 污染 character.appearance_permanent

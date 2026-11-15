@@ -11,6 +11,8 @@ import { getTTSAdapter } from './adapters/registry.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, redactUrl } from '../utils/task-logger.js'
 // ★ Sprint 41 T1: provider 错误的可重试分类 (生图/配音共用这一份关键词表)
 import { classifyProviderError, markRetryable } from './provider-error-classify.js'
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 → 声音修饰
+import { toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -22,6 +24,14 @@ interface TTSParams {
   speed?: number
   emotion?: string
   configId?: number | null
+  // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数
+  //   ★ 不传 = 保持现状 (vol→1 / pitch→0 / 请求体里不出现 voice_modify)
+  /** 音量 voice_setting.vol —— (0,10] */
+  vol?: number
+  /** 音高 voice_setting.pitch —— 整数 [-12,12] */
+  pitch?: number
+  /** 声音修饰 voice_modify —— {pitch?, intensity?, timbre?, sound_effects?} (顶层字段) */
+  voiceModify?: { pitch?: number; intensity?: number; timbre?: number; sound_effects?: string } | null
 }
 
 /**
@@ -110,8 +120,24 @@ export async function generateTTS(params: TTSParams): Promise<string> {
 
 /**
  * 为角色生成试听音频
+ * ★ Sprint 47 T1 (PM msg-20261115-188): 带上该角色的语音参数 —— 否则试听跟成片表现不一致,
+ *   用户听不出音量/音高差在哪 (试听必须跟真正配音走同一套参数)。
  */
-export async function generateVoiceSample(characterName: string, voiceId: string, configId?: number | null): Promise<string> {
+export async function generateVoiceSample(
+  characterName: string,
+  voiceId: string,
+  configId?: number | null,
+  voiceParams?: CharacterVoiceParams | null,
+): Promise<string> {
   const sampleText = `你好，我是${characterName}。很高兴认识你，这是我的声音试听。`
-  return generateTTS({ text: sampleText, voice: voiceId, configId })
+  const p = voiceParams || {}
+  return generateTTS({
+    text: sampleText,
+    voice: voiceId,
+    configId,
+    vol: p.vol,
+    pitch: p.pitch,
+    speed: p.speed,
+    voiceModify: toVoiceModify(p),
+  })
 }

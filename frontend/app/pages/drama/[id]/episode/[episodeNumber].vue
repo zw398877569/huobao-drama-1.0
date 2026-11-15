@@ -327,6 +327,12 @@
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19 5v14"/></svg>
                 生成试听文件
               </button>
+              <!-- ★ Sprint 47 T1 (PM msg-20261115-188): 一键给全部角色按年龄/体型/性格推导语音参数
+                   (不点这个 = 保持音色原声, 主链路请求体与改动前逐字一致) -->
+              <button v-if="charsVoiced" class="btn btn-sm" :disabled="derivingAllVoiceParams" @click="deriveAllVoiceParams"
+                title="按角色的年龄/体型/性格推导音量/音高 (老年更低沉、少年更明亮); 推导后还能逐个手改">
+                {{ derivingAllVoiceParams ? '推导中...' : '按角色特征推导语音参数' }}
+              </button>
             </div>
           </div>
 
@@ -426,6 +432,61 @@
 
                 <div v-if="c.voice_sample_url || c.voiceSampleUrl" class="voice-player">
                   <audio :src="'/' + (c.voice_sample_url || c.voiceSampleUrl)" controls preload="none" />
+                </div>
+
+                <!-- ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数
+                     同一个音色分给年龄/体型不同的角色时, 靠这里做出区分 (原来所有角色音量音高完全一样) -->
+                <div class="voice-params-block">
+                  <div class="voice-params-head">
+                    <button class="btn btn-sm btn-ghost" @click="toggleVoiceParams(c)">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+                      语音参数
+                      <span class="dim" style="font-size:11px">{{ hasCharVoiceParams(c) ? '已自定义' : '默认 (音色原声)' }}</span>
+                    </button>
+                    <span v-if="hasCharVoiceParams(c)" class="tag tag-success">已配置</span>
+                  </div>
+
+                  <div v-if="voiceParamsOpen[c.id]" class="voice-params-panel">
+                    <div class="voice-params-grid">
+                      <label class="voice-param-item">
+                        <span>音量</span>
+                        <input v-model.number="voiceParamsDraft[c.id].vol" type="number" :min="VOICE_PARAM_RANGES.vol.min" :max="VOICE_PARAM_RANGES.vol.max" :step="VOICE_PARAM_RANGES.vol.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>音高</span>
+                        <input v-model.number="voiceParamsDraft[c.id].pitch" type="number" :min="VOICE_PARAM_RANGES.pitch.min" :max="VOICE_PARAM_RANGES.pitch.max" :step="VOICE_PARAM_RANGES.pitch.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>语速</span>
+                        <input v-model.number="voiceParamsDraft[c.id].speed" type="number" :min="VOICE_PARAM_RANGES.speed.min" :max="VOICE_PARAM_RANGES.speed.max" :step="VOICE_PARAM_RANGES.speed.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>修饰音高</span>
+                        <input v-model.number="voiceParamsDraft[c.id].modifyPitch" type="number" :min="VOICE_PARAM_RANGES.modifyPitch.min" :max="VOICE_PARAM_RANGES.modifyPitch.max" :step="VOICE_PARAM_RANGES.modifyPitch.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>刚劲/轻柔</span>
+                        <input v-model.number="voiceParamsDraft[c.id].intensity" type="number" :min="VOICE_PARAM_RANGES.intensity.min" :max="VOICE_PARAM_RANGES.intensity.max" :step="VOICE_PARAM_RANGES.intensity.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>浑厚/清脆</span>
+                        <input v-model.number="voiceParamsDraft[c.id].timbre" type="number" :min="VOICE_PARAM_RANGES.timbre.min" :max="VOICE_PARAM_RANGES.timbre.max" :step="VOICE_PARAM_RANGES.timbre.step" @change="saveCharVoiceParams(c)" />
+                      </label>
+                      <label class="voice-param-item">
+                        <span>音效</span>
+                        <select v-model="voiceParamsDraft[c.id].soundEffects" @change="saveCharVoiceParams(c)">
+                          <option v-for="o in VOICE_SOUND_EFFECT_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div class="voice-params-actions">
+                      <button class="btn btn-sm" :disabled="derivingCharParams[c.id]" @click="deriveCharVoiceParams(c)">
+                        {{ derivingCharParams[c.id] ? '推导中…' : '按特征推导' }}
+                      </button>
+                      <button class="btn btn-sm" :disabled="voiceParamsBusy[c.id]" @click="clearCharVoiceParams(c)">清空</button>
+                      <span class="dim" style="font-size:11px">不配置 = 保持音色原声 (音量 1 / 音高 0); 音高半音 [-12,12], 修饰音高 [-100,100]</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2931,6 +2992,106 @@ const {
   selectedTextConfigId,
 })
 
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
+//   ★ 不配置 = 主链路请求体与改动前逐字一致 (vol=1 / pitch=0 / 请求里没有 voice_modify)
+//   官方取值范围 (MiniMax speech-t2a-http / speech-t2a-async-create):
+//     voice_setting: vol (0,10] / pitch [-12,12] 整数 / speed [0.5,2]
+//     voice_modify: pitch / intensity / timbre [-100,100] (★ 与上面 pitch 是两套刻度!) / sound_effects 单选
+const VOICE_PARAM_RANGES = {
+  vol: { min: 0.1, max: 10, step: 0.1, def: 1 },
+  pitch: { min: -12, max: 12, step: 1, def: 0 },
+  speed: { min: 0.5, max: 2, step: 0.05, def: 1 },
+  modifyPitch: { min: -100, max: 100, step: 5, def: 0 },
+  intensity: { min: -100, max: 100, step: 5, def: 0 },
+  timbre: { min: -100, max: 100, step: 5, def: 0 },
+} as const
+const VOICE_SOUND_EFFECT_OPTIONS = [
+  { value: '', label: '无' },
+  { value: 'spacious_echo', label: '空旷回音' },
+  { value: 'auditorium_echo', label: '礼堂广播' },
+  { value: 'lofi_telephone', label: '电话失真' },
+  { value: 'robotic', label: '电音' },
+]
+const voiceParamsOpen = ref<Record<number, boolean>>({})
+const voiceParamsDraft = ref<Record<number, any>>({})
+const voiceParamsBusy = ref<Record<number, boolean>>({})
+const derivingCharParams = ref<Record<number, boolean>>({})
+const derivingAllVoiceParams = ref(false)
+
+function readCharVoiceParams(c: any): Record<string, any> {
+  const raw = c?.voice_params ?? c?.voiceParams
+  if (!raw) return {}
+  try { return typeof raw === 'string' ? JSON.parse(raw) : { ...raw } } catch { return {} }
+}
+function hasCharVoiceParams(c: any): boolean {
+  return Object.keys(readCharVoiceParams(c)).length > 0
+}
+function toggleVoiceParams(c: any) {
+  const id = c.id
+  const open = !voiceParamsOpen.value[id]
+  voiceParamsOpen.value[id] = open
+  if (open && !voiceParamsDraft.value[id]) {
+    voiceParamsDraft.value[id] = { ...readCharVoiceParams(c) }
+  }
+}
+async function saveCharVoiceParams(c: any) {
+  const id = c.id
+  if (voiceParamsBusy.value[id]) return
+  voiceParamsBusy.value[id] = true
+  try {
+    const params: Record<string, any> = { ...(voiceParamsDraft.value[id] || {}) }
+    // 空值不要传 (后端夹取后为空 = 清空 = 回到"不配置")
+    for (const k of Object.keys(params)) {
+      const v = params[k]
+      if (v === null || v === undefined || v === '') delete params[k]
+    }
+    await characterAPI.saveVoiceParams(id, params)
+    toast.success('语音参数已保存')
+    await refresh()
+  } catch (e: any) {
+    toast.error(e?.message || '保存语音参数失败')
+  } finally {
+    voiceParamsBusy.value[id] = false
+  }
+}
+async function deriveCharVoiceParams(c: any) {
+  const id = c.id
+  if (derivingCharParams.value[id]) return
+  derivingCharParams.value[id] = true
+  try {
+    const res: any = await characterAPI.voiceParams(id)
+    const derived = res?.derived || {}
+    if (!Object.keys(derived).length) {
+      toast.error('这个角色的年龄/体型/性格特征太少, 推导不出默认值 —— 请手动填')
+      return
+    }
+    voiceParamsDraft.value[id] = { ...derived }
+    voiceParamsOpen.value[id] = true
+    await saveCharVoiceParams(c)
+  } catch (e: any) {
+    toast.error(e?.message || '推导失败')
+  } finally {
+    derivingCharParams.value[id] = false
+  }
+}
+async function clearCharVoiceParams(c: any) {
+  voiceParamsDraft.value[c.id] = {}
+  await saveCharVoiceParams(c)
+}
+async function deriveAllVoiceParams() {
+  if (derivingAllVoiceParams.value) return
+  derivingAllVoiceParams.value = true
+  try {
+    const res: any = await characterAPI.deriveVoiceParams(dramaId)
+    toast.success(`已为 ${res?.changed ?? 0} 个角色按特征推导语音参数`)
+    await refresh()
+  } catch (e: any) {
+    toast.error(e?.message || '批量推导失败')
+  } finally {
+    derivingAllVoiceParams.value = false
+  }
+}
+
 // V4 拆 3 步 wizard (PM msg-20261010-003): 新 button '分步拆解' 触发, 老 button 'AI 拆解分镜' 保留走 1 步 auto mode
 // QA msg-20261010-010 急修: page destructure 加 error, modal status banner 才能显示具体 error 文本
 //   (之前 commit f6c3f16 漏加 error 导致 modal 显示 'step1 失败: ' 空文本)
@@ -5146,6 +5307,18 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   .merge-field-label { text-align: left; min-width: 0; flex: 0 0 auto; }
   .merge-group .merge-transition-select { flex: 1; width: auto; min-width: 0; }
 }
+
+/* ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 */
+.voice-params-block { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.voice-params-head { display: flex; align-items: center; gap: 8px; }
+.voice-params-panel { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.voice-params-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 10px; }
+.voice-param-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-3); }
+.voice-param-item input, .voice-param-item select {
+  flex: 1; min-width: 0; font-size: 11px; padding: 2px 4px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--bg-1); color: var(--text-1);
+}
+.voice-params-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
 .dub-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58)); }

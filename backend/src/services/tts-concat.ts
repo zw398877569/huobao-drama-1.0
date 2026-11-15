@@ -16,6 +16,8 @@ import { execFileSync } from 'child_process'
 import { eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
+// ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
+import { parseVoiceParams, toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
@@ -270,11 +272,33 @@ function coalesceAdjacent(segments: DialogueSegment[]): Array<{ speaker: string;
   return out
 }
 
-function getVoiceForSpeaker(episodeId: number, speaker: string, isNarrator: boolean): string {
+/** 取本集所属 drama 的全部角色 (语音分配 + 角色级语音参数都用它) */
+function loadDramaCharacters(episodeId: number) {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-  const chars = ep
+  return ep
     ? db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
     : []
+}
+
+/**
+ * ★ Sprint 47 T1 (PM msg-20261115-188): 取该说话人的角色级语音参数。
+ *   没配 → 空对象 → 主链路请求体与改动前逐字一致 (vol=1 / pitch=0 / 无 voice_modify)。
+ */
+function getSpeakerVoiceParams(
+  episodeId: number,
+  speaker: string,
+  isNarrator: boolean,
+  chars?: ReturnType<typeof loadDramaCharacters>,
+): CharacterVoiceParams {
+  const list = chars ?? loadDramaCharacters(episodeId)
+  const c = isNarrator
+    ? list.find((x) => x.name === NARRATOR_SPEAKER_NAME)
+    : list.find((x) => x.name === speaker)
+  return parseVoiceParams(c?.voiceParams ?? null)
+}
+
+function getVoiceForSpeaker(episodeId: number, speaker: string, isNarrator: boolean): string {
+  const chars = loadDramaCharacters(episodeId)
   if (isNarrator) {
     // 2026-10-12 sprint 43 FIX-5: 旁白路径优先查 character '旁白' 的 voiceStyle (voice-assigner 配的)
     const narratorChar = chars.find((c) => c.name === NARRATOR_SPEAKER_NAME)
@@ -404,14 +428,23 @@ export async function generateTTSForDialogue(
     speed: ttsParams.speed,
   })
 
+  // ★ Sprint 47 T1 (PM msg-20261115-188): 角色列表只查一次 (音色 + 角色级语音参数都用它)
+  const dramaCharacters = loadDramaCharacters(episodeId)
+
   for (let i = 0; i < merged.length; i++) {
     const m = merged[i]
     const voice = getVoiceForSpeaker(episodeId, m.speaker, m.isNarrator)
+    // ★ Sprint 47 T1: 角色级语音参数 (vol/pitch/语速/声音修饰) —— 没配就是空对象 = 保持现状
+    const speakerParams = getSpeakerVoiceParams(episodeId, m.speaker, m.isNarrator, dramaCharacters)
+    const segSpeed = speakerParams.speed ?? ttsParams.speed
     logTaskProgress('TTSConcat', 'generate-segment', {
       index: i, speaker: m.speaker, isNarrator: m.isNarrator, voice,
       textLen: m.text.length,
       emotion: ttsParams.emotion,
-      speed: ttsParams.speed,
+      speed: segSpeed,
+      vol: speakerParams.vol,
+      pitch: speakerParams.pitch,
+      hasVoiceModify: !!toVoiceModify(speakerParams),
     })
     // 2026-09-23 问题 3: 段内长句切分 (默认 ≤20 字, 让 TTS 按气口自然合成)
     const sentences = splitLongText(m.text)
@@ -421,7 +454,11 @@ export async function generateTTSForDialogue(
       voice,
       configId: configId ?? undefined,
       emotion: ttsParams.emotion,
-      speed: ttsParams.speed,
+      speed: segSpeed,
+      // ★ Sprint 47 T1: 角色级音量/音高/声音修饰 (undefined → 保持现状)
+      vol: speakerParams.vol,
+      pitch: speakerParams.pitch,
+      voiceModify: toVoiceModify(speakerParams),
     })
     segPaths.push(segPath)
     meta.push({
