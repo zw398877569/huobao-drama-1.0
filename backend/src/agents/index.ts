@@ -11,9 +11,8 @@ import { createExtractTools } from './tools/extract-tools'
 import { createStoryboardTools } from './tools/storyboard-tools'
 import { createVoiceTools } from './tools/voice-tools'
 import { createGridPromptTools } from './tools/grid-prompt-tools'
-// ★ Sprint 47 T4 (PM msg-20261115-188): 音色清单 + 动态示例 (示例跟着 ai_voices 表走, 不写死)
-import { buildVoiceGuide, sanitizeForeignVoiceNames, VOICE_GUIDE_PLACEHOLDER } from '../services/voice-library.js'
-import { loadVoiceLibrary } from '../services/voice-library-db.js'
+// ★ Sprint 47 T4/T3追加 (PM msg-20261115-188 / 189): 音色清单 + 动态示例 (示例跟着 ai_voices 表走, 不写死)
+import { buildVoiceAssignerInstructions } from '../services/voice-library-db.js'
 
 // Default prompts (used when DB has no config)
 const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
@@ -1202,29 +1201,6 @@ function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: s
   } as any)
   const modelName = dbConfig?.model || textConfig.model
   return provider.chat(modelName)
-}
-
-/**
- * ★ Sprint 47 T4 (PM msg-20261115-188): 组装音色分配 agent 的最终 instructions。
- *   · 先把遗留的别平台音色名 (echo/onyx/fable/nova/shimmer/alloy) 清掉 —— 它们在当前 provider 下不存在
- *   · 再把【当前可用音色清单 + 真实组合示例 + 声音特征盲点说明】注入进去
- *   (prompt 来自 DB 自定义时也一样注入 —— 否则用户改过的 prompt 永远拿不到真实音色清单)
- */
-function buildVoiceAssignerInstructions(rawInstructions: string, episodeId: number): string {
-  let provider = 'minimax'
-  try {
-    const [episode] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-    if (episode?.audioConfigId) {
-      const [config] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, episode.audioConfigId)).all()
-      provider = config?.provider || provider
-    }
-  } catch { /* DB 读不到 → 用默认 minimax */ }
-  const voices = loadVoiceLibrary(provider)
-  const sanitized = sanitizeForeignVoiceNames(rawInstructions)
-  const guide = buildVoiceGuide(voices)
-  return sanitized.includes(VOICE_GUIDE_PLACEHOLDER)
-    ? sanitized.replace(VOICE_GUIDE_PLACEHOLDER, guide)
-    : `${sanitized}\n${guide}`
 }
 
 export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental'; textConfigId?: number; modelOverride?: string }): Agent | null {

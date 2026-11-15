@@ -127,6 +127,7 @@ import { ensureLogDir } from './utils/file-log.js'
 import { initBatchVideoScheduler } from './services/batch-video-scheduler.js'
 // ★ Sprint 40 追加单 174: 启动时回收僵死的 merge 记录 (服务重启打断拼接 → 记录卡 processing → 页面死锁)
 import { recoverStaleMergesOnStartup } from './services/merge-stale-recovery.js'
+import { cleanStoredVoiceAssignerPrompts } from './services/voice-prompt-cleanup.js'
 import { logTaskError } from './utils/task-logger.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -202,6 +203,18 @@ try {
   if (recovered > 0) console.log(`🧹 已回收僵死的 merge 记录: ${recovered} 条 (服务重启中断)`)
 } catch (err: any) {
   logTaskError('Server', 'stale-merge-recovery-fail', { error: err?.message || String(err) })
+}
+
+// ★ Sprint 47 单 189 T3追加 (PM msg-20261115-189): 清理 agent_configs 里【音色分配 prompt】
+//   残留的别平台音色名 (alloy/echo/fable/onyx/nova/shimmer) —— 运行时虽然也替换过,
+//   但 QA 要求 DB 原件也要清 (换机器/换加载路径就会露出来)。幂等: 已经干净的不动。
+try {
+  const cleaned = cleanStoredVoiceAssignerPrompts()
+  if (cleaned.cleaned > 0) {
+    console.log(`🧹 已清理音色分配 prompt 的别平台音色名: ${cleaned.cleaned} 条 prompt, 共 ${cleaned.removedNames} 处`)
+  }
+} catch (err: any) {
+  logTaskError('Server', 'voice-prompt-cleanup-fail', { error: err?.message || String(err) })
 }
 
 // Sprint 10 PM msg-20261014-001 task D: 启动时 initBatchVideoScheduler 重建 pending plan cron jobs (backend 重启复活)

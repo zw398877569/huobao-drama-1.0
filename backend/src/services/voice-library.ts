@@ -33,8 +33,16 @@ export interface VoiceLibraryEntry {
 /** 别的平台的音色名 (在当前 provider 下不存在 → prompt 里出现就是错) */
 const FOREIGN_VOICE_NAMES = ['echo', 'onyx', 'fable', 'nova', 'shimmer', 'alloy']
 
-/** ★ prompt 里的占位符 (运行时用真实音色清单替换) */
+/** ★ prompt 里的占位符 (代码默认 prompt 用; 运行时用真实音色清单替换) */
 export const VOICE_GUIDE_PLACEHOLDER = '{{VOICE_GUIDE}}'
+
+/** ★ guide 块的哨兵 (运行时能定位并整体替换 → 换 provider 时不会重复追加) */
+export const VOICE_GUIDE_START = '<<<VOICE_GUIDE>>>'
+export const VOICE_GUIDE_END = '<<<END_VOICE_GUIDE>>>'
+
+/** 旧示例段 (写死别平台音色名的那一段) 的起止标记 */
+const STALE_EXAMPLE_START = '四、典型场景的音色组合示例'
+const STALE_EXAMPLE_END = '五、工作流程'
 
 /**
  * 从名字+描述猜性别。
@@ -138,10 +146,11 @@ export function pickByArchetype(
 
 /**
  * ★ 生成 prompt 里的【动态音色章节】(真实清单 + 真实组合示例 + 盲点说明)。
+ *   用哨兵包起来 → 运行时能整体定位替换 (换 provider 时不会重复追加)。
  */
 export function buildVoiceGuide(voices: VoiceLibraryEntry[]): string {
   const lines: string[] = []
-  lines.push('')
+  lines.push(VOICE_GUIDE_START)
   lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   lines.push('三·补、★ 当前可用音色清单 (选音色的【唯一】有效来源)')
   lines.push('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -214,7 +223,42 @@ export function buildVoiceGuide(voices: VoiceLibraryEntry[]): string {
   lines.push('  - 拿不到数值特征时, 只能靠音色描述文字 + 角色特征推断 → reason 里要写清依据。')
   lines.push('  - 你的 reason 字段里出现的音色名必须【逐字等于】清单里的中文名或 voice_id。')
   lines.push('')
+  lines.push(VOICE_GUIDE_END)
   return lines.join('\n')
+}
+
+/**
+ * ★ 用新的 guide 替换 prompt 里已有的 guide 块; 没有就追加到末尾。
+ *   (代码默认 prompt 用的是 {{VOICE_GUIDE}} 占位符 → 先替换占位符, 再走这里)
+ */
+export function upsertVoiceGuide(prompt: string, guide: string): string {
+  const s = prompt.indexOf(VOICE_GUIDE_START)
+  const e = prompt.indexOf(VOICE_GUIDE_END)
+  if (s !== -1 && e !== -1 && e > s) {
+    return prompt.slice(0, s) + guide + prompt.slice(e + VOICE_GUIDE_END.length)
+  }
+  return prompt.includes(VOICE_GUIDE_PLACEHOLDER)
+    ? prompt.replace(VOICE_GUIDE_PLACEHOLDER, guide)
+    : `${prompt}\n${guide}`
+}
+
+/**
+ * ★ 删掉 prompt 里那段【写死别平台音色名】的旧示例 (标记找不到就原样返回)。
+ */
+export function stripStaleVoiceExamples(prompt: string): string {
+  const i = prompt.indexOf(STALE_EXAMPLE_START)
+  const j = prompt.indexOf(STALE_EXAMPLE_END)
+  if (i === -1 || j === -1 || j <= i) return prompt
+  return prompt.slice(0, i) + prompt.slice(j)
+}
+
+/** ★ prompt 里还剩几个别平台音色名 (验收用: 必须是 0) */
+export function countForeignVoiceNames(prompt: string): number {
+  if (!prompt) return 0
+  return FOREIGN_VOICE_NAMES.reduce(
+    (n, w) => n + (prompt.match(new RegExp(`\\b${w}\\b`, 'gi')) || []).length,
+    0,
+  )
 }
 
 /**
@@ -245,5 +289,8 @@ export function sanitizeForeignVoiceNames(prompt: string): string {
     const re = new RegExp(`\\b${name}\\b`, 'gi')
     out = out.replace(re, '〈音色〉')
   }
+  // ★ 占位符独占的括号 → 换成指向真实清单的提示
+  //   (别让 agent 看到一堆"〈音色〉 / 〈音色〉"这种没意义的括号)
+  out = out.replace(/[（(]\s*〈音色〉\s*(?:[/／、,，]\s*〈音色〉\s*)*[）)]/g, '(见下方音色清单)')
   return out
 }
