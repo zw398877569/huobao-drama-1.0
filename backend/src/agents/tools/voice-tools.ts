@@ -10,6 +10,9 @@ import { logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../.
 import { generateTTSPreview } from '../../services/tts-preview.js'
 // Sprint 11 QA msg-20261016-067 Bug-A: assignVoice 时把试听样本落到 static/audio/ 并写 characters.voice_sample_url
 import { generateTTS } from '../../services/tts-generation.js'
+// ★ Sprint 47 T4 (PM msg-20261115-188): 音色清单 (list_voices + assign_voice 的白名单校验)
+import { assertVoiceInLibrary } from '../../services/voice-library.js'
+import { loadVoiceLibrary } from '../../services/voice-library-db.js'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {
@@ -47,31 +50,27 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
     inputSchema: z.object({}),
     execute: async () => {
       const provider = getEpisodeAudioProvider() || 'minimax'
-      const rows = db.select().from(schema.aiVoices).where(eq(schema.aiVoices.provider, provider)).all()
-      const voices = rows.length ? rows.map(v => {
-        const desc = v.description ? JSON.parse(v.description) : []
-        return {
-          id: v.voiceId,
-          name: v.voiceName,
-          gender: inferGender(v.voiceName, desc),
-          traits: Array.isArray(desc) && desc.length ? desc.slice(0, 2).join('、') : `${v.language || '多语言'}音色`,
-          suitable_for: Array.isArray(desc) && desc.length > 2 ? desc.slice(2).join('、') : `${v.language || '通用'}角色`,
-          language: v.language,
-          provider,
-        }
-      }) : [
-        { id: 'alloy', name: 'Alloy', gender: '中性', traits: '平衡自然', suitable_for: '旁白、通用', language: '多语言', provider },
-        { id: 'echo', name: 'Echo', gender: '男声', traits: '低沉稳重', suitable_for: '成熟男性、旁白', language: '多语言', provider },
-        { id: 'fable', name: 'Fable', gender: '男声', traits: '温暖富有表现力', suitable_for: '年轻男性、故事叙述', language: '多语言', provider },
-        { id: 'onyx', name: 'Onyx', gender: '男声', traits: '深沉有力', suitable_for: '权威角色、反派', language: '多语言', provider },
-        { id: 'nova', name: 'Nova', gender: '女声', traits: '温柔甜美', suitable_for: '年轻女性、女主', language: '多语言', provider },
-        { id: 'shimmer', name: 'Shimmer', gender: '女声', traits: '明亮活泼', suitable_for: '活泼女性、少女', language: '多语言', provider },
-      ]
+      // ★ Sprint 47 T4: 原来这里在库里没行的时候, 会返回一份【别平台音色】的硬编码兜底
+      //   (alloy/echo/fable/onyx/nova/shimmer) → agent 照着这些名字挑, 最后把库里根本不存在的
+      //   voice_id 写进 characters.voice_style (后面配音时才炸)。
+      //   → 现在统一走 loadVoiceLibrary: 库里没有就是没有, 不编造; 上面 assign_voice 还有白名单校验兜底
+      const library = loadVoiceLibrary(provider)
+      const voices = library.map((v) => ({
+        id: v.id,
+        name: v.name,
+        gender: v.gender,
+        traits: v.traits,
+        suitable_for: v.description || `${v.language || '通用'}角色`,
+        language: v.language,
+        provider,
+      }))
 
       const payload = {
         provider,
         voices,
-        instruction: '根据角色的性别、性格、年龄来匹配最合适的音色，并且只能从当前集音频配置可用的音色列表中选择。',
+        instruction: voices.length
+          ? '根据角色的性别、性格、年龄来匹配最合适的音色，并且只能从当前集音频配置可用的音色列表中选择 (voice_id 要逐字照抄清单里的)。'
+          : '当前 provider 的音色库是空的 → 不要挑任何音色 (尤其不要凭记忆写 echo/onyx/fable 这类名字), 请提示用户去设置里同步音色库后重试。',
       }
       logTaskSuccess('VoiceTool', 'list-voices', { episodeId, provider, count: payload.voices.length })
       return payload
@@ -100,6 +99,16 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
       //         写入 characters.voice_sample_url。
       //   为什么不用 tts-preview/: preview 样本在 data/tts-preview/ 且 24h lazy cleanup
       //         会删掉 (services/tts-preview.ts PREVIEW_MAX_AGE_MS), 正式样本不能放那。
+      // ★ Sprint 47 T4: 白名单校验 —— 不在当前 provider 音色库里的 voice_id 一律拒绝
+      //   (反向验证: 故意塞一个不存在的音色名 → 这里直接报错, 不会写进 characters.voice_style)
+      const library = loadVoiceLibrary(provider)
+      if (!library.some((v) => v.id === voice_id)) {
+        logTaskWarn('VoiceTool', 'assign-voice-not-in-library', {
+          episodeId, dramaId, characterId: character_id, voiceId: voice_id, provider,
+          librarySize: library.length,
+        })
+      }
+      assertVoiceInLibrary(voice_id, library)
       const [charRow] = db.select().from(schema.characters)
         .where(eq(schema.characters.id, character_id)).all()
       const charName = charRow?.name || `角色${character_id}`
@@ -176,10 +185,5 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
   return { getCharacters, listVoices, previewVoiceTts, assignVoice }
 }
 
-function inferGender(name: string, desc: unknown) {
-  const description = Array.isArray(desc) ? desc.join(' ') : ''
-  const text = `${name} ${description}`
-  if (/[男|青年|大爷|学长|boy|man|male]/i.test(text)) return '男声'
-  if (/[女|少女|御姐|奶奶|girl|woman|female]/i.test(text)) return '女声'
-  return '中性'
-}
+// ★ Sprint 47 T4: 性别推断统一走 services/voice-library.ts 的 inferVoiceGender
+//   (老实现写成了字符类 /[男|青年|大爷|...]/ → "青年女性"命中"青" → 女声全被判成男声, 已删)

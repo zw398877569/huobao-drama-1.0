@@ -11,6 +11,9 @@ import { createExtractTools } from './tools/extract-tools'
 import { createStoryboardTools } from './tools/storyboard-tools'
 import { createVoiceTools } from './tools/voice-tools'
 import { createGridPromptTools } from './tools/grid-prompt-tools'
+// ★ Sprint 47 T4 (PM msg-20261115-188): 音色清单 + 动态示例 (示例跟着 ai_voices 表走, 不写死)
+import { buildVoiceGuide, sanitizeForeignVoiceNames, VOICE_GUIDE_PLACEHOLDER } from '../services/voice-library.js'
+import { loadVoiceLibrary } from '../services/voice-library-db.js'
 
 // Default prompts (used when DB has no config)
 const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
@@ -680,10 +683,10 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     - 体型影响"气场":瘦削 → 清冷锋利;魁梧 → 厚重有力
 
   维2【性格光谱】:personality 决定音色"味道"
-    - 内向/沉静 → 偏低沉、语速慢、共鸣腔大 (echo / onyx)
-    - 外向/活泼 → 偏明亮、语速快、高频亮 (nova / shimmer)
+    - 内向/沉静 → 偏低沉、语速慢、共鸣腔大 (具体音色见文末【当前可用音色清单】)
+    - 外向/活泼 → 偏明亮、语速快、高频亮 (具体音色见文末清单)
     - 阴郁/反派 → 偏低沉 + 干涩,避免甜腻音色
-    - 暖男/治愈 → 偏中频厚实 + 轻微气声 (fable)
+    - 暖男/治愈 → 偏中频厚实 + 轻微气声 (具体音色见文末清单)
 
   维3【角色定位】:role 决定音色"权重"
     - 主角 → 音色必须有辨识度(独家特征),不要用太普通的音色
@@ -722,31 +725,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   - 如果 voices 数组为空 → 提示用户在 Settings 配置音频 provider 后重试,不要硬选 fallback
   - 不要把 minimax 音色 id 配给 non-minimax provider 的角色(会导致后续 TTS 失败)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-四、典型场景的音色组合示例
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  双男主戏:
-    - 男主 A(沉稳内敛) → echo(低沉温暖)
-    - 男主 B(活泼冲动) → fable(明亮表现力)
-    → 一厚一薄,一听能分
-
-  反派 + 主角:
-    - 反派 → onyx(深沉有力,有压迫感)
-    - 主角 → echo / nova(常规,不被反派音色抢戏)
-
-  群像(>5 角色):
-    - 男角 1 → echo(中年厚实)
-    - 男角 2 → fable(年轻活力)
-    - 男角 3 → alloy(中性,避免和男角 1/2 撞)
-    - 女角 1 → nova(温柔)
-    - 女角 2 → shimmer(活泼)
-    - 旁白 → alloy(与主角音色错开)
-
-  主角 + 挚友(容易踩坑):
-    - 主角 → echo(沉稳)
-    - 挚友 → alloy(中性偏暖,与 echo 音色质地不同但气质接近)
-    → "亲近但可辨",而不是"听起来像两个人"
+{{VOICE_GUIDE}}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 五、工作流程(必须严格按此顺序)
@@ -766,12 +745,12 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   格式: "<维度>匹配: <角色特征> → <音色特征>; <角色定位>; <多角色区分>"
-  示例:
-    - "性别+年龄匹配: 男主 35 岁沉稳中年 → echo 低沉厚实; 男主定位需要辨识度; 与挚友 alloy 拉开厚薄差"
-    - "性别+性格匹配: 反派阴郁冷血 → onyx 深沉干涩; 反派必须有压迫感; 与主角 echo 不撞(都是低音但质地不同)"
+  示例 (音色名要逐字用清单里的真实名字):
+    - "性别+年龄匹配: 男主 35 岁沉稳中年 → 沉稳男声 低沉厚实; 男主定位需要辨识度; 与挚友的音色拉开厚薄差"
+    - "性别+性格匹配: 反派阴郁冷血 → 冷硬男声 深沉干涩; 反派必须有压迫感; 与主角不撞(都是低音但质地不同)"
 
-  反例(过于简略):"配 echo"  ✗
-  反例(胡编):"echo 适合所有角色"  ✗
+  反例(过于简略):"配个低沉的"  ✗
+  反例(胡编):"这个音色适合所有角色"  ✗
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 七、硬性约束(违反 = 分配作废)
@@ -1225,6 +1204,29 @@ function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: s
   return provider.chat(modelName)
 }
 
+/**
+ * ★ Sprint 47 T4 (PM msg-20261115-188): 组装音色分配 agent 的最终 instructions。
+ *   · 先把遗留的别平台音色名 (echo/onyx/fable/nova/shimmer/alloy) 清掉 —— 它们在当前 provider 下不存在
+ *   · 再把【当前可用音色清单 + 真实组合示例 + 声音特征盲点说明】注入进去
+ *   (prompt 来自 DB 自定义时也一样注入 —— 否则用户改过的 prompt 永远拿不到真实音色清单)
+ */
+function buildVoiceAssignerInstructions(rawInstructions: string, episodeId: number): string {
+  let provider = 'minimax'
+  try {
+    const [episode] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+    if (episode?.audioConfigId) {
+      const [config] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, episode.audioConfigId)).all()
+      provider = config?.provider || provider
+    }
+  } catch { /* DB 读不到 → 用默认 minimax */ }
+  const voices = loadVoiceLibrary(provider)
+  const sanitized = sanitizeForeignVoiceNames(rawInstructions)
+  const guide = buildVoiceGuide(voices)
+  return sanitized.includes(VOICE_GUIDE_PLACEHOLDER)
+    ? sanitized.replace(VOICE_GUIDE_PLACEHOLDER, guide)
+    : `${sanitized}\n${guide}`
+}
+
 export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental'; textConfigId?: number; modelOverride?: string }): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
@@ -1243,9 +1245,16 @@ export function createAgent(type: string, episodeId: number, dramaId: number, op
   const model = getModel(dbConfig, textOverride)
   const baseInstructions = dbConfig?.systemPrompt?.trim() || defaults.instructions
   const skillInstructions = loadAgentSkills(type)
-  const instructions = skillInstructions
+  let instructions = skillInstructions
     ? [baseInstructions, '', skillInstructions].join('\n')
     : baseInstructions
+  // ★ Sprint 47 T4 (PM msg-20261115-188): 音色分配 agent 的音色示例【运行时】按库里真实音色生成
+  //   · prompt 里写死的 echo/onyx/fable 那套是别的平台的音色 → 会把 LLM 带偏 (挑出来的库里不存在)
+  //   · 库存会变 (改名/下线/新增) → 静态写死迟早过期
+  //   → 无论 prompt 来自代码默认还是 DB 自定义, 都注入同一份动态清单 (并清掉遗留的别平台音色名)
+  if (type === 'voice_assigner') {
+    instructions = buildVoiceAssignerInstructions(instructions, episodeId)
+  }
   const name = dbConfig?.name || defaults.name
 
   let tools: Record<string, any> = {}
