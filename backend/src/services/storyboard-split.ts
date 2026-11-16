@@ -172,11 +172,24 @@ export async function triggerAutoTtsForSplitShots(
         })
         logTaskWarn('StoryboardSplit', 'auto-tts-skipped', { storyboardId: s.id, reason: r.reason })
       } else {
+        // ★ Sprint 48 单 195 (PM msg-20261116-195): ★ 必须把结果【落库】!!
+        //   之前只记了状态没写 storyboards → 页面显示【待生成】, compose 兜底又重新生成一遍 (白花一次额度),
+        //   导出素材包也读不到这两镜的台词记录。
+        //   写回字段与手动点【生成配音】那条路径【完全一致】(ttsAudioUrl + ttsSegments)。
+        db.update(schema.storyboards)
+          .set({
+            ttsAudioUrl: r.audioPath,
+            ttsSegments: JSON.stringify(r.segments ?? []),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(schema.storyboards.id, s.id))
+          .run()
         setTtsJobStatus({
           storyboardId: s.id, status: 'done', startedAt, finishedAt: new Date().toISOString(),
         })
         logTaskSuccess('StoryboardSplit', 'auto-tts-done', {
-          storyboardId: s.id, segmentCount: r.segments?.length ?? 0,
+          storyboardId: s.id, segmentCount: r.segments?.length ?? 0, outPath: r.audioPath,
+          hint: '已落库 (tts_audio_url + tts_segments) → 页面显示已生成, compose 不会重复生成',
         })
       }
     } catch (err: any) {

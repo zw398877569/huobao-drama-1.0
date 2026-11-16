@@ -3041,6 +3041,8 @@ function ttsTagText(sb: any): string {
   const st = ttsJobStatus.value[sb?.id]
   if (st?.status === 'running') return '配音 生成中'
   if (st?.status === 'failed') return '配音 失败'
+  // ★ Sprint 48 单 195: 拆出来的镜没有台词 → 后端状态是 skipped → 显示【已跳过】, 别显示【待生成】让人以为还得点
+  if (st?.status === 'skipped') return '配音 已跳过'
   const has = !!(sb?.tts_segments || sb?.ttsSegments)
   return `配音 ${has ? '已生成' : '待生成'}`
 }
