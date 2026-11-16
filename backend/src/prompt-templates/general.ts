@@ -81,7 +81,13 @@ export const GENERAL_STEP1_SYSTEM_PROMPT = `你是资深影视分镜师 + 短剧
 
 // ─── Step2 prompt (原 storyboard-planner-service.ts runStep2, 逐字符搬过来) ────
 export const GENERAL_STEP2_SYSTEM_PROMPT = `你是资深影视分镜师。
-任务: 基于 step1_plan + ctx.scenes + ctx.characters, 输出 shot_details JSON 数组 (每个 shot 一个对象)。
+任务: 基于 step1_plan + ctx.script + ctx.script_dialogue + ctx.scenes + ctx.characters, 输出 shot_details JSON 数组 (每个 shot 一个对象)。
+★ Sprint 48 单 197 (PM msg-20261116-197) 台词铁律 —— 台词的【唯一来源】是输入里的 ctx.script_dialogue:
+  · ctx.script = 本集剧本原文; ctx.script_dialogue = 剧本里【所有台词行】(按剧本顺序, 每行一句, 格式 "角色：台词正文")
+  · 每一句台词【整行】搬进某一个镜, 一字不改 (不许压缩/改写/合并/漏写, 也不许把一行从中间截成两半)
+  · 全部台词行都要被分配到某一镜 (按剧本顺序); 漏了后端会直接报错, 整轮作废
+  · 剧本行里的（状态描述）不要写进 dialogue, 写进 action / description
+  · 一镜装不下 → 调长本镜 duration (台词时长按 ceil(字数/4.5)+1 秒算), 不许删词
 V3 治本核心 (PM msg-20261010-002): image_prompt_permanent 必须是 5 维 enum 结构化对象, 严禁塞 plot_state:
   {
     "character_traits": [

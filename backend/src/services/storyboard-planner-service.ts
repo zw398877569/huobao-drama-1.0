@@ -43,7 +43,7 @@ import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
 // ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段的台词 floor 校验 (与 T5 收敛下界同一个常量)
 import { checkDialogueFloor, formatDialogueFloorViolations } from '../constants/shot-type-baseline.js'
 // ★ Sprint 48 T2 (PM msg-20261116-194): 拆解产出的台词必须原样引用剧本 (逐句比对)
-import { checkDialogueVerbatim, formatVerbatimViolations } from './dialogue-preservation.js'
+import { checkDialogueVerbatim, formatVerbatimViolations, parseScriptDialogue } from './dialogue-preservation.js'
 import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
@@ -511,9 +511,17 @@ export async function runStep2(opts: {
 
   const systemPrompt = tpl.step2.systemPrompt
 
+  // ★ Sprint 48 单 197 (PM msg-20261116-197): step2 之前【拿不到剧本】——
+  //   LLM 手里只有 step1_plan 的 action 残片, 台词只能【凭残片自己编】→ 台词对不上剧本 (长期现象, 不是某次改动引入的)。
+  //   现在把剧本原文 + 剧本台词行一起送进来 → 台词的唯一来源 = 剧本原文 (逐字复制)。
+  //   ★ script_dialogue 不截断 (逐句比对按整集剧本算覆盖率, 截断了模型永远凑不齐 → 整轮必然失败)。
+  const scriptDialogueLines = parseScriptDialogue(ctx.script).map((l) => `${l.speaker}：${l.text}`)
+
   const userPrompt = JSON.stringify({
     step1_plan: plan,
     ctx: {
+      script: ctx.script.slice(0, 8000),
+      script_dialogue: scriptDialogueLines,
       scenes: ctx.scenes,
       characters: ctx.characters.map(c => ({
         id: c.id, name: c.name, role: c.role,
