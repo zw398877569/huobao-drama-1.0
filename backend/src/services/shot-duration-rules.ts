@@ -164,9 +164,16 @@ export function convergeShotDurations(
 // ── 场景 Σ 密度区间 (Sprint 17 Task F④, 老路径 轴4.5) ──
 //   ★ Sprint 47 T5: 提到模块级并导出 —— 离线断言/重跑模拟要用【同一份】规则, 别复制一份
 export const SCENE_DENSITY_RULES = {
-  high:   { minMirror: 3, sceneMinTotal: 10, sceneMaxTotal: 25 },
-  medium: { minMirror: 5, sceneMinTotal: 15, sceneMaxTotal: 35 },
-  low:    { minMirror: 8, sceneMinTotal: 25, sceneMaxTotal: 50 },
+  // ★ Sprint 48 T1 (PM msg-20261116-194): 【场景 Σ 上限】放宽 —— 这是"台词被截断"的直接诱因。
+  //   旧上限 (25/35/50) 决定的容量: ep21 有 5 个场景 → 容量上限 5×50 = 250 秒,
+  //   而 1044 字台词需要 ~232 秒纯对白 → 几乎卡死 → LLM 为了满足规则就把台词截短。
+  //   新上限按【容量】推导 (PM 口径: 68 镜 × ~5 秒 = 340 秒, 5~7 个场景 → 每场景 50~80 秒):
+  //     high 70 / medium 80 / low 90 → 5 个场景至少装得下 350~450 秒
+  //   ★ 【单镜下限】与【场景 Σ 下限】不变 (那是节奏规则, 不是容量规则)
+  //   ★ 不得低于改写阶段的"每场景 30-60 秒"上限 (两个模块口径必须一致, 否则又打架)
+  high:   { minMirror: 3, sceneMinTotal: 10, sceneMaxTotal: 70 },
+  medium: { minMirror: 5, sceneMinTotal: 15, sceneMaxTotal: 80 },
+  low:    { minMirror: 8, sceneMinTotal: 25, sceneMaxTotal: 90 },
 } as const
 export type DensityTier = keyof typeof SCENE_DENSITY_RULES
 
