@@ -135,6 +135,8 @@ export const H3_STEP2_SYSTEM_PROMPT = `你是 MiniMax H3 视频模型的提示�
   angle             (string, 必填) 机位: 平视 / 仰视 / 俯视 / 侧视
   movement          (string, 必填) 运镜: 固定 / 推 / 拉 / 摇 / 跟
   dialogue          (string, 必填) 本镜的对白原文, 多角色时每个角色写一行 (用换行分隔)
+      ★ Sprint 48 T2 (PM msg-20261116-194): 【原样引用】剧本原文, 不许压缩/改写/合并/丢弃;
+        一句话装不下就把它拆到下一镜 (按说话人/句子边界), 台词原文一字不改 (后端会逐句比对)
       ★ 反向也要一致: dialogue 里的每一句, 都要在 detailed_description 里有对应的说话动作, 顺序一致
   result            (string, 必填) 本镜的收尾状态 (一句话, 描述动作停在哪里)
       ★ 【必须用英文写】—— 它会被代码层注入到 H3 的英文 detailed_description 段里。

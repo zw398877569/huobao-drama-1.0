@@ -42,6 +42,8 @@ export type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js
 import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
 // ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段的台词 floor 校验 (与 T5 收敛下界同一个常量)
 import { checkDialogueFloor, formatDialogueFloorViolations } from '../constants/shot-type-baseline.js'
+// ★ Sprint 48 T2 (PM msg-20261116-194): 拆解产出的台词必须原样引用剧本 (逐句比对)
+import { checkDialogueVerbatim, formatVerbatimViolations } from './dialogue-preservation.js'
 import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
@@ -581,6 +583,33 @@ export async function runStep2(opts: {
       hint: '这一轮拆解里有镜的时长装不下台词 → 让 LLM 重出 (时长按 ceil(字数/4.5)+1 算, 受 15s 上限约束)',
     })
     throw new Error(`[拆解] 有 ${floorViolations.length} 个镜的时长装不下台词: ${detail}`)
+  }
+
+  // ★ Sprint 48 T2 (PM msg-20261115-188): 台词必须【原样引用】剧本 —— 逐句比对
+  //   现状 (drama20/ep21): 剧本 68 句/1044 字 → 拆解只剩 33 句/573 字 (55%) → 用户听成片觉得"台词少了很多"
+  //   ★ 硬违规 (文字被改写/合并/凭空多出) → 报错让拆解重试 (不静默产出)
+  //   ★ 只差标点 → 只告警 (不阻断, 免得因标点风格把整轮打回)
+  const scriptText = (await readStoryboardContextForPlanner(episodeId, dramaId)).script || ''
+  const verbatim = checkDialogueVerbatim(
+    scriptText,
+    (result.shot_details as any[]).map((d: any, i: number) => ({ index: i, shotNumber: d?.shot_number, dialogue: d?.dialogue })),
+  )
+  logTaskProgress('StoryboardPlanner', 'step2-dialogue-verbatim-check', {
+    episodeId,
+    keepRate: Math.round(verbatim.keepRate * 1000) / 10,
+    keptChars: verbatim.keptChars,
+    totalChars: verbatim.totalChars,
+    hardCount: verbatim.hardCount,
+    softCount: verbatim.softCount,
+  })
+  if (verbatim.hardCount > 0) {
+    const detail = formatVerbatimViolations(verbatim.violations)
+    logTaskWarn('StoryboardPlanner', 'step2-dialogue-not-verbatim', {
+      episodeId, hardCount: verbatim.hardCount, detail,
+      keepRate: Math.round(verbatim.keepRate * 1000) / 10,
+      hint: '台词必须原样引用剧本 (不许压缩/改写/合并) → 让 LLM 重出',
+    })
+    throw new Error(`[拆解] 有 ${verbatim.hardCount} 句台词不是剧本原句 (保留率 ${(verbatim.keepRate * 100).toFixed(1)}%): ${detail}`)
   }
 
   await savePlanningData(episodeId, {
