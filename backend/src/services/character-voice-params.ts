@@ -163,6 +163,51 @@ export function toVoiceModify(params: CharacterVoiceParams | null | undefined): 
   return Object.keys(out).length ? out : null
 }
 
+/**
+ * ★ Sprint 48 T4 (PM msg-20261116-194): 角色级音高/音量的【整数档表】(唯一口径)
+ *
+ * 【为什么改成整数档】
+ *   旧推导是"年龄档 + 性别 ±0.5 再取整" → 17 岁少女算成 pitch=4 (频率 +26%), 用户实听"特别尖锐, 像变了一个人";
+ *   而且性别 ±0.5 取整后【男女撞值】(17 岁女与 19 岁男都是 1) → 音高层面不再区分性别。
+ *   → 现在整张表就是【整数档】, 不做小数再取整 (表本身可维护, 也省掉精度丢失)。
+ *
+ * 【锚点】17 岁女 = +1 (用户 2026-11-16 实机试听认可的值)
+ * 【约束】同年龄档男女差 1 (不许撞值) · 相邻年龄档同性别差 ≥ 1 · 老年档幅度维持 -3 现状
+ */
+export interface VoiceTierRow {
+  /** 档位名 */
+  label: string
+  /** 该档的最大年龄 (含); 999 = 不限 */
+  maxAgeYears: number
+  /** 女档音高偏移 (整数半音) */
+  pitchFemale: number
+  /** 男档音高偏移 (整数半音) */
+  pitchMale: number
+  /** 音量系数 */
+  volScale: number
+}
+
+export const VOICE_TIER_TABLE: VoiceTierRow[] = [
+  { label: '少年/少女', maxAgeYears: 17, pitchFemale: 1, pitchMale: 0, volScale: 1 },
+  { label: '青年', maxAgeYears: 29, pitchFemale: 0, pitchMale: -1, volScale: 1 },
+  { label: '中年', maxAgeYears: 44, pitchFemale: -1, pitchMale: -2, volScale: 1 },
+  { label: '年长/老年', maxAgeYears: 999, pitchFemale: -3, pitchMale: -4, volScale: 0.85 },
+]
+
+/** ★ 年龄/性别都读不出来时的档位: 【不做任何猜测】(不抬不降) */
+export const VOICE_TIER_UNKNOWN: VoiceTierRow = {
+  label: '未知', maxAgeYears: -1, pitchFemale: 0, pitchMale: 0, volScale: 1,
+}
+
+/** 按年龄取档 (年龄未知 → 不猜, 走 UNKNOWN 档) */
+export function pickVoiceTier(ageYears: number | null): VoiceTierRow {
+  if (ageYears == null) return VOICE_TIER_UNKNOWN
+  for (const row of VOICE_TIER_TABLE) {
+    if (ageYears <= row.maxAgeYears) return row
+  }
+  return VOICE_TIER_TABLE[VOICE_TIER_TABLE.length - 1]
+}
+
 /** 角色特征文本来源 (用于自动推导) */
 export interface CharacterTraitSource {
   name?: string | null
@@ -260,31 +305,6 @@ export function resolveCharacterAge(
 }
 
 /** 年龄分档 (DEV 定, 满足工单要求: 少年/青年音高偏高, 老年音高偏低且音量偏小, 中年居中) */
-export interface AgeBucket {
-  /** 音高偏移 (半音) */
-  pitch: number
-  /** 音量系数 */
-  volScale: number
-  /** 分档名 (调试/回执用) */
-  label: string
-}
-
-export function ageBucketOf(years: number | null, ageText: string = ''): AgeBucket {
-  let y = years
-  if (y == null) {
-    // 非数值 → 按词兜底 (planner 万一写成 "少年"/"中年" 这种)
-    if (/少年|少女|儿童|孩童|童声|少年老成|初中|高中/.test(ageText)) y = 16
-    else if (/青年|年轻|青年人/.test(ageText)) y = 22
-    else if (/中年|壮年/.test(ageText)) y = 38
-    else if (/老年|老人|老妪|大爷|奶奶|年迈|老者|古稀|花甲/.test(ageText)) y = 60
-  }
-  if (y == null) return { pitch: 0, volScale: 1, label: '未知' }
-  if (y < 18) return { pitch: 3, volScale: 1, label: '少年/少女' }
-  if (y < 30) return { pitch: 1, volScale: 1, label: '青年' }
-  if (y < 45) return { pitch: 0, volScale: 1, label: '中年' }
-  return { pitch: -3, volScale: 0.85, label: '年长/老年' }
-}
-
 /**
  * ★ 体型关键词 (★ 只在【结构化 body trait】里匹配, 不碰自由文本)
  *   注意: "结实" / "粗壮" 不算魁梧 —— 家丁的体型是"中等身材结实, 手臂粗壮" (中等身材, 不是魁梧)
@@ -328,17 +348,18 @@ export function collectCharacterTraitText(src: CharacterTraitSource): string {
 export function deriveCharacterVoiceParams(src: CharacterTraitSource): CharacterVoiceParams {
   const traits = parseCharacterTraits(src)
   const resolvedAge = resolveCharacterAge(src, traits)
-  const age = ageBucketOf(resolvedAge.years, resolvedAge.text)
+  // ★ Sprint 48 T4: 音高/音量走【整数档表】(不再"档位 + 性别 ±0.5 再取整")
+  const tier = pickVoiceTier(resolvedAge.years)
   const p: CharacterVoiceParams = {}
 
-  // 音高: 年龄为主 + 性别微调
-  let pitch = age.pitch
-  if (traits.gender === '女') pitch += 0.5
-  else if (traits.gender === '男') pitch -= 0.5
-  if (pitch !== 0) p.pitch = Math.round(pitch)
+  // 音高: 整数档 (性别读不出来 → 不猜, 不抬不降)
+  const pitch = traits.gender === '女' ? tier.pitchFemale
+    : traits.gender === '男' ? tier.pitchMale
+      : 0
+  if (pitch !== 0) p.pitch = pitch
 
   // 音量: 年龄 (年长偏小)
-  if (age.volScale !== 1) p.vol = age.volScale
+  if (tier.volScale !== 1) p.vol = tier.volScale
 
   // 体型: ★ 只看结构化 body trait
   if (BODY_BULKY.test(traits.bodyText)) {
