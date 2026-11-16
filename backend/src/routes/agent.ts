@@ -3,7 +3,11 @@
  */
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { createAgent, validAgentTypes } from '../agents/index.js'
+import { createAgent, validAgentTypes, getAgentEffectiveMaxTokens } from '../agents/index.js'
+// ★ Sprint 48 T7 (PM msg-20261116-194): 识别"max_tokens 触顶 + 正文为空" → 报可读错误, 不静默返回空结果
+import {
+  extractUsage, detectTokenExhaustion, describeEmptyModelResult, describeUsage,
+} from '../services/llm-token-guard.js'
 import { parseConfigIdWithModel } from '../services/ai.js'
 import { runGenerateShotPrompts } from '../agents/tools/storyboard-tools.js'
 import { runStep1, runStep2, runStep3, runAllStepsLegacy, getPlanningState, clearPlanningSteps } from '../services/storyboard-planner-service.js'
@@ -116,6 +120,21 @@ app.post('/storyboard_breaker/storyboard/:id', async (c) => {
       { maxSteps: 20 },
     )
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+    // ★ Sprint 48 T7: token 用量可观测 + 空结果守卫 (触顶 vs 正常空 要能区分)
+    const usage = extractUsage(result)
+    const maxTokens = getAgentEffectiveMaxTokens('storyboard_breaker')
+    logTaskProgress('Agent', 'llm-token-usage', {
+      agentType: 'storyboard_breaker', ...describeUsage(usage, maxTokens),
+    })
+    const tokenCheck = detectTokenExhaustion({ text: result.text, usage, maxTokens })
+    if (tokenCheck.emptyOutput) {
+      logTaskWarn('Agent', 'llm-empty-output', {
+        agentType: 'storyboard_breaker', storyboardId,
+        ...describeUsage(usage, maxTokens),
+        reason: tokenCheck.reason, exhausted: tokenCheck.exhausted,
+      })
+      throw new Error(describeEmptyModelResult(tokenCheck))
+    }
     logTaskSuccess('Agent', 'storyboard_breaker-incremental', { elapsedSeconds: elapsed, storyboardId })
 
     const toolCalls = result.toolCalls || []
@@ -192,6 +211,20 @@ app.post('/:type/chat', async (c) => {
     )
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
+    // ★ Sprint 48 T7: token 用量可观测 + 空结果守卫 (触顶 vs 正常空 要能区分)
+    const usage = extractUsage(result)
+    const maxTokens = getAgentEffectiveMaxTokens(agentType)
+    logTaskProgress('Agent', 'llm-token-usage', {
+      agentType, ...describeUsage(usage, maxTokens),
+    })
+    const tokenCheck = detectTokenExhaustion({ text: result.text, usage, maxTokens })
+    if (tokenCheck.emptyOutput) {
+      logTaskWarn('Agent', 'llm-empty-output', {
+        agentType, ...describeUsage(usage, maxTokens),
+        reason: tokenCheck.reason, exhausted: tokenCheck.exhausted,
+      })
+      throw new Error(describeEmptyModelResult(tokenCheck))
+    }
     logTaskSuccess('Agent', agentType, { elapsedSeconds: elapsed })
 
     // 收集所有 tool calls 和 results

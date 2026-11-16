@@ -1193,6 +1193,24 @@ function getAgentConfig(agentType: string) {
   return rows.find(r => r.isActive) || rows[0] || null
 }
 
+/**
+ * ★ Sprint 48 T7 (PM msg-20261116-194): 通用 agent 循环的 max_tokens 下限。
+ *   8192 对【带 thinking 的模型】明显偏紧 (实测 28 次 completion=8192 触顶, reasoning 吃光预算 → 正文空)。
+ *   ★ 关掉 thinking 后 8192 就够, 但这里仍给 16384 的下限兜底; 配置可以调得更高。
+ */
+export const AGENT_MIN_MAX_TOKENS = 16384
+
+/** 某个 agent 实际生效的 max_tokens (配置值, 但不低于下限) */
+export function getAgentEffectiveMaxTokens(type: string): number {
+  try {
+    const cfg = getAgentConfig(type)
+    const configured = Number((cfg as any)?.maxTokens ?? (cfg as any)?.max_tokens ?? 0)
+    return Math.max(configured || 0, AGENT_MIN_MAX_TOKENS)
+  } catch {
+    return AGENT_MIN_MAX_TOKENS
+  }
+}
+
 function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: string; apiKey: string; model: string } | null) {
   const textConfig = overrideConfig ?? getTextConfig()
   const resolvedBaseURL = getTextProviderBaseUrl(textConfig)
@@ -1201,11 +1219,35 @@ function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: s
     baseUrl: resolvedBaseURL,
     model: dbConfig?.model || textConfig.model,
   })
+  // ★ Sprint 48 T7: 在 provider 的 fetch 层注入 max_tokens + 【关闭 thinking】
+  //   (AI SDK 的 chat() 不带模型设置 → 只能在这一层注入; 与 planner 的 callLLMJson 同一套做法)
+  //   ★ 关 thinking 的原因: llm-debug 实测 reasoning 吃掉几乎全部预算 → 正文为空 → agent 静默返回空结果
+  const agentMaxTokens = Math.max(
+    Number(dbConfig?.maxTokens ?? dbConfig?.max_tokens ?? 0) || 0,
+    AGENT_MIN_MAX_TOKENS,
+  )
   const provider = createOpenAI({
     baseURL: resolvedBaseURL,
     apiKey: textConfig.apiKey,
+    fetch: async (url: any, init: any) => {
+      try {
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        if (body && typeof body === 'object') {
+          body.max_tokens = agentMaxTokens
+          body.extra_body = { ...(body.extra_body || {}), reasoning: { enabled: false } }
+        }
+        return await fetch(url, { ...init, body: JSON.stringify(body) })
+      } catch {
+        return await fetch(url, init)
+      }
+    },
   } as any)
   const modelName = dbConfig?.model || textConfig.model
+  logTaskProgress('AIConfig', 'agent-model-settings', {
+    maxTokens: agentMaxTokens,
+    reasoningDisabled: true,
+    model: modelName,
+  })
   return provider.chat(modelName)
 }
 
