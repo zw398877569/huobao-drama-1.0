@@ -254,6 +254,22 @@ export function checkDialogueVerbatim(
   }
 }
 
+/**
+ * ★ Sprint 48 单 198 (PM msg-20261116-198): 找出【剧本里有、但没出现在任何一镜里】的台词行。
+ *   用途: LLM 重试时不能只说"覆盖不足", 要把【具体缺哪几句】喂回去, 它才知道要补什么。
+ */
+export function findUnassignedScriptLines(script: string, shots: ShotDialogue[]): string[] {
+  const scriptLines = parseScriptDialogue(script)
+  const allText = shots.map((s) => stripSpace(String(s.dialogue || ''))).join('')
+  const out: string[] = []
+  for (const l of scriptLines) {
+    const t = stripSpace(l.text)
+    if (!t) continue
+    if (!allText.includes(t)) out.push(l.raw)
+  }
+  return out
+}
+
 /** 硬违规的提示 (给 LLM retry 用) */
 export function formatVerbatimViolations(violations: DialogueVerbatimViolation[], limit = 5): string {
   const hard = violations.filter((v) => v.kind === 'hard')

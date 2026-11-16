@@ -80,6 +80,45 @@ export function computeEffectiveDialogueFloor(dialogueChars: number): number {
   return Math.min(computeDialogueFloor(dialogueChars), VIDEO_MAX_DURATION)
 }
 
+/**
+ * ★ Sprint 48 单 198 (PM msg-20261116-198): 台词 floor 的【确定性修复】——
+ *   floor 是公式算出来的 (ceil(字数/4.5)+1), 不该让 LLM 再来一遍 (它算不准: 实测它把 38 字排成 8s)。
+ *   - duration 装不下、且 raw floor ≤ 单镜上限 → 直接把 duration 调长到 floor (代码改, 不重试, 不打断流程)
+ *   - raw floor > 单镜上限 → 单镜物理上装不下 → 只能让 LLM 重新分配 (标 impossible)
+ */
+export interface DialogueFloorFix {
+  index: number
+  shotNumber?: number
+  /** 台词有效字数 */
+  chars: number
+  /** 原 duration */
+  duration: number
+  /** 需要的最少秒数 (未截断的 raw floor) */
+  floor: number
+  /** 单镜上限也装不下 (raw floor > VIDEO_MAX) */
+  impossible: boolean
+}
+
+export function fixDialogueFloorDurations(shots: Array<{
+  dialogue?: string | null
+  duration?: number | null
+  shot_number?: number | null
+}>): DialogueFloorFix[] {
+  const fixes: DialogueFloorFix[] = []
+  shots.forEach((sp, index) => {
+    const chars = countDialogueChars(sp.dialogue)
+    if (chars <= 0) return
+    const floor = computeDialogueFloor(chars)
+    const duration = Number(sp.duration ?? 0)
+    if (duration >= floor) return
+    const impossible = floor > VIDEO_MAX_DURATION
+    // ★ 装得下 (floor ≤ 15s) → 就地调长; 装不下 → 不动 (让 LLM 重新分配台词)
+    if (!impossible) sp.duration = floor
+    fixes.push({ index, shotNumber: sp.shot_number ?? undefined, chars, duration, floor, impossible })
+  })
+  return fixes
+}
+
 /** 台词有效字数 (去空白) —— 与 computeShotDuration 里的口径一致 */
 export function countDialogueChars(dialogue?: string | null): number {
   return (dialogue || '').replace(/\s/g, '').length

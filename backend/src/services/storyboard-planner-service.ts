@@ -41,9 +41,9 @@ export type { ShotDetailsItem, ShotPlanItem } from '../prompt-templates/types.js
 // Sprint 18 (QA msg-20261021-078): 台词角色白名单 + 落库前规范化
 import { normalizeDialogueForStorage } from '../utils/dialogue-parser.js'
 // ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段的台词 floor 校验 (与 T5 收敛下界同一个常量)
-import { checkDialogueFloor, formatDialogueFloorViolations } from '../constants/shot-type-baseline.js'
+import { checkDialogueFloor, formatDialogueFloorViolations, fixDialogueFloorDurations, VIDEO_MAX_DURATION, CHINESE_SPEECH_RATE } from '../constants/shot-type-baseline.js'
 // ★ Sprint 48 T2 (PM msg-20261116-194): 拆解产出的台词必须原样引用剧本 (逐句比对)
-import { checkDialogueVerbatim, formatVerbatimViolations, parseScriptDialogue } from './dialogue-preservation.js'
+import { checkDialogueVerbatim, formatVerbatimViolations, parseScriptDialogue, findUnassignedScriptLines } from './dialogue-preservation.js'
 import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 // Sprint 17 (PM msg-20261021-076): V4 重构丢失的 17 条影视规则 —— 规则本体在 utils/storyboard-rules.ts
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
@@ -517,7 +517,7 @@ export async function runStep2(opts: {
   //   ★ script_dialogue 不截断 (逐句比对按整集剧本算覆盖率, 截断了模型永远凑不齐 → 整轮必然失败)。
   const scriptDialogueLines = parseScriptDialogue(ctx.script).map((l) => `${l.speaker}：${l.text}`)
 
-  const userPrompt = JSON.stringify({
+  const userPromptObj = {
     step1_plan: plan,
     ctx: {
       script: ctx.script.slice(0, 8000),
@@ -528,116 +528,186 @@ export async function runStep2(opts: {
         appearancePermanent: c.appearancePermanent.slice(0, 300),
       })),
     },
-  }, null, 2)
+  }
 
-  const result = await callLLMJson(finalConfig, systemPrompt, userPrompt, tpl.step2.schema as z.ZodType<z.infer<typeof Step2Schema>>, {
-    ctx: { dramaId, episodeId, step: 'step2' },
-    // Sprint 44 FIX-061 follow-up: step 2 同样接 salvage hook, 跟 step 1 套路复用
-    //   zod fail 多是 character_traits 空数组 → 复用 salvageImagePromptPermanent 补 placeholder
-    //   character_ids 过滤非 int 元素 (salvageImagePromptPermanent 不处理 character_ids, 单独 inline)
-    salvage: (parsed) => {
-      if (!parsed || typeof parsed !== 'object') return parsed
-      const obj = parsed as Record<string, unknown>
-      if (!Array.isArray(obj.shot_details)) return parsed
-      const salvagedDetails = obj.shot_details.map((det: any, i: number) => {
-        if (!det || typeof det !== 'object') return det
-        const detCopy: Record<string, unknown> = { ...det }
-        if (Array.isArray(detCopy.character_ids)) {
-          detCopy.character_ids = (detCopy.character_ids as unknown[]).filter(
-            (n) => typeof n === 'number' && Number.isInteger(n),
-          )
-        }
-        if (detCopy.image_prompt_permanent) {
-          const salvaged = salvageImagePromptPermanent(detCopy.image_prompt_permanent, { episodeId, shotNumber: i + 1 })
-          detCopy.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
-          if (salvaged.plotState) {
-            const prev = typeof detCopy.image_prompt_plot_state === 'string' ? detCopy.image_prompt_plot_state : ''
-            detCopy.image_prompt_plot_state = [prev, salvaged.plotState].filter(Boolean).join(' | ')
+  // ★ Sprint 48 单 198 (PM msg-20261116-198): step2 的【后置校验】失败要【真的重试】——
+  //   以前 floor 违规 / 逐句违规都是直接抛错 → 整个 step2 失败 → 用户手动再点一次 →
+  //   LLM 拿到完全相同的输入和提示 → 大概率给出完全一样的错 → 用户反复点、反复烧钱。
+  //   现在:
+  //     ① 台词装不下的镜 → 由【代码按 floor 公式直接调长 duration】(确定性计算, 不用 LLM 参与)
+  //     ② 单镜上限也装不下 (raw floor > 15s) → 把违规详情回喂给 LLM 重出 (只重跑 step2, 不重跑整个拆解)
+  //     ③ 整集覆盖率/保留率 (单 196) → 同样回喂重试, 并把【具体缺哪几句】列出来
+  //   ★ floor 处理完必须继续往下跑 verbatim/coverage 校验 (以前 floor 抛错把那道闸挡住了)。
+  const MAX_STEP2_VALIDATION_RETRIES = 2   // 最多 3 次 LLM 调用 (每次 ~2 分钟, 不能再多)
+  let result: z.infer<typeof Step2Schema>
+  let attempt = 0
+  let feedback = ''
+
+  for (;;) {
+    const attemptPrompt = JSON.stringify(
+      feedback ? { ...userPromptObj, previous_issues: feedback } : userPromptObj,
+      null, 2,
+    )
+
+    result = await callLLMJson(finalConfig, systemPrompt, attemptPrompt, tpl.step2.schema as z.ZodType<z.infer<typeof Step2Schema>>, {
+      ctx: { dramaId, episodeId, step: 'step2', attempt: attempt + 1 },
+      // Sprint 44 FIX-061 follow-up: step 2 同样接 salvage hook, 跟 step 1 套路复用
+      //   zod fail 多是 character_traits 空数组 → 复用 salvageImagePromptPermanent 补 placeholder
+      //   character_ids 过滤非 int 元素 (salvageImagePromptPermanent 不处理 character_ids, 单独 inline)
+      salvage: (parsed) => {
+        if (!parsed || typeof parsed !== 'object') return parsed
+        const obj = parsed as Record<string, unknown>
+        if (!Array.isArray(obj.shot_details)) return parsed
+        const salvagedDetails = obj.shot_details.map((det: any, i: number) => {
+          if (!det || typeof det !== 'object') return det
+          const detCopy: Record<string, unknown> = { ...det }
+          if (Array.isArray(detCopy.character_ids)) {
+            detCopy.character_ids = (detCopy.character_ids as unknown[]).filter(
+              (n) => typeof n === 'number' && Number.isInteger(n),
+            )
           }
-        }
-        return detCopy
-      })
-      return { ...obj, shot_details: salvagedDetails }
-    },
-  })
-
-  // QA msg-20261012-039 Fix 2.2: 治本不让 shot_type_ref (或 5 维) 非法值污染 planning_data.
-  //   Step2Schema 已放宽 shot_type_ref 为 z.string().optional(), 这里用 salvageImagePromptPermanent 兜底:
-  //   - character_traits category 不在 5 维 enum → 移到 description + log warn
-  //   - shot_type_ref 不在 SHOT_TYPE_REFS → fallback '中景' + log warn
-  //   - 其他非法 value (超 50 字) → 截断
-  //   避免 zod reject + retry 整个 LLM 118s 浪费 (sprint 39 dispatch 案例)
-  for (const det of result.shot_details) {
-    if (!det.image_prompt_permanent) continue
-    const salvaged = salvageImagePromptPermanent(det.image_prompt_permanent, { episodeId, shotNumber: det.shot_number })
-    // salvage 返回 { imagePromptPermanent: T | null, plotState: string }, null 表示 LLM 输出完全无效; 这里我们保留 null 让下游知道
-    det.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
-    // QA msg-20261012-040 Fix 1: 回填 plotState — salvage 从 character_traits 移出来的非法 category
-    //   (如 category='clothing' value='红色连衣裙') 和超 10 条溢出项都在这里, 不回填就永久丢失。
-    //   step3 再次 salvage 时 image_prompt_permanent 已干净, cleaned.plotState 必然为空, 救不回来。
-    if (salvaged.plotState) {
-      det.image_prompt_plot_state = [det.image_prompt_plot_state, salvaged.plotState].filter(Boolean).join(' | ')
-    }
-  }
-
-  // ★ Sprint 47 T9 (PM msg-20261115-188): 拆解阶段就校验【台词装不下的镜】——
-  //   口径与 T5 的收敛硬下界同一个常量 (computeEffectiveDialogueFloor)。
-  //   ★ 不静默产出: 装不下就报错让拆解重试 (而不是等后面被压坏 → 台词念到一半没了)。
-  const floorViolations = checkDialogueFloor(result.shot_details as any)
-  if (floorViolations.length > 0) {
-    const detail = formatDialogueFloorViolations(floorViolations)
-    logTaskWarn('StoryboardPlanner', 'step2-dialogue-floor-violation', {
-      episodeId, count: floorViolations.length, detail,
-      hint: '这一轮拆解里有镜的时长装不下台词 → 让 LLM 重出 (时长按 ceil(字数/4.5)+1 算, 受 15s 上限约束)',
+          if (detCopy.image_prompt_permanent) {
+            const salvaged = salvageImagePromptPermanent(detCopy.image_prompt_permanent, { episodeId, shotNumber: i + 1 })
+            detCopy.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
+            if (salvaged.plotState) {
+              const prev = typeof detCopy.image_prompt_plot_state === 'string' ? detCopy.image_prompt_plot_state : ''
+              detCopy.image_prompt_plot_state = [prev, salvaged.plotState].filter(Boolean).join(' | ')
+            }
+          }
+          return detCopy
+        })
+        return { ...obj, shot_details: salvagedDetails }
+      },
     })
-    throw new Error(`[拆解] 有 ${floorViolations.length} 个镜的时长装不下台词: ${detail}`)
-  }
 
-  // ★ Sprint 48 T2 (PM msg-20261115-188): 台词必须【原样引用】剧本 —— 逐句比对
-  //   现状 (drama20/ep21): 剧本 68 句/1044 字 → 拆解只剩 33 句/573 字 (55%) → 用户听成片觉得"台词少了很多"
-  //   ★ 硬违规 (文字被改写/合并/凭空多出) → 报错让拆解重试 (不静默产出)
-  //   ★ 只差标点 → 只告警 (不阻断, 免得因标点风格把整轮打回)
-  const scriptText = (await readStoryboardContextForPlanner(episodeId, dramaId)).script || ''
-  const verbatim = checkDialogueVerbatim(
-    scriptText,
-    (result.shot_details as any[]).map((d: any, i: number) => ({ index: i, shotNumber: d?.shot_number, dialogue: d?.dialogue })),
-  )
-  logTaskProgress('StoryboardPlanner', 'step2-dialogue-verbatim-check', {
-    episodeId,
-    keepRate: Math.round(verbatim.keepRate * 1000) / 10,
-    keptChars: verbatim.keptChars,
-    totalChars: verbatim.totalChars,
-    detailChars: verbatim.detailChars,
-    coverage: Math.round(verbatim.coverage * 1000) / 10,
-    emptyShots: verbatim.emptyShots,
-    hardCount: verbatim.hardCount,
-    softCount: verbatim.softCount,
-  })
-  // ★ Sprint 48 单 196 (PM msg-20261116-196): 整集层面的兜底 ——
-  //   逐句比对进不去的空台词镜 (剧本有台词而拆解为空) 会让 hardCount=0 → 之前直接放行 (实测 21 镜 0 句台词仍 step2 DONE)。
-  //   ★ 台词整体缺失/保留率极低 → 判硬违规 → 报错让 step2 重试; 重试仍不合规就最终失败并明确告知用户。
-  if (verbatim.episodeViolations.reasons.length > 0) {
-    const detail = verbatim.episodeViolations.reasons.join('; ')
-    logTaskWarn('StoryboardPlanner', 'step2-dialogue-coverage-violation', {
+    // QA msg-20261012-039 Fix 2.2: 治本不让 shot_type_ref (或 5 维) 非法值污染 planning_data.
+    //   Step2Schema 已放宽 shot_type_ref 为 z.string().optional(), 这里用 salvageImagePromptPermanent 兜底:
+    //   - character_traits category 不在 5 维 enum → 移到 description + log warn
+    //   - shot_type_ref 不在 SHOT_TYPE_REFS → fallback '中景' + log warn
+    //   - 其他非法 value (超 50 字) → 截断
+    //   避免 zod reject + retry 整个 LLM 118s 浪费 (sprint 39 dispatch 案例)
+    for (const det of result.shot_details) {
+      if (!det.image_prompt_permanent) continue
+      const salvaged = salvageImagePromptPermanent(det.image_prompt_permanent, { episodeId, shotNumber: det.shot_number })
+      // salvage 返回 { imagePromptPermanent: T | null, plotState: string }, null 表示 LLM 输出完全无效; 这里我们保留 null 让下游知道
+      det.image_prompt_permanent = salvaged.imagePromptPermanent ?? undefined
+      // QA msg-20261012-040 Fix 1: 回填 plotState — salvage 从 character_traits 移出来的非法 category
+      //   (如 category='clothing' value='红色连衣裙') 和超 10 条溢出项都在这里, 不填回就永久丢失。
+      //   step3 再次 salvage 时 image_prompt_permanent 已干净, cleaned.plotState 必然为空, 救不回来。
+      if (salvaged.plotState) {
+        const prev = typeof det.image_prompt_plot_state === 'string' ? det.image_prompt_plot_state : ''
+        det.image_prompt_plot_state = [prev, salvaged.plotState].filter(Boolean).join(' | ')
+      }
+    }
+
+    // ── ① 台词 floor: 【代码自动调长】(确定性公式, 不该让 LLM 再来一遍) ──
+    const floorFixes = fixDialogueFloorDurations(result.shot_details as any)
+    const floorFixed = floorFixes.filter((f) => !f.impossible)
+    const floorImpossible = floorFixes.filter((f) => f.impossible)
+    if (floorFixed.length > 0) {
+      logTaskProgress('StoryboardPlanner', 'step2-dialogue-floor-autofixed', {
+        episodeId,
+        count: floorFixed.length,
+        detail: floorFixed.slice(0, 5).map((f) => `镜#${f.shotNumber ?? f.index + 1}: ${f.chars}字 ${f.duration}s → ${f.floor}s`).join('; '),
+        hint: '台词装不下的镜, duration 已由代码按 floor 公式自动调长 (不用 LLM 重来, 流程继续)',
+      })
+    }
+    if (floorImpossible.length > 0) {
+      const detail = formatDialogueFloorViolations(floorImpossible as any)
+      logTaskWarn('StoryboardPlanner', 'step2-dialogue-floor-impossible', {
+        episodeId, count: floorImpossible.length, detail,
+        hint: '单镜上限也装不下 → 只能让 LLM 把台词重新分配到相邻的镜 (回喂后重跑 step2)',
+      })
+      const fb = [
+        `【上一次输出的问题】有 ${floorImpossible.length} 个镜的台词装不进单镜上限 (${VIDEO_MAX_DURATION}s): ${detail}`,
+        '→ 请把这一镜的台词重新分配到相邻的镜 (每一镜的台词仍必须【逐字复制】ctx.script_dialogue 里的整行, 不许改写/压缩)。',
+      ].join('\n')
+      if (attempt < MAX_STEP2_VALIDATION_RETRIES) {
+        logTaskProgress('StoryboardPlanner', 'step2-validation-retry', {
+          episodeId, attempt: attempt + 1, reason: 'dialogue-floor-impossible', detail,
+        })
+        feedback = fb
+        attempt++
+        continue
+      }
+      throw new Error(
+        `[拆解] 有 ${floorImpossible.length} 个镜的台词装不进单镜上限 (${VIDEO_MAX_DURATION}s), 重试 ${attempt + 1} 次仍不合规: ${detail}`
+        + ` (若剧本这一行本身太长 (>${Math.round((VIDEO_MAX_DURATION - 1) * CHINESE_SPEECH_RATE)} 字), 需要改剧本或把它拆成两行)`,
+      )
+    }
+
+    // ── ② 整集覆盖率 / 保留率 (单 196) —— floor 处理完必须跑到这道闸 ──
+    const scriptText = (await readStoryboardContextForPlanner(episodeId, dramaId)).script || ''
+    const shotDialogues = (result.shot_details as any[]).map((d: any, i: number) => ({
+      index: i, shotNumber: d?.shot_number, dialogue: d?.dialogue,
+    }))
+    const verbatim = checkDialogueVerbatim(scriptText, shotDialogues)
+    logTaskProgress('StoryboardPlanner', 'step2-dialogue-verbatim-check', {
       episodeId,
       keepRate: Math.round(verbatim.keepRate * 1000) / 10,
-      coverage: Math.round(verbatim.coverage * 1000) / 10,
-      scriptChars: verbatim.totalChars,
+      keptChars: verbatim.keptChars,
+      totalChars: verbatim.totalChars,
       detailChars: verbatim.detailChars,
+      coverage: Math.round(verbatim.coverage * 1000) / 10,
       emptyShots: verbatim.emptyShots,
-      detail,
-      hint: '台词没对上/输出被截断 → 让 step2 重试 (不是逐句匹配能发现的, 整集层面的兜底)',
+      hardCount: verbatim.hardCount,
+      softCount: verbatim.softCount,
     })
-    throw new Error(`[拆解] ${detail}`)
-  }
-  if (verbatim.hardCount > 0) {
-    const detail = formatVerbatimViolations(verbatim.violations)
-    logTaskWarn('StoryboardPlanner', 'step2-dialogue-not-verbatim', {
-      episodeId, hardCount: verbatim.hardCount, detail,
-      keepRate: Math.round(verbatim.keepRate * 1000) / 10,
-      hint: '台词必须原样引用剧本 (不许压缩/改写/合并) → 让 LLM 重出',
-    })
-    throw new Error(`[拆解] 有 ${verbatim.hardCount} 句台词不是剧本原句 (保留率 ${(verbatim.keepRate * 100).toFixed(1)}%): ${detail}`)
+    if (verbatim.episodeViolations.reasons.length > 0) {
+      const detail = verbatim.episodeViolations.reasons.join('; ')
+      // ★ 把【具体缺哪几句】算出来喂回去 (只说"覆盖不足"模型不知道要补什么)
+      const missing = findUnassignedScriptLines(scriptText, shotDialogues)
+      logTaskWarn('StoryboardPlanner', 'step2-dialogue-coverage-violation', {
+        episodeId,
+        keepRate: Math.round(verbatim.keepRate * 1000) / 10,
+        coverage: Math.round(verbatim.coverage * 1000) / 10,
+        scriptChars: verbatim.totalChars,
+        detailChars: verbatim.detailChars,
+        emptyShots: verbatim.emptyShots,
+        missingCount: missing.length,
+        detail,
+        hint: '台词没对上/输出被截断 → 回喂给 LLM 重跑 step2 (不是逐句匹配能发现的, 整集层面的兜底)',
+      })
+      const fb = [
+        `【上一次输出的问题】${detail}`,
+        missing.length > 0
+          ? `剧本里这 ${missing.length} 句台词没有出现在任何一镜: ${missing.slice(0, 5).map((m) => `「${m}」`).join(' ')}${missing.length > 5 ? ' …' : ''}`
+          : '',
+        '→ 请把 ctx.script_dialogue 里【每一句】都逐字分配到某一镜 (按剧本顺序, 一句不许漏, 一字不许改)。',
+      ].filter(Boolean).join('\n')
+      if (attempt < MAX_STEP2_VALIDATION_RETRIES) {
+        logTaskProgress('StoryboardPlanner', 'step2-validation-retry', {
+          episodeId, attempt: attempt + 1, reason: 'dialogue-coverage', detail,
+        })
+        feedback = fb
+        attempt++
+        continue
+      }
+      throw new Error(`[拆解] ${detail} (重试 ${attempt + 1} 次仍不合规)`)
+    }
+    if (verbatim.hardCount > 0) {
+      const detail = formatVerbatimViolations(verbatim.violations)
+      logTaskWarn('StoryboardPlanner', 'step2-dialogue-not-verbatim', {
+        episodeId, hardCount: verbatim.hardCount, detail,
+        keepRate: Math.round(verbatim.keepRate * 1000) / 10,
+        hint: '台词必须原样引用剧本 (不许压缩/改写/合并) → 回喂给 LLM 重跑 step2',
+      })
+      const fb = [
+        `【上一次输出的问题】有 ${verbatim.hardCount} 句台词不是剧本原句 (被截短/改写/凭空多出): ${detail}`,
+        '→ 请从 ctx.script_dialogue 【逐字复制】(不许压缩/改写/合并/截短), 每一句整行搬进某一镜。',
+      ].join('\n')
+      if (attempt < MAX_STEP2_VALIDATION_RETRIES) {
+        logTaskProgress('StoryboardPlanner', 'step2-validation-retry', {
+          episodeId, attempt: attempt + 1, reason: 'dialogue-not-verbatim', detail,
+        })
+        feedback = fb
+        attempt++
+        continue
+      }
+      throw new Error(`[拆解] 有 ${verbatim.hardCount} 句台词不是剧本原句 (保留率 ${(verbatim.keepRate * 100).toFixed(1)}%): ${detail} (重试 ${attempt + 1} 次仍不合规)`)
+    }
+
+    break
   }
 
   await savePlanningData(episodeId, {
