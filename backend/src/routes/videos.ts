@@ -9,7 +9,7 @@ import {
   findEpisodeShotConflicts, formatConflictMessage, getShotNumbers,
 } from '../services/batch-schedule-guard.js'
 import { generateVideo } from '../services/video-generation.js'
-import { parseConfigIdWithModel } from '../services/ai.js'
+import { parseConfigIdWithModel, getConfigById } from '../services/ai.js'
 // Sprint 045 QA msg-20261016-068 Bug-B: body.drama_id 缺失时按 storyboard 链路反查
 import { lookupDramaIdByStoryboard } from '../utils/drama-lookup.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
@@ -132,6 +132,20 @@ app.post('/batch-schedules', async (c) => {
 
   const episodeId = Number(body.episode_id)
   const videoConfigId = body.video_config_id ? Number(body.video_config_id) : null
+  // ★ Sprint 49 (PM msg-20261116-200): 计划级指定【具体工作流】(如 minimax_h3_803) ——
+  //   不指定 = 沿用该视频配置的默认工作流 (存量计划行为完全不变)。
+  const videoModelRaw = typeof body.video_model === 'string' ? body.video_model.trim() : ''
+  const videoModel = videoModelRaw || null
+  if (videoModel && !/^[A-Za-z0-9_.-]{1,64}$/.test(videoModel)) {
+    return badRequest(c, `video_model 非法: ${videoModel}`)
+  }
+  // 工作流 id 只有 AutoDL ComfyUI 认 (别的 provider 不认识 minimax_h3_*)
+  if (videoModel && videoConfigId != null) {
+    const wfCfg = getConfigById(videoConfigId)
+    if (wfCfg && wfCfg.provider !== 'autodl-comfyui') {
+      return badRequest(c, `工作流 ${videoModel} 只适用于 AutoDL ComfyUI 视频配置, 当前配置 (id=${videoConfigId}) 的 provider 是 ${wfCfg.provider}`)
+    }
+  }
   const shotIds = body.shot_ids.map((n: unknown) => Number(n)).filter((n: number) => Number.isInteger(n) && n > 0)
   if (shotIds.length === 0) return badRequest(c, 'shot_ids contain no valid integer IDs')
 
@@ -152,6 +166,7 @@ app.post('/batch-schedules', async (c) => {
       scheduledAt: normalizeScheduledAt(String(body.scheduled_at)),
       status: 'pending',
       videoConfigId,
+      videoModel,
       shotIds: JSON.stringify(shotIds),
       shotCount: shotIds.length,
       successCount: 0,
@@ -169,6 +184,7 @@ app.post('/batch-schedules', async (c) => {
       scheduledAt: plan.scheduledAt,
       shotIds: plan.shotIds,
       videoConfigId: plan.videoConfigId,
+      videoModel: plan.videoModel,
     })
     db.update(schema.batchVideoSchedules)
       .set({ cronJobId })

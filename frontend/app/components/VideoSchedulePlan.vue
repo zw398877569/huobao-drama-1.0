@@ -47,7 +47,13 @@
             <td>{{ p.successCount }} / {{ p.failedCount }}</td>
             <!-- Sprint 11c: plan 总耗时 (串行生成, 约等于各单镜耗时之和) -->
             <td class="mono">{{ fmtDuration(p.planDurationSecs) }}</td>
-            <td>{{ p.videoConfigId ?? 'episode 锁定' }}</td>
+            <td>
+              {{ p.videoConfigId ?? 'episode 锁定' }}
+              <!-- ★ Sprint 49 (PM msg-20261116-200): 让用户一眼看出这个计划用哪个工作流 -->
+              <div v-if="p.videoModel" class="dim mono" style="font-size:10px" :title="p.videoModel">
+                {{ workflowLabel(p.videoModel) }}
+              </div>
+            </td>
             <td>
               <span class="expand-toggle">{{ expandedPlans.has(p.id) ? '▼' : '▶' }}</span>
             </td>
@@ -132,6 +138,22 @@
               </option>
             </select>
           </div>
+          <!-- ★ Sprint 49 (PM msg-20261116-200): 计划级指定【具体工作流】(如 803 音频驱动) -->
+          <div class="form-row">
+            <label>工作流 (可选; 不选 = 按首/尾帧/时长自动选默认工作流)</label>
+            <select v-model="createForm.videoModel" :disabled="selectedWorkflowOptions.length === 0">
+              <option value="">默认工作流 (自动选)</option>
+              <option v-for="wf in selectedWorkflowOptions" :key="wf.id" :value="wf.id">
+                {{ wf.label }}
+              </option>
+            </select>
+            <div v-if="selectedWorkflowOptions.length === 0" class="dim" style="font-size:11px">
+              先选一个 AutoDL ComfyUI 视频配置, 才能选它下面的具体工作流
+            </div>
+            <div v-else-if="createForm.videoModel" class="dim" style="font-size:11px">
+              该计划每一镜都用这个工作流; 若某镜时长超过它的上限, 会明确报错 (不会悄悄换工作流)
+            </div>
+          </div>
           <div v-if="createError" class="form-error">{{ createError }}</div>
         </div>
         <div class="modal-foot">
@@ -153,6 +175,7 @@ import {
   type BatchVideoPlan,
 } from '~/composables/useBatchVideoSchedule'
 import { episodeAPI, aiConfigAPI } from '~/composables/useApi'
+import { getModelLabel } from '~/composables/useSettingsAi'
 import { toast } from 'vue-sonner'
 
 const props = defineProps<{ episodeId: number }>()
@@ -299,7 +322,51 @@ const createForm = ref({
   scheduledAtLocal: '', // YYYY-MM-DDTHH:MM (datetime-local format)
   shotIds: [] as number[],
   videoConfigId: null as number | null,
+  // ★ Sprint 49 (PM msg-20261116-200): 计划级指定的工作流 ('' = 默认工作流)
+  videoModel: '',
 })
+
+/** ★ Sprint 49: 当前选中的视频配置 (null = 用 episode 锁定) */
+const selectedVideoConfig = computed<any>(() => {
+  const id = createForm.value.videoConfigId
+  if (id == null) return null
+  return videoConfigs.value.find((c: any) => c.id === id) || null
+})
+
+/**
+ * ★ Sprint 49 (PM msg-20261116-200): 该配置下【实际可用】的工作流清单 ——
+ *   从配置自己的 model 列表取 (不写死常量), 换了配置就换清单。
+ */
+const selectedWorkflowOptions = computed<{ id: string; label: string }[]>(() => {
+  const cfg = selectedVideoConfig.value
+  if (!cfg) return []
+  let models: string[] = []
+  const raw = cfg.model
+  if (Array.isArray(raw)) {
+    models = raw.filter((m: any) => typeof m === 'string' && m.trim())
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw)
+      models = Array.isArray(parsed) ? parsed.filter((m: any) => typeof m === 'string') : [raw]
+    } catch {
+      models = [raw]
+    }
+  }
+  return models.map((m) => ({ id: m, label: getModelLabel(m, cfg.provider) }))
+})
+
+// 换配置时, 之前选的工作流可能不在新配置下 → 清掉 (避免提交一个非法组合)
+watch(() => createForm.value.videoConfigId, () => {
+  const cur = createForm.value.videoModel
+  if (cur && !selectedWorkflowOptions.value.some((o) => o.id === cur)) {
+    createForm.value.videoModel = ''
+  }
+})
+
+/** 工作流 id → 可读文案 (中文名 + 价格 + 原始 id; 不认识就原样返回 id) */
+function workflowLabel(id: string) {
+  return getModelLabel(id, 'autodl-comfyui')
+}
 
 const canCreate = computed(
   () =>
@@ -398,6 +465,7 @@ async function onCreate() {
       scheduled_at,
       shot_ids: createForm.value.shotIds,
       video_config_id: createForm.value.videoConfigId,
+      video_model: createForm.value.videoModel || null,
     })
     if (plan) createModalOpen.value = false
   } catch (err: any) {

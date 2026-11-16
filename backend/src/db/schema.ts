@@ -506,6 +506,9 @@ export const batchVideoSchedules = sqliteTable('batch_video_schedules', {
   status: text('status').notNull().default('pending'),
   // NULL 时 triggerPlan 用 episode.videoConfigId 锁定 fallback (用户拍板 D5/A)
   videoConfigId: integer('video_config_id'),
+  // ★ Sprint 49 (PM msg-20261116-200): 计划级指定的【具体工作流】(如 minimax_h3_803)
+  //   NULL = 沿用该视频配置的默认工作流 (存量计划行为完全不变)
+  videoModel: text('video_model'),
   // JSON array of storyboard IDs, 一次批量生成的镜头
   shotIds: text('shot_ids').notNull(),
   shotCount: integer('shot_count').notNull().default(0),

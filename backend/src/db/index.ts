@@ -524,6 +524,10 @@ ensureColumn('storyboards', 'image_prompt_permanent', 'TEXT')
 //   启动 ensureColumn 自动加列, 无需手动 docker exec.
 ensureColumn('batch_video_schedules', 'per_shot_status', 'TEXT')
 
+// 2026-11-16 Sprint 49 (PM msg-20261116-200): batch_video_schedules 加 video_model 列
+//   计划级指定【具体工作流】(如 minimax_h3_803)。NULL = 用该视频配置的默认工作流 (存量计划不变)。
+ensureColumn('batch_video_schedules', 'video_model', 'TEXT')
+
 // 2026-10-16 Sprint 045 QA msg-20261016-068: video_generations.drama_id 历史 null 行回填
 //   背景: 158 条 video_generations 里 80 条 (50.6%) drama_id=null, 无法追溯所属剧集。
 //     根因是调用方传 undefined (batch-video-scheduler.ts 显式 undefined + routes/videos.ts

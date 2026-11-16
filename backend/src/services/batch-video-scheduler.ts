@@ -138,6 +138,7 @@ export async function initBatchVideoScheduler(): Promise<void> {
         scheduledAt: plan.scheduledAt,
         shotIds: plan.shotIds,
         videoConfigId: plan.videoConfigId,
+        videoModel: plan.videoModel,
       }, `plan-${plan.id}`) // reuse plan.id-derived cronJobId (避免重启后产生多个 cron job)
       db.update(schema.batchVideoSchedules)
         .set({ cronJobId })
@@ -173,6 +174,8 @@ export async function registerPlan(
     scheduledAt: string
     shotIds: string
     videoConfigId: number | null
+    /** ★ Sprint 49 (PM msg-20261116-200): 计划级指定的工作流 (NULL = 用默认工作流) */
+    videoModel?: string | null
   },
   reuseCronJobId?: string,
 ): Promise<string> {
@@ -356,6 +359,35 @@ async function triggerPlanImpl(planId: number): Promise<void> {
     }
   }
 
+  // ★ Sprint 49 (PM msg-20261116-200): 计划级指定的【具体工作流】(如 minimax_h3_803) ——
+  //   指定了 → 每一镜都用它 (用户显式选的, 不被自动路由换掉);
+  //   没指定 → 沿用下面的自动路由 (存量计划行为完全不变)。
+  const planVideoModel = (plan.videoModel || '').trim() || null
+  if (planVideoModel) {
+    logTaskProgress('BatchVideoScheduler', 'trigger-workflow-selected', {
+      planId, episodeId: plan.episodeId, videoModel: planVideoModel,
+      hint: '计划指定了工作流 → 每一镜都用它 (不走默认自动路由)',
+    })
+  }
+
+  // ★ 计划指定了工作流, 但这次用的视频配置不是 AutoDL ComfyUI → 工作流不生效。
+  //   【不静默换工作流】(用户选 803 是为了口型/音画同步, 悄悄换成默认工作流 = 白花钱) → 明确失败并说清原因。
+  if (planVideoModel && resolvedConfigId != null) {
+    const wfCfg = getConfigById(resolvedConfigId)
+    if (wfCfg && wfCfg.provider !== 'autodl-comfyui') {
+      const msg = `计划指定的工作流 ${planVideoModel} 只适用于 AutoDL ComfyUI 视频配置, 但这次用的配置 (id=${resolvedConfigId}) 的 provider 是 ${wfCfg.provider} → 改用 AutoDL 配置或去掉工作流`
+      logTaskError('BatchVideoScheduler', 'trigger-workflow-provider-mismatch', {
+        planId, episodeId: plan.episodeId, videoModel: planVideoModel,
+        configId: resolvedConfigId, provider: wfCfg.provider,
+      })
+      db.update(schema.batchVideoSchedules)
+        .set({ status: 'failed', finishedAt: now(), lastError: msg })
+        .where(eq(schema.batchVideoSchedules.id, planId))
+        .run()
+      return
+    }
+  }
+
   // 4. 串行跑每个 shot
   let successCount = 0
   let failedCount = 0
@@ -415,8 +447,11 @@ async function triggerPlanImpl(planId: number): Promise<void> {
       // 都没 frame: T2V 文生视频
       referenceMode = 'none'
     }
+    // ★ Sprint 49: 计划指定的工作流优先 (显式选的工作流不被自动路由换掉)
+    if (planVideoModel) modelOverride = planVideoModel
+
     logTaskProgress('BatchVideoScheduler', 'shot-mode-decided', {
-      planId, shotId, referenceMode, modelOverride,
+      planId, shotId, referenceMode, modelOverride, planVideoModel,
       hasFirst: !!sb.firstFrameImage, hasLast: !!sb.lastFrameImage, duration: sb.duration,
     })
 

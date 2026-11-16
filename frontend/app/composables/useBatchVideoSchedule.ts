@@ -12,6 +12,9 @@ export interface BatchVideoPlan {
   scheduledAt: string
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
   videoConfigId: number | null
+  // ★ Sprint 49 (PM msg-20261116-200): 计划级指定的【具体工作流】(如 minimax_h3_803)
+  //   null = 该视频配置的默认工作流 (存量计划没有这个字段 → 行为不变)
+  videoModel?: string | null
   shotIds: string  // JSON array string
   shotCount: number
   successCount: number
@@ -49,6 +52,8 @@ export interface CreateBatchVideoPlanInput {
   scheduled_at: string  // ISO datetime string, 本地时间 (scheduler timezone Asia/Shanghai)
   shot_ids: number[]
   video_config_id?: number | null
+  /** ★ Sprint 49: 计划级指定的工作流 (不传 = 用默认工作流) */
+  video_model?: string | null
 }
 
 /**
@@ -111,6 +116,7 @@ export function useBatchVideoSchedule(episodeId: Ref<number> | (() => number) | 
         scheduled_at: input.scheduled_at,
         shot_ids: input.shot_ids,
         video_config_id: input.video_config_id ?? null,
+        video_model: input.video_model ?? null,
       }
       const resp = await api.post<{ success: boolean; data: BatchVideoPlan }>(
         '/videos/batch-schedules',
