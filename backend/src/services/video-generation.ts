@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 // ★ Sprint 48 T6 (PM msg-20261116-194): 视频链路接【生图链路同一份】错误分类器
-import { classifyProviderError } from './provider-error-classify.js'
+import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
@@ -633,14 +633,24 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
       }
     }
   } catch (err: any) {
-    logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
+    const rawErr = err?.message || String(err)
+    // ★ Sprint 48 T6 收尾 (194 单验收第 5 条): 可重试的临时错误打上【[可重试]】标记 ——
+    //   跟生图/配音同一份协议 (provider-error-classify.ts) → 前端能区分
+    //   『临时错误(可以再试)』与『参数错(改了再试也没用)』, 提示语对应上。
+    //   不可重试的 (例: [参数校验] 那一镜 12 秒但工作流最多 10 秒) 不打标记。
+    const errCls = classifyProviderError(rawErr)
+    const errorMsg = errCls.retryable ? markRetryable(rawErr) : rawErr
+    logTaskError('VideoTask', 'process', {
+      id, provider: config.provider, error: errorMsg,
+      retryable: errCls.retryable, classifyReason: errCls.reason,
+    })
     // processVideoGeneration 没有 storyboardId 入参，从 DB 查一次
     const [vRecord] = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
     db.update(schema.videoGenerations)
-      .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
+      .set({ status: 'failed', errorMsg, updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
-    markStoryboardFailed(vRecord?.storyboardId, err.message)
+    markStoryboardFailed(vRecord?.storyboardId, errorMsg)
   }
 }
 

@@ -3,6 +3,9 @@ import { toast } from 'vue-sonner'
 import { isTransitionShot } from '~/utils/transition'
 import { videoAPI, composeAPI, imageAPI } from '~/composables/useApi'
 import type { Ref, ComputedRef } from 'vue'
+// ★ Sprint 48 T6 收尾 (194 单验收第 5 条): 错误分类的【可重试】标记与生图/配音共用同一份协议
+//   (useBatchPolicy 是 175 单建的共享批量策略, 后端 provider-error-classify.ts 打标记 → 前端这里认)
+import { isRetryableMessage, stripRetryableMarker } from './useBatchPolicy'
 
 // 2026-10-19 Sprint 13 Task B (PM msg-20261019-073): 批量视频提交间隔 5s。
 //   修前: pendingIds.forEach 一次性提交所有待生成镜头, 无间隔 —— 跟后端定时计划
@@ -49,7 +52,20 @@ export function useVideoGeneration(deps: Deps) {
 
   const pendingVideoIds = ref<number[]>([])
   const pendingComposeIds = ref<number[]>([])
-  const failedVideoMessages = ref<Record<number, string>>({})
+  /**
+ * ★ Sprint 48 T6 收尾: 视频失败提示 —— 后端给【可重试】的临时错误打了 [可重试] 标记,
+ *   这里按标记区分文案: 临时错误 (可以再点一次) vs 参数错 (改了配置再试也没用)。
+ *   标记本身不显示给用户 (stripRetryableMarker)。
+ */
+function videoErrorText(msg: string | null | undefined): string {
+  const raw = String(msg || '视频生成失败')
+  if (isRetryableMessage(raw)) {
+    return `临时错误, 可以再点一次重试: ${stripRetryableMarker(raw)}`
+  }
+  return raw
+}
+
+const failedVideoMessages = ref<Record<number, string>>({})
   const failedComposeMessages = ref<Record<number, string>>({})
 
   // Sprint 14 (PM msg-20261019-074): 降级提示, key = storyboardId, value = 展示文案。
@@ -312,7 +328,7 @@ export function useVideoGeneration(deps: Deps) {
         const isFailed = target?.status === 'failed'
         const done = !!(target?.video_url || target?.videoUrl) || isFailed
         if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-        if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
+        if (isFailed) toast.error(videoErrorText(target?.error_msg || target?.errorMsg))
         return done
       }, 60, 4000)
       return
@@ -334,7 +350,7 @@ export function useVideoGeneration(deps: Deps) {
           pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
           failedVideoMessages.value = {
             ...failedVideoMessages.value,
-            [storyboardId]: res?.error_msg || res?.errorMsg || '视频生成失败',
+            [storyboardId]: videoErrorText(res?.error_msg || res?.errorMsg),
           }
           toast.error(failedVideoMessages.value[storyboardId])
           return
