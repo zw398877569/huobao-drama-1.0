@@ -617,7 +617,7 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
         reason: durCheck.reason,
       })
       throw new Error(
-        `[视频生成] 这一镜 ${record.duration} 秒, 但工作流 ${workflowId} 最多 ${durCheck.cap} 秒 → `
+        `[参数校验] [视频生成] 这一镜 ${record.duration} 秒, 但工作流 ${workflowId} 最多 ${durCheck.cap} 秒 → `
         + `换个支持更长时长的工作流, 或把这一镜的时长改短 (不会被悄悄截短)`,
       )
     }

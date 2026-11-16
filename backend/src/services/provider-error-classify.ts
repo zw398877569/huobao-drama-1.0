@@ -20,6 +20,9 @@ export const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
 
 /** 不可重试的特征 (优先匹配): 鉴权/参数/内容安全/欠费 → 重试没有意义 */
 export const PERMANENT_ERROR_PATTERNS: string[] = [
+  // ★ Sprint 48 T6 (PM msg-20261116-194): 我们自己的【前置校验】错误 (例: 这一镜 11 秒但工作流最多 10 秒)
+  //   → 必须【一次失败不重试】: 重试 3 次只会白烧钱, 而且日志记成"网络错误"会误导排查
+  '[参数校验]', '参数校验失败', '本地校验',
   'content_policy', 'content policy', 'safety_violation', 'nsfw', '违规', '敏感内容',
   'unauthorized', 'forbidden', '鉴权', '认证失败', 'invalid api key', 'invalid_api_key',
   'authentication', 'invalid_request', 'invalid request', 'invalid parameter',
@@ -29,6 +32,9 @@ export const PERMANENT_ERROR_PATTERNS: string[] = [
 
 /** 可重试的特征 (文本形式): provider 的临时故障 */
 export const TRANSIENT_ERROR_PATTERNS: string[] = [
+  // ★ Sprint 48 T6: Node/undici 的网络错误文案 (fetch failed / ECONNRESET ...) → 归到可重试
+  //   (之前视频链路把这些错也记成"fetch-network-retry"但没有分类依据; 现在分类器能区分)
+  'fetch failed', 'econnrefused', 'econnreset', 'etimedout', 'eai_again', 'socket hang up',
   '模型维护中', '维护中', 'maintenance', 'model load is too high', 'model is busy',
   'overloaded', 'server is busy', 'server busy',
   'rate limit', 'rate_limit', 'too many requests',

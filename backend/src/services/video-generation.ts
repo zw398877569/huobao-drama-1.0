@@ -1,4 +1,6 @@
 import { db, schema } from '../db/index.js'
+// ★ Sprint 48 T6 (PM msg-20261116-194): 视频链路接【生图链路同一份】错误分类器
+import { classifyProviderError } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
@@ -50,7 +52,7 @@ function autoLoadFirstFrame(params: GenerateVideoParams): void {
     return
   }
   const best = rows.sort((a, b) => b.id - a.id)[0]
-  params.firstFrameUrl = best.localPath
+  params.firstFrameUrl = best.localPath ?? undefined
   logTaskProgress('VideoAPI', 'auto-loaded-first-frame', {
     storyboardId: params.storyboardId,
     imageGenId: best.id,
@@ -574,8 +576,18 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           throw new Error(`API error ${resp.status}: ${errText}`)
         }
 
-        const TRANSIENT_STATUS = new Set([408, 429, 500, 502, 503, 504])
-        if (!TRANSIENT_STATUS.has(resp.status)) {
+        // ★ Sprint 48 T6: 用同一份分类器 (原来这里自己写了一份 TRANSIENT_STATUS)
+        const cls = classifyProviderError(errText, resp.status)
+        if (!cls.retryable) {
+          logTaskWarn('VideoTask', 'video-api-error-not-retryable', {
+            id,
+            attempt: attempt + 1,
+            status: resp.status,
+            body: errText.slice(0, 240),
+            classifyReason: cls.reason,
+            matched: cls.matched,
+            matchedPermanent: cls.matchedPermanent,
+          })
           throw new Error(`API error ${resp.status}: ${errText}`)
         }
 
@@ -584,13 +596,35 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           attempt: attempt + 1,
           status: resp.status,
           body: errText.slice(0, 240),
+          classifyReason: cls.reason,
         })
         if (attempt < MAX_RETRIES - 1) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
         }
       } catch (err: any) {
         const lastErrText = err?.message || String(err)
-        logTaskWarn('VideoTask', 'fetch-network-retry', { id, attempt: attempt + 1, error: lastErrText })
+        // ★ Sprint 48 T6: 分类后再决定要不要重试
+        //   我们自己的【前置校验】错 (例: 这一镜 11 秒但工作流最多 10 秒) 之前被当"网络错误"重试 3 次,
+        //   日志还记成 fetch-network-retry → 排查时误判成平台/网络问题。现在: 参数错一次失败, 不重试。
+        const cls = classifyProviderError(lastErrText)
+        if (!cls.retryable) {
+          logTaskWarn('VideoTask', 'video-error-not-retryable', {
+            id,
+            attempt: attempt + 1,
+            error: lastErrText,
+            classifyReason: cls.reason,
+            matched: cls.matched,
+            matchedPermanent: cls.matchedPermanent,
+          })
+          throw err
+        }
+        logTaskWarn('VideoTask', 'fetch-network-retry', {
+          id,
+          attempt: attempt + 1,
+          error: lastErrText,
+          classifyReason: cls.reason,
+          matched: cls.matched,
+        })
         if (attempt < MAX_RETRIES - 1) {
           await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)))
           continue
