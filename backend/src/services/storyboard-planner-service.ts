@@ -599,9 +599,29 @@ export async function runStep2(opts: {
     keepRate: Math.round(verbatim.keepRate * 1000) / 10,
     keptChars: verbatim.keptChars,
     totalChars: verbatim.totalChars,
+    detailChars: verbatim.detailChars,
+    coverage: Math.round(verbatim.coverage * 1000) / 10,
+    emptyShots: verbatim.emptyShots,
     hardCount: verbatim.hardCount,
     softCount: verbatim.softCount,
   })
+  // ★ Sprint 48 单 196 (PM msg-20261116-196): 整集层面的兜底 ——
+  //   逐句比对进不去的空台词镜 (剧本有台词而拆解为空) 会让 hardCount=0 → 之前直接放行 (实测 21 镜 0 句台词仍 step2 DONE)。
+  //   ★ 台词整体缺失/保留率极低 → 判硬违规 → 报错让 step2 重试; 重试仍不合规就最终失败并明确告知用户。
+  if (verbatim.episodeViolations.reasons.length > 0) {
+    const detail = verbatim.episodeViolations.reasons.join('; ')
+    logTaskWarn('StoryboardPlanner', 'step2-dialogue-coverage-violation', {
+      episodeId,
+      keepRate: Math.round(verbatim.keepRate * 1000) / 10,
+      coverage: Math.round(verbatim.coverage * 1000) / 10,
+      scriptChars: verbatim.totalChars,
+      detailChars: verbatim.detailChars,
+      emptyShots: verbatim.emptyShots,
+      detail,
+      hint: '台词没对上/输出被截断 → 让 step2 重试 (不是逐句匹配能发现的, 整集层面的兜底)',
+    })
+    throw new Error(`[拆解] ${detail}`)
+  }
   if (verbatim.hardCount > 0) {
     const detail = formatVerbatimViolations(verbatim.violations)
     logTaskWarn('StoryboardPlanner', 'step2-dialogue-not-verbatim', {

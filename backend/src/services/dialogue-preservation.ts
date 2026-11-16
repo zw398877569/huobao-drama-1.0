@@ -28,6 +28,20 @@ export interface ScriptLine {
   norm: string
 }
 
+/**
+ * ★ Sprint 48 单 196 (PM msg-20261116-196): 整体覆盖阈值。
+ *   现状缺陷: 比对循环遇到【空 dialogue】的镜时根本不进 → 既不计入 keptChars 也不记违规
+ *   → "剧本 255 字、拆解 0 字" 这种最严重的情况 hardCount=0 → 直接放行 (单 196 实测)。
+ *   ★ 兜底: 拆解台词总量必须达到剧本台词总量的这个比例, 否则整体判硬违规 → 报错让 step2 重试。
+ */
+export const DIALOGUE_COVERAGE_MIN = 0.8
+
+/**
+ * ★ Sprint 48 单 196: 保留率阈值 (逐句匹配命中的字数 / 剧本台词字数)。
+ *   ★ 不能只看逐句命中: 整集被截断时, 单句比对可能都 miss → hardCount=0 但保留率极低 → 照样放行。
+ */
+export const DIALOGUE_RETENTION_MIN = 0.85
+
 /** 拆解出来的一镜台词 */
 export interface ShotDialogue {
   index: number
@@ -44,6 +58,22 @@ export interface DialogueVerbatimViolation {
   expected: string
   /** hard = 文字被改写/合并/凭空多出; soft = 只差标点 */
   kind: 'hard' | 'soft'
+}
+
+/** ★ 单 196: 整集层面的违规 (台词整体缺失/被截断) */
+export interface DialogueEpisodeViolation {
+  /** 剧本台词总字数 */
+  scriptChars: number
+  /** 拆解台词总字数 */
+  detailChars: number
+  /** 覆盖比例 (拆解/剧本) */
+  coverage: number
+  /** 保留率 (逐句命中的字数/剧本) */
+  retention: number
+  /** 空 dialogue 的镜数 */
+  emptyShots: number
+  /** 违规原因 (可读) */
+  reasons: string[]
 }
 
 /**
@@ -114,6 +144,14 @@ export function checkDialogueVerbatim(
   totalChars: number
   /** 保留率 (0~1) */
   keepRate: number
+  /** 拆解台词总字数 */
+  detailChars: number
+  /** 空 dialogue 的镜数 */
+  emptyShots: number
+  /** 覆盖比例 (拆解/剧本) */
+  coverage: number
+  /** ★ 单 196: 整集层面的违规 */
+  episodeViolations: DialogueEpisodeViolation
 } {
   const scriptLines = parseScriptDialogue(script)
   // ★ 比对用【归一化】的 "角色：台词" (剥掉状态描述) —— 剧本里带 "（合上书卷,抬眼）" 的行也能匹配上
@@ -126,14 +164,21 @@ export function checkDialogueVerbatim(
 
   const violations: DialogueVerbatimViolation[] = []
   let keptChars = 0
+  let detailChars = 0
+  let emptyShots = 0
 
   for (const shot of shots) {
     const lines = parseShotDialogue(shot)
+    if (lines.length === 0) {
+      // ★ 单 196: 空台词的镜要计数 (它不进比对循环 → 既不计入 keptChars 也不记违规)
+      emptyShots++
+    }
     for (const line of lines) {
       const parsedLine = splitSpeakerLine(line)
       // ★ 同样归一化 (剥掉状态描述) 后再比
       const raw = stripSpace(parsedLine ? `${parsedLine.speaker}:${parsedLine.text}` : line)
       if (!raw) continue
+      detailChars += stripSpace(parsedLine?.text ?? line).length
       // 1) 逐字命中 (原样引用) → 完全保留
       if (scriptRaw.includes(raw)) {
         keptChars += stripSpace(parsedLine?.text ?? line).length
@@ -182,7 +227,31 @@ export function checkDialogueVerbatim(
   const hardCount = violations.filter((v) => v.kind === 'hard').length
   const softCount = violations.length - hardCount
   const keepRate = totalChars > 0 ? Math.min(1, keptChars / totalChars) : 1
-  return { violations, hardCount, softCount, keptChars, totalChars, keepRate }
+
+  // ★ 单 196: 整集层面的兜底 (逐句判不出来的情况)
+  const reasons: string[] = []
+  if (totalChars > 0) {
+    const coverage = Math.min(1, detailChars / totalChars)
+    if (coverage < DIALOGUE_COVERAGE_MIN) {
+      reasons.push(
+        `拆解台词总量只有剧本的 ${Math.round(coverage * 100)}% (剧本 ${totalChars} 字, 拆解 ${detailChars} 字) `
+        + `→ 台词整体缺失或被截断 (低于 ${Math.round(DIALOGUE_COVERAGE_MIN * 100)}% 阈值)`,
+      )
+    }
+    if (keepRate < DIALOGUE_RETENTION_MIN) {
+      reasons.push(
+        `台词保留率只有 ${Math.round(keepRate * 100)}% (低于 ${Math.round(DIALOGUE_RETENTION_MIN * 100)}% 阈值)`,
+      )
+    }
+  }
+
+  return {
+    violations, hardCount, softCount, keptChars, totalChars, keepRate,
+    detailChars,
+    emptyShots,
+    coverage: totalChars > 0 ? Math.min(1, detailChars / totalChars) : 1,
+    episodeViolations: { scriptChars: totalChars, detailChars, coverage: totalChars > 0 ? Math.min(1, detailChars / totalChars) : 1, retention: keepRate, emptyShots, reasons },
+  }
 }
 
 /** 硬违规的提示 (给 LLM retry 用) */
