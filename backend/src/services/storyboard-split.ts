@@ -25,6 +25,9 @@ import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskWarn, logTaskSuccess, logTaskError } from '../utils/task-logger.js'
 import { getTextConfig } from './ai.js'
 import { countDialogueChars } from '../constants/shot-type-baseline.js'
+// ★ Sprint 48 T5 (PM msg-20261116-194): 拆镜后异步触发配音 + 状态登记
+import { generateTTSForDialogue } from './tts-concat.js'
+import { setTtsJobStatus } from './tts-status.js'
 // ★ Sprint 47 T7: 纯逻辑部分在 services/storyboard-split-rules.ts (不碰 DB → 可离线断言)
 import {
   SPLIT_MAX_DURATION,
@@ -141,6 +144,53 @@ async function callSplitLLM(input: {
  * @param storyboardId 要拆的镜
  * @param opts.useLlm 是否走 LLM 主路径 (默认 true; 失败自动降级到规则兜底)
  */
+/**
+ * ★ Sprint 48 T5 (PM msg-20261116-194): 拆镜后【异步】触发配音 (用新拆出来的台词)
+ *
+ * ★ 修一个真 bug (工单实测: 拆出来的两镜 tts_segments 段数 = 0, 且没有任何 AudioTask):
+ *   之前 split 路由调 generateTTSForDialogue(newId, epId, undefined, undefined),
+ *   而那个函数【只认传入的 dialogue 参数, 不回查 DB】→ 传 undefined → 解析出 0 段
+ *   → 直接 ignored 返回 → 连日志都没有 → 静默没声音。
+ *   → 现在: 从 DB 读新镜的 dialogue + atmosphere 再传进去。
+ *
+ * ★ 不阻塞拆分: 调用方 fire-and-forget, 状态登记到 tts-status (前端轮询)。
+ * ★ 幂等: 每次拆分产生的是【新镜】, 每镜各配一次自己的台词 → 不会产生重复配音。
+ */
+export async function triggerAutoTtsForSplitShots(
+  shots: Array<{ id: number; dialogue: string; atmosphere: string }>,
+  episodeId: number,
+): Promise<void> {
+  for (const s of shots) {
+    const startedAt = new Date().toISOString()
+    setTtsJobStatus({ storyboardId: s.id, status: 'running', startedAt })
+    try {
+      const r = await generateTTSForDialogue(s.id, episodeId, s.dialogue, s.atmosphere)
+      if (r.ignored) {
+        setTtsJobStatus({
+          storyboardId: s.id, status: 'skipped',
+          error: r.reason || '这镜没有可合成的台词', startedAt, finishedAt: new Date().toISOString(),
+        })
+        logTaskWarn('StoryboardSplit', 'auto-tts-skipped', { storyboardId: s.id, reason: r.reason })
+      } else {
+        setTtsJobStatus({
+          storyboardId: s.id, status: 'done', startedAt, finishedAt: new Date().toISOString(),
+        })
+        logTaskSuccess('StoryboardSplit', 'auto-tts-done', {
+          storyboardId: s.id, segmentCount: r.segments?.length ?? 0,
+        })
+      }
+    } catch (err: any) {
+      setTtsJobStatus({
+        storyboardId: s.id, status: 'failed',
+        error: err?.message || String(err), startedAt, finishedAt: new Date().toISOString(),
+      })
+      logTaskError('StoryboardSplit', 'auto-tts-failed', {
+        storyboardId: s.id, error: err?.message || String(err),
+      })
+    }
+  }
+}
+
 export async function splitShotIfNeeded(
   storyboardId: number,
   opts: { useLlm?: boolean } = {},

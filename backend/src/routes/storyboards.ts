@@ -6,7 +6,9 @@ import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
 import { generateTTSForDialogue } from '../services/tts-concat.js'
 // ★ Sprint 47 T7 (PM msg-20261115-188): 超长镜拆分
-import { splitShotIfNeeded } from '../services/storyboard-split.js'
+// ★ Sprint 48 T5 (PM msg-20261116-194): 拆镜后异步触发配音 + 状态可查
+import { splitShotIfNeeded, triggerAutoTtsForSplitShots } from '../services/storyboard-split.js'
+import { getTtsJobStatuses, isStaleTtsJob } from '../services/tts-status.js'
 import { getPresetByStyle } from '../services/negative-prompt-presets.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { analyzeSceneIntentionForScene, saveStoryboardIntent } from '../agents/scene-intention.js'
@@ -405,17 +407,40 @@ app.post('/:id/split', async (c) => {
   if (!outcome.split) {
     return success(c, outcome)
   }
-  // ★ 配音按新拆的台词重新生成 (失败不阻断拆分 → 用户可以手动重配)
-  const ttsResults: Array<{ storyboardId: number; ok: boolean; error?: string }> = []
-  for (const newId of outcome.newShotIds || []) {
-    try {
-      const r = await generateTTSForDialogue(newId, outcome.episodeId ?? 0, undefined, undefined)
-      ttsResults.push({ storyboardId: newId, ok: !r.ignored })
-    } catch (err: any) {
-      ttsResults.push({ storyboardId: newId, ok: false, error: err?.message || String(err) })
-    }
+  // ★ Sprint 48 T5: 必须把【新镜的台词】从 DB 读出来传进去 ——
+  //   generateTTSForDialogue 只认传入的 dialogue 参数 (不回查 DB), 之前传 undefined → 静默 ignored (没有声音)
+  const newShots = (outcome.newShotIds || []).map((sid) => {
+    const [row] = db.select({
+      dialogue: schema.storyboards.dialogue,
+      atmosphere: schema.storyboards.atmosphere,
+    })
+      .from(schema.storyboards)
+      .where(eq(schema.storyboards.id, sid)).all()
+    return { id: sid, dialogue: row?.dialogue ?? '', atmosphere: row?.atmosphere ?? '' }
+  })
+  // ★ 异步跑, 不阻塞拆分结果 (前端轮询 GET /storyboards/tts-status 看进行中/完成/失败)
+  void triggerAutoTtsForSplitShots(newShots, outcome.episodeId ?? 0)
+  return success(c, {
+    ...outcome,
+    tts: { status: 'started', storyboardIds: newShots.map((s) => s.id) },
+  })
+})
+
+/**
+ * ★ Sprint 48 T5: 配音状态查询 (拆镜后前端轮询; 多镜 → ids=1,2,3)
+ * ★ 路由声明在 '/:id' 通配段之前 —— 否则会被抢先 match (项目老坑)
+ */
+app.get('/tts-status', (c) => {
+  const ids = String(c.req.query('ids') || '')
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0)
+  const statuses = getTtsJobStatuses(ids)
+  // 超过 10 分钟还"生成中" → 当成异常, 不再让用户一直等
+  for (const [id, e] of Object.entries(statuses)) {
+    if (isStaleTtsJob(e)) statuses[Number(id)] = { ...e, status: 'failed', error: '配音生成超时 (可手动重试)' }
   }
-  return success(c, { ...outcome, tts: ttsResults })
+  return success(c, statuses)
 })
 
 // POST /storyboards/:id/analyze-intention

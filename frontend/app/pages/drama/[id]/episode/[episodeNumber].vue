@@ -623,6 +623,8 @@
                       <span class="tag" :class="getFirstFrame(selectedSb) ? 'tag-success' : ''">首帧 {{ getFirstFrame(selectedSb) ? '已生成' : '待生成' }}</span>
                       <span class="tag" :class="getLastFrame(selectedSb) ? 'tag-success' : ''">尾帧 {{ getLastFrame(selectedSb) ? '已生成' : '待生成' }}</span>
                       <span class="tag" :class="hasVid(selectedSb) ? 'tag-success' : ''">视频 {{ hasVid(selectedSb) ? '已生成' : '待生成' }}</span>
+                      <!-- ★ Sprint 48 T5: 配音状态 (拆镜后异步生成 → 进行中/完成/失败都看得见) -->
+                      <span class="tag" :class="ttsTagClass(selectedSb)" :title="ttsTagTitle(selectedSb)">{{ ttsTagText(selectedSb) }}</span>
                     </div>
                   </div>
                   <div class="detail-preview-grid">
@@ -2994,7 +2996,64 @@ const selectedTextConfigId = ref<string | null>(null)
 const storyboardModelPopoverOpen = ref(false)
 
 // ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (单镜上限 12 秒)
+// ★ Sprint 48 T5 (PM msg-20261116-194): 拆镜后配音在后台跑 → 这里轮询它的状态
 const splittingShotId = ref<number | null>(null)
+const ttsJobStatus = ref<Record<number, { status: string; error?: string }>>({})
+
+/** 拆镜后轮询配音状态 (进行中 → 完成/失败) */
+async function pollSplitTtsStatus(ids: number[]) {
+  if (!ids?.length) return
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 3000))
+    let st: any = {}
+    try {
+      st = await storyboardAPI.ttsStatus(ids)
+    } catch {
+      continue
+    }
+    ttsJobStatus.value = { ...ttsJobStatus.value, ...st }
+    const list = ids.map((id) => st[id]).filter(Boolean)
+    if (!list.length) continue
+    const failed = list.filter((s: any) => s.status === 'failed')
+    if (failed.length) {
+      toast.error(
+        `拆出的镜配音失败: ${failed.map((f: any) => f.error || '未知原因').join('; ')} —— 在该镜点【配音】可重试`,
+      )
+      await refresh()
+      return
+    }
+    if (list.every((s: any) => s.status === 'done' || s.status === 'skipped')) {
+      const skipped = list.filter((s: any) => s.status === 'skipped').length
+      toast.success(
+        skipped
+          ? `配音完成 (${skipped} 镜没有台词, 已跳过)`
+          : '配音已按新台词生成 ✓',
+      )
+      await refresh()
+      return
+    }
+  }
+  toast.warning('配音还在生成, 可以稍后刷新看结果')
+}
+
+/** 镜头详情面板的配音状态标签 */
+function ttsTagText(sb: any): string {
+  const st = ttsJobStatus.value[sb?.id]
+  if (st?.status === 'running') return '配音 生成中'
+  if (st?.status === 'failed') return '配音 失败'
+  const has = !!(sb?.tts_segments || sb?.ttsSegments)
+  return `配音 ${has ? '已生成' : '待生成'}`
+}
+function ttsTagClass(sb: any): string {
+  const st = ttsJobStatus.value[sb?.id]
+  if (st?.status === 'failed' || st?.status === 'running') return 'tag-warning'
+  return (!!(sb?.tts_segments || sb?.ttsSegments)) ? 'tag-success' : ''
+}
+function ttsTagTitle(sb: any): string {
+  const st = ttsJobStatus.value[sb?.id]
+  if (st?.error) return st.error
+  return ''
+}
 async function splitShot(sb: any) {
   if (!sb?.id || splittingShotId.value) return
   splittingShotId.value = sb.id
@@ -3009,8 +3068,10 @@ async function splitShot(sb: any) {
       return
     }
     const nums = (res?.newShotNumbers || []).join(' / ')
-    toast.success(`已拆成两镜 (#${nums}); 配音会按新台词重新生成, 首帧图需要再点一次生成`)
+    toast.success(`已拆成两镜 (#${nums}); 配音正在后台生成, 首帧图需要再点一次生成`)
     await refresh()
+    // ★ Sprint 48 T5: 配音在后台跑 → 轮询状态, 完成后/失败都给用户明确反馈
+    void pollSplitTtsStatus(res?.tts?.storyboardIds || [])
   } catch (e: any) {
     toast.error(e?.message || '拆分失败')
   } finally {

@@ -107,6 +107,8 @@ export const storyboardAPI = {
   // Sprint 18: 台词编辑弹窗的实时解析预览 (纯只读, 后端解析, 前端不自己解析)
   previewDialogue: (id: number, body: { dialogue: string }) => api.post(`/storyboards/${id}/preview-dialogue`, body),
   analyzeIntention: (id: number) => api.post(`/storyboards/${id}/analyze-intention`),
+  // ★ Sprint 48 T5: 拆镜后异步配音的状态查询 (进行中/完成/失败)
+  ttsStatus: (ids: number[]) => api.get('/storyboards/tts-status', { ids: ids.join(',') }),
   evaluate: (id: number) => api.post(`/storyboards/${id}/evaluate`),
   retake: (id: number, body: { dimension: string; user_note?: string }) => api.post(`/storyboards/${id}/retake`, body),
   // ★ Sprint 47 T7 (PM msg-20261115-188): 拆分超长镜 (单镜上限 12 秒)
