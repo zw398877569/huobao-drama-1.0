@@ -106,6 +106,40 @@ export function isAuthoritativeRole(
 }
 
 /**
+ * ★ Sprint 50 T2 (PM msg-20261117-205): 【低唤醒台词】识别 (温情 / 告别 / 不舍 / 悼念 / 克制)
+ *
+ * 【现象 (工单实测)】祝英台对山伯的告别 (温柔克制) 所在镜的剧情目的是【情感爆发】
+ *   → 被映射成 angry → 平台拿 angry 渲染一句克制的告别 → 用户实机听完: 没听出来生气的语气。
+ *   全库同类共 2 条 (drama21 镜#21 / drama20 镜#22)。
+ *
+ * 【与单 202 的关系 (两单共同缺的那条规则)】
+ *   202: 该 angry 却判成 surprised (强势角色的命令句落在反转意图里)
+ *   205: 该 sad 却判成 angry (低唤醒台词落在高唤醒意图里)
+ *   → 共同点: 台词语义的唤醒度可以覆盖剧情目的的粗映射。
+ *
+ * ★ 判定口径 (两条都要满足, 宁可漏判也不误伤 angry):
+ *   ① 台词以【称呼 + 逗号】开头 (在跟某个人说话) —— 排除陈述式狠话
+ *   ② 台词含【离别 / 悼念 / 克制】语义标记
+ *   ★ 再叠一条: 台词若同时是【命令/斥责/威胁】(单 202 的判定) → 不算低唤醒 (命令句永远 angry)
+ */
+const LOW_AROUSAL_VOCATIVE = /^[^，。！？；、\s]{1,4}[，,]/
+/** 离别 / 悼念 / 不舍 → sad */
+const FAREWELL_MARKS = /告别|再见|保重|一路平安|来生|下辈子|最后一面|明早|明日|来日|来晚|来迟|照旧|勿念|别念|不等我|不要等|坟前|墓前|牌位|灵前|棺|留在这里|留下的/
+/** 克制 / 温情 / 安慰 → calm */
+const TENDER_MARKS = /别担心|放心|安心|照顾好自己|好好活着|我不怪|原谅我|等我的信|慢慢来|有我在/
+
+export function isLowArousalLine(text: string | null | undefined): 'sad' | 'calm' | null {
+  if (!text) return null
+  const s = String(text)
+  // ★ 命令/斥责/威胁句永远不是低唤醒 (单 202 的规则优先)
+  if (isCommandOrThreatLine(s)) return null
+  if (!LOW_AROUSAL_VOCATIVE.test(s)) return null
+  if (FAREWELL_MARKS.test(s)) return 'sad'
+  if (TENDER_MARKS.test(s)) return 'calm'
+  return null
+}
+
+/**
  * 剧情目的 → 情绪模板 (★ 最高优先级)。
  *
  * ★ Sprint 47 单 189 (PM msg-20261115-189): 按真实数据细化 —— ep21 的剧情目的分布是
@@ -128,6 +162,9 @@ const INTENT_EMOTION: Record<string, TTSEmotion> = {
 }
 
 /** 关键词 → 情绪 (台词兜底 / 性格基线共用) */
+/** ★ 高唤醒情绪 (会整体抬高基频/听感激动) —— 单 205 的降级判断只看这几类 */
+const HIGH_AROUSAL_EMOTIONS = new Set<TTSEmotion>(['angry', 'fearful', 'surprised'])
+
 export function emotionFromKeywords(text: string | null | undefined): TTSEmotion | null {
   if (!text) return null
   const lower = text.toLowerCase()
@@ -172,8 +209,17 @@ export function inferEmotion(ctx: EmotionContext): TTSEmotion {
   if (authoritative && isCommandOrThreatLine(ctx.dialogue)) {
     return 'angry'
   }
-  // 1. 剧情目的 (最高): 这场戏在整集里干什么
   const intent = ctx.intentFunction ? String(ctx.intentFunction).trim() : ''
+  // ★ Sprint 50 T2 (PM msg-20261117-205): 【低唤醒台词】(告别/悼念/克制) 撞上【高唤醒剧情目的】→
+  //   台词语义覆盖意图的粗映射 → sad / calm (而不是 angry/fearful/surprised)。
+  //   ★ 只在意图映射出【高唤醒】情绪时才降 (意图本身是 neutral/calm/sad 的不动)。
+  //   ★ 放在单 202 的规则【之后】: 命令句永远 angry (202 的成果不能回退)。
+  const intentEmotion = intent ? INTENT_EMOTION[intent] : undefined
+  if (intentEmotion && HIGH_AROUSAL_EMOTIONS.has(intentEmotion)) {
+    const low = isLowArousalLine(ctx.dialogue)
+    if (low) return low
+  }
+  // 1. 剧情目的 (最高): 这场戏在整集里干什么
   if (intent) {
     const mapped = INTENT_EMOTION[intent]
     if (mapped) return mapped
