@@ -1747,6 +1747,14 @@
               >
                 <option v-for="t in videoResolutionOptions" :key="t" :value="t">{{ t }}</option>
               </select>
+              <!-- ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (默认开; 只对 minimax_h3_803 生效) -->
+              <label
+                class="char-ref-toggle"
+                title="只对 minimax_h3_803 生效: 把本镜出场角色的形象图一起喂给模型 (稳住角色脸型)。关掉后与改动前一致"
+              >
+                <input type="checkbox" v-model="videoCharacterRefs" />
+                <span>角色参考图</span>
+              </label>
               <span v-if="videoConfigIds['videos']" class="tag" style="font-size:10px">自定义</span>
               <div class="ml-auto flex gap-1">
                 <!-- Sprint 13 Task E: 批量下载原始视频 (用户 2026-10-19 确认 videos 页=原始, compose 页=合成后) -->
@@ -1754,7 +1762,7 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   批量下载
                 </button>
-                <button class="btn btn-sm" @click="batchVideos(videoConfigId, videoResolutionTier)">
+                <button class="btn btn-sm" @click="batchVideos(videoConfigId, videoResolutionTier, videoCharacterRefs)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
@@ -1823,7 +1831,7 @@
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId, videoResolutionTier)">
+                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId, videoResolutionTier, videoCharacterRefs)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
@@ -3281,6 +3289,11 @@ const videoModelPopoverOpen = ref(false)
 //     → 前端不会跟后端漂移
 const autodlResolutionTiers = ref<Record<string, { tiers: string[]; defaultTier: string }>>({})
 const videoResolutionTier = ref<string>('')
+/**
+ * ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (默认开)
+ *   只对 minimax_h3_803 生效 —— 把本镜出场角色的形象图一起喂给模型, 稳住角色脸型。
+ */
+const videoCharacterRefs = ref<boolean>(true)
 
 /** 当前选中的视频工作流 id (从 "<configId>:<model>" 的 model 部分取) */
 const currentVideoWorkflowId = computed(() => {
@@ -6247,6 +6260,18 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   background: var(--accent-bg, rgba(99, 102, 241, 0.08));
 }
 /* ★ Sprint 43: 分辨率档位下拉 (跟模型按钮同一排, 同一套视觉) */
+/* ★ Sprint 52: 角色参考图开关 (视频生成页) */
+.char-ref-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.char-ref-toggle input { margin: 0; cursor: pointer; }
+
 .res-select {
   padding: 4px 8px;
   border-radius: 6px;

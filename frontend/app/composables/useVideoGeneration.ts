@@ -238,21 +238,36 @@ const failedVideoMessages = ref<Record<number, string>>({})
   }
 
   /** ★ Sprint 43: resolution = 用户选的分辨率档位 (如 '960p'; 竖/横按每个镜头的画幅自动选) */
-  async function genVid(sb: any, configId?: number | string | null, resolution?: string | null) {
+  /**
+   * ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (只对 minimax_h3_803 生效)
+   *   ★ 只在【关】的时候才往请求体里加这个字段 → 开着的时候提交体与改动前【逐字一致】,
+   *     关掉时后端也能区分 (body.include_character_refs === false)。
+   */
+  async function genVid(
+    sb: any,
+    configId?: number | string | null,
+    resolution?: string | null,
+    includeCharacterRefs?: boolean,
+  ) {
     // ★ Sprint 36: 先置 pending —— 等后一镜首帧可能要几分钟, 期间按钮必须置灰,
     //   否则能重复点 → 重复提交 → 重复扣费。
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
     try {
       delete failedVideoMessages.value[sb.id]
       applyFallbackReason(sb.id, null)  // Sprint 14: 重新生成前先清掉上一轮的降级 tag
-      await genVidInner(sb, configId, resolution)
+      await genVidInner(sb, configId, resolution, includeCharacterRefs)
     } catch (e: any) {
       pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
       toast.error(e.message)
     }
   }
 
-  async function genVidInner(sb: any, configId?: number | string | null, resolution?: string | null) {
+  async function genVidInner(
+    sb: any,
+    configId?: number | string | null,
+    resolution?: string | null,
+    includeCharacterRefs?: boolean,
+  ) {
     // ★ Sprint 29 follow-up Task C (PM msg-20261102-133): 【只取英文版】—— 不再重复翻译。
     //   数据方向 (PM 决策 D1): 中文版 = 源, 英文版 = 翻译产物; 翻译【只在保存时发生一次】。
     //   以前这里取中文版 → 后端 video-generation 再翻一次 → 每镜多一次 LLM 调用
@@ -304,6 +319,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
     if (configId != null) params.config_id = configId
     // ★ Sprint 43: 分辨率档位 (空 = 用该工作流的默认档)
     if (resolution) params.resolution = resolution
+    // ★ Sprint 52: 角色参考图开关 (只在关时传 → 开着时请求体与改动前逐字一致)
+    if (includeCharacterRefs === false) params.include_character_refs = false
     if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
     else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
     else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
@@ -365,7 +382,11 @@ const failedVideoMessages = ref<Record<number, string>>({})
     toast.error('视频生成超时')
   }
 
-  function batchVideos(configId?: number | string | null, resolution?: string | null) {
+  function batchVideos(
+    configId?: number | string | null,
+    resolution?: string | null,
+    includeCharacterRefs?: boolean,
+  ) {
     const pendingIds = ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
     if (!pendingIds.length) return
 
@@ -376,7 +397,7 @@ const failedVideoMessages = ref<Record<number, string>>({})
       for (let i = 0; i < pendingIds.length; i++) {
         const id = pendingIds[i]
         const sb = ctx.sbs.value.find(item => item.id === id)
-        if (sb) await genVid(sb, configId, resolution)
+        if (sb) await genVid(sb, configId, resolution, includeCharacterRefs)
         if (i < pendingIds.length - 1) await sleep(BATCH_SUBMIT_INTERVAL_MS)
       }
     }
