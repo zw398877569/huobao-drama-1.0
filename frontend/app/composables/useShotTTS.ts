@@ -96,6 +96,27 @@ export function useShotTTS(deps: Deps) {
     } catch { return null }
   }
 
+  /**
+   * ★ Sprint 51 T3 (PM msg-20261117-204): 音高体检结果 ——
+   *   后端在生成后实测了基频; 判为异常的段会自动降参重试, 3 次仍异常就标出来让用户知道。
+   *   返回: anomaly=有没有兜不住的异常段, retries=重试了几次, f0Hz=最高实测基频
+   */
+  function getPitchAnomalyInfo(sb: any): { anomaly: boolean; retries: number; f0Hz: number } {
+    const segs = getTTSSegments(sb) as any[] | null
+    if (!segs || !segs.length) return { anomaly: false, retries: 0, f0Hz: 0 }
+    let anomaly = false
+    let retries = 0
+    let f0Hz = 0
+    for (const g of segs) {
+      if (g?.pitchAnomaly) anomaly = true
+      const r = Number(g?.pitchRetries || 0)
+      if (r > retries) retries = r
+      const f = Number(g?.f0Hz || 0)
+      if (f > f0Hz) f0Hz = f
+    }
+    return { anomaly, retries, f0Hz }
+  }
+
   // 台词有几段 (按行/分号计) —— 多角色规范化后是多行, 卡片上要能一眼看出
   function getDialogueLineCount(sb: any) {
     const d = (sb?.dialogue || '').trim()
@@ -278,6 +299,8 @@ export function useShotTTS(deps: Deps) {
     getDialogueSpeakerRaw, getDialogueText, getDialogueBodyNormalized, isTTSIgnorable,
     hasDialogue, hasTTS, getTTSUrl,
     getTTSSegments, getDialogueSpeaker, getDialogueLineCount,
+    // ★ Sprint 51 T3: 音高体检结果 (哪几镜异常 + 重试了几次)
+    getPitchAnomalyInfo,
     pendingTTSIds, isPendingTTS,
     genShotTTS, batchShotTTS,
     // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误)

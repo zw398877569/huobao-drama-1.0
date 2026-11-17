@@ -25,6 +25,8 @@ import { computeWrittenBackDuration, TTS_DURATION_MARGIN_SEC } from '../constant
 // ★ Sprint 47 T2 (PM msg-20261115-188): 情绪推断 (剧情目的优先) + 语速解耦
 import { inferEmotion, inferSpeed, characterSpeedText, isPlatformEmotion, emotionStrengthToParams } from './tts-emotion.js'
 import { parseDialogueSegments, type DialogueSegment } from '../utils/dialogue-parser.js'
+// ★ Sprint 51 T2 (PM msg-20261117-204): 配音【音高体检】(生成后实测基频 → 异常则降参重试)
+import { measurePitchHealth } from './audio-features.js'
 import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
@@ -167,6 +169,17 @@ export interface TTSSegmentMeta {
   isNarrator: boolean
   segmentPath: string  // 相对路径,例如 static/audio/seg_xxx.mp3
   durationMs?: number
+  // ★ Sprint 51 T2 (PM msg-20261117-204): 音高体检结果 + 最终采用的参数
+  /** 实测中位基频 (Hz); 0/未测到 = 没测出来 */
+  f0Hz?: number
+  /** 判定为音高异常 (刺耳/尖叫) —— 重试用尽后仍异常 */
+  pitchAnomaly?: boolean
+  /** 重试次数 (0 = 一次就过) */
+  pitchRetries?: number
+  /** 最终采用的音高 (半音) */
+  pitchUsed?: number
+  /** 最终采用的 voice_modify.intensity */
+  intensityUsed?: number
 }
 
 export interface TTSComposeResult {
@@ -190,6 +203,55 @@ function coalesceAdjacent(segments: DialogueSegment[]): Array<{ speaker: string;
     }
   }
   return out
+}
+
+/**
+ * ★ Sprint 51 T2 (PM msg-20261117-204): 音高体检的判定与重试参数
+ *   · 绝对下限 340Hz: 女声正常段 203~302Hz / 异常段 385~524Hz → 340 是两侧各留 40+Hz 的干净中间带
+ *   · 相对基线 ×1.3: 【天生偏高】的角色不会被误判 (相对口径比绝对口径稳)
+ *   · 最多 3 次: 原样 → 原样 → 降参 (与 175 单批量重试口径一致)
+ */
+const PITCH_ANOMALY_ABS_HZ = 340
+const PITCH_ANOMALY_RATIO = 1.3
+const PITCH_HEALTH_MAX_ATTEMPTS = 3
+
+/** 音频文件的绝对路径 (generateTTS 返回的是 'static/audio/xxx.mp3' 相对路径) */
+function resolveAudioAbsPath(rel: string): string {
+  if (path.isAbsolute(rel)) return rel
+  const dataDir = process.env.STORAGE_PATH || path.resolve(process.cwd(), 'data/static')
+  const stripped = rel.startsWith('static/') ? rel.slice('static/'.length) : rel
+  return path.join(dataDir, stripped)
+}
+
+/**
+ * ★ Sprint 51 T2: 取该角色【本集其它镜】的实测基频中位数 (相对基线口径用)
+ *   数据源: storyboards.tts_segments 里每段落的 f0Hz (体检时写进去的)
+ *   没有历史数据 → 返回 0 (只用绝对阈值 340Hz)
+ */
+function loadSpeakerPitchBaseline(episodeId: number, speaker: string, excludeStoryboardId?: number): number {
+  try {
+    const rows = db.select({ id: schema.storyboards.id, segs: schema.storyboards.ttsSegments })
+      .from(schema.storyboards)
+      .where(eq(schema.storyboards.episodeId, episodeId))
+      .all()
+    const vals: number[] = []
+    for (const r of rows) {
+      if (excludeStoryboardId && r.id === excludeStoryboardId) continue
+      if (!r.segs) continue
+      let arr: any[] = []
+      try { arr = JSON.parse(r.segs) } catch { continue }
+      for (const g of arr) {
+        if (g?.speaker !== speaker) continue
+        const f = Number(g?.f0Hz)
+        if (Number.isFinite(f) && f > 0) vals.push(f)
+      }
+    }
+    if (!vals.length) return 0
+    vals.sort((a, b) => a - b)
+    return vals[Math.floor(vals.length / 2)]
+  } catch {
+    return 0
+  }
 }
 
 /** 取本集所属 drama 的全部角色 (语音分配 + 角色级语音参数都用它) */
@@ -419,18 +481,62 @@ export async function generateTTSForDialogue(
     // 2026-09-23 问题 3: 段内长句切分 (默认 ≤20 字, 让 TTS 按气口自然合成)
     const sentences = splitLongText(m.text)
     const finalText = sentences.join(' ')  // MiniMax TTS 支持空格分隔多短句
-    const segPath = await generateTTS({
-      text: finalText,
-      voice,
-      configId: configId ?? undefined,
-      emotion: segEmotion,
-      speed: segSpeed,
-      // ★ Sprint 47 T1: 角色级音量/音高/声音修饰 (undefined → 保持现状)
-      // ★ Sprint 47 T3: vol 可被情绪强度推导值补上 (显式配置优先)
-      vol: segVol,
-      pitch: speakerParams.pitch,
-      voiceModify: segVoiceModify,
-    })
+    // ★ Sprint 51 T2 (PM msg-20261117-204): 生成后【音高体检】+ 异常时【降参重试】
+    //   · 判定: 实测基频 > max(340Hz, 该角色本集基线 × 1.3) → 音高异常 (刺耳/尖叫)
+    //   · 重试: 第 1 次重试 = 原样 (有的段只是随机抽到高值), 第 2 次起 = 降参 (pitch -1 / intensity -10)
+    //   · 最多 3 次; 3 次仍异常 → 保留最后一次 + flow-log warning + 用户可见提示 (不静默吞掉)
+    const baselineHz = loadSpeakerPitchBaseline(episodeId, m.speaker, storyboardId)
+    const anomalyThresholdHz = Math.max(
+      PITCH_ANOMALY_ABS_HZ,
+      baselineHz > 0 ? baselineHz * PITCH_ANOMALY_RATIO : 0,
+    )
+    let usedPitch = speakerParams.pitch
+    let usedIntensity = segVoiceModify?.intensity
+    let segPath = ''
+    let health = { f0Hz: 0, frames: 0, spread: 0 }
+    let attempts = 0
+    let pitchAnomaly = false
+
+    for (let attempt = 1; attempt <= PITCH_HEALTH_MAX_ATTEMPTS; attempt++) {
+      attempts = attempt
+      segPath = await generateTTS({
+        text: finalText,
+        voice,
+        configId: configId ?? undefined,
+        emotion: segEmotion,
+        speed: segSpeed,
+        // ★ Sprint 47 T1: 角色级音量/音高/声音修饰 (undefined → 保持现状)
+        // ★ Sprint 47 T3: vol 可被情绪强度推导值补上 (显式配置优先)
+        vol: segVol,
+        pitch: usedPitch,
+        voiceModify: usedIntensity != null
+          ? { ...(segVoiceModify || {}), intensity: usedIntensity }
+          : segVoiceModify,
+      })
+      health = await measurePitchHealth(resolveAudioAbsPath(segPath))
+      pitchAnomaly = health.f0Hz > 0 && health.f0Hz > anomalyThresholdHz
+      if (!pitchAnomaly) break
+      logTaskWarn('TTSConcat', 'pitch-anomaly-detected', {
+        storyboardId, episodeId, speaker: m.speaker, attempt,
+        f0Hz: health.f0Hz, thresholdHz: Math.round(anomalyThresholdHz), baselineHz: Math.round(baselineHz),
+        pitch: usedPitch, intensity: usedIntensity,
+        hint: attempt === 1 ? '原样重试一次' : attempt === 2 ? '降参重试 (pitch -1 / intensity -10)' : '重试用尽',
+      })
+      if (attempt === 1) continue              // ★ 第 1 次重试 = 原样
+      if (attempt === 2) {                    // ★ 第 2 次起 = 降参
+        usedPitch = (usedPitch ?? 0) - 1
+        if (usedIntensity != null) usedIntensity = usedIntensity - 10
+      }
+    }
+    if (pitchAnomaly) {
+      // ★ 3 次仍异常 → 明确记录 (前端会据此提示用户试听/手动重试), 不静默吞掉
+      logTaskWarn('TTSConcat', 'pitch-anomaly-persisted', {
+        storyboardId, episodeId, speaker: m.speaker, f0Hz: health.f0Hz,
+        thresholdHz: Math.round(anomalyThresholdHz), attempts,
+        pitch: usedPitch, intensity: usedIntensity,
+        hint: '音高异常没兜住 → 保留最后一次, 用户需要试听/手动重试',
+      })
+    }
     segPaths.push(segPath)
     meta.push({
       speaker: m.speaker,
@@ -438,6 +544,11 @@ export async function generateTTSForDialogue(
       voice,
       isNarrator: m.isNarrator,
       segmentPath: segPath,
+      f0Hz: health.f0Hz || undefined,
+      pitchAnomaly: pitchAnomaly || undefined,
+      pitchRetries: attempts > 1 ? attempts - 1 : undefined,
+      pitchUsed: usedPitch,
+      intensityUsed: usedIntensity,
     })
   }
 

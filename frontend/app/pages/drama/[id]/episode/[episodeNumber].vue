@@ -1246,6 +1246,12 @@
                     <div class="dub-desc">{{ getDialogueText(sb) || '未填写文本' }}<span v-if="getDialogueLineCount(sb) > 1" class="tag tag-info" style="margin-left:6px">{{ getDialogueLineCount(sb) }} 段</span></div>
                     </div>
                     <span class="tag" :class="hasTTS(sb) ? 'tag-success' : ''">{{ hasTTS(sb) ? '已生成' : '待生成' }}</span>
+                    <!-- ★ Sprint 51 T3: 音高异常提示 (只在真的有异常镜时出现, 没有异常不加任何东西) -->
+                    <span
+                      v-if="getPitchAnomalyInfo(sb).anomaly"
+                      class="tag tag-warning"
+                      :title="'实测基频 ' + Math.round(getPitchAnomalyInfo(sb).f0Hz) + 'Hz 偏高 (自动重试 ' + getPitchAnomalyInfo(sb).retries + ' 次仍偏高) —— 建议试听, 不满意就手动重新生成'"
+                    >音高异常</span>
                   </div>
                 <div class="dub-meta">
                   <span class="dim">{{ sb.shot_type || sb.shotType || '未设景别' }}</span>
@@ -2948,6 +2954,8 @@ const {
   getDialogueSpeakerRaw, getDialogueText, isTTSIgnorable,
   hasDialogue, hasTTS, getTTSUrl,
   getTTSSegments, getDialogueSpeaker,
+  // ★ Sprint 51 T3: 音高体检结果
+  getPitchAnomalyInfo,
   pendingTTSIds, isPendingTTS,
   genShotTTS, batchShotTTS,
   // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误 + 只重试失败的入口)
