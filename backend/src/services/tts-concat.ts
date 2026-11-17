@@ -380,6 +380,11 @@ export async function generateTTSForDialogue(
     const rawEmotion = inferEmotion({
       intentFunction: ttsContext.intentFunction,
       personality: speakerChar?.personality ?? ttsContext.personality,
+      // ★ Sprint 50 T2 (PM msg-20261117-202): 角色立场也参与情绪判定 ——
+      //   反派/威严角色的命令句不该被配成"惊讶"(工单 scope 只列了 tts-emotion.ts,
+      //   这里只是把已有的角色行里的 role/description 传进去, 不改任何其它逻辑)。
+      characterRole: speakerChar?.role ?? null,
+      characterDescription: speakerChar?.description ?? null,
       dialogue: m.text,
       atmosphere,
     })

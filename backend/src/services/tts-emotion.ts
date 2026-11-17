@@ -40,6 +40,72 @@ const KEYWORDS_DISGUSTED = /厌恶|嫌弃|反感|恶心|鄙夷|不屑|disgust|di
 const KEYWORDS_FLUENT = /生动|轻快|俏皮|诙谐|幽默|fluent|lively/
 
 /**
+ * ★ Sprint 50 T2 (PM msg-20261117-202): 【命令句 / 斥责句 / 威胁句】识别。
+ *
+ * 【为什么必须单独识别 (根因)】
+ *   情绪的第一优先级是【剧情目的】, 而 反转 → surprised (意外)。
+ *   反派角色的狠话 (命令/斥责/威胁) 常常正好落在"反转"意图的镜里
+ *   → 被配成惊讶 → 威严的母亲听起来像"被吓到 / 意外"的人。
+ *   实测 drama21/ep22: 梁母 12 段里 4 段被配成 surprised, 恰好都是她最有威慑力的命令句
+ *   (「来人！把西院的门锁上！」「你敢想？」「明日之前谁也不许出来」)。
+ *
+ * 【为什么它能优先于剧情目的】
+ *   这类句子的语义【与镜头意图无关】—— 在铺垫镜里它也还是命令/威胁,
+ *   所以按台词判出来的情绪是【稳定的】(同一句台词在不同分镜里不会一会儿惊讶一会儿发怒)。
+ *   ★ 双条件才生效 (① 是命令/斥责/威胁句 ② 说话人是强势/反派/威严型角色)
+ *     → 女主等普通角色的台词完全不受影响 (她的「先把轿子备好」这种祈使句也不改)。
+ */
+const COMMAND_LINE_PATTERNS: RegExp[] = [
+  /来人/,                          // 「来人！把西院的门锁上！」
+  /给我[滚拿抓]/,                  // 「给我滚」
+  /把[^，。！？；\n]{1,10}(锁|关|带|赶|押|备|退|撤|抓|扔|领|交|拽|拖)/,  // 「把西院的门锁上」「把英台带离正厅」
+  /(不许|不准|不得|谁也不许|别想|休想|休要)/,  // 「明日之前谁也不许出来」
+  /(立刻|马上|即刻|现在就)/,
+  /(滚开|滚出去|住口|闭嘴|跪下|站住|别动)/,
+  /(带走|押下去|关起来|锁上|锁好|锁死|看住她|看好他|按我说的|听我的|听好了)/,
+]
+
+/** 斥责 / 威胁句 */
+const THREAT_LINE_PATTERNS: RegExp[] = [
+  /你敢/,                          // 「你敢烧？」「你敢想？」
+  /敢(出|想|问|做|违|来)/,          // 「敢出府一步」
+  /(休想|找死|反了|放肆|不知死活|不知轻重|混账|混帐|不知礼数|不知羞)/,
+  /(否则|后果自负|让你后悔|别怪我不|识相|聪明点|我送你|送你走|押去|赶去|别逼我)/,
+  /(凭什么|你算什么|你有什么资格|还有脸)/,
+]
+
+/**
+ * 这句话是不是【命令句 / 斥责句 / 威胁句】。
+ * ★ 纯函数 → 可离线断言 (Sprint 50 T2 的验收就是这么验的)。
+ */
+export function isCommandOrThreatLine(text: string | null | undefined): boolean {
+  if (!text) return false
+  const s = String(text)
+  return COMMAND_LINE_PATTERNS.some((re) => re.test(s)) || THREAT_LINE_PATTERNS.some((re) => re.test(s))
+}
+
+/**
+ * ★ Sprint 50 T2: 【强势 / 反派 / 威严】角色识别。
+ *   三个字段一起看: role (反派/女主/配角…) + 性格 + 简介。
+ *   ★ 角色性格/简介里出现"威严/强势/压人/冷硬"这类词也算 (role 字段没写的项目也能覆盖)。
+ */
+const AUTHORITATIVE_ROLE_PATTERNS: RegExp[] = [
+  /反派|反面角色|恶人|恶毒|歹毒|狠角色/,
+  /(太后|皇帝|皇上|王爷|家主|族长|掌门|教主|土司|主母)/,
+  /(威严|强势|强硬|霸道|专断|独断|说一不二|不怒自威|颐指气使|盛气凌人|高高在上|发号施令|冷硬|狠厉|心狠|手辣|不容置疑|压人|施压|冷酷|说一不二)/,
+]
+
+export function isAuthoritativeRole(
+  role?: string | null,
+  personality?: string | null,
+  description?: string | null,
+): boolean {
+  const text = `${role || ''} ${personality || ''} ${description || ''}`
+  if (!text.trim()) return false
+  return AUTHORITATIVE_ROLE_PATTERNS.some((re) => re.test(text))
+}
+
+/**
  * 剧情目的 → 情绪模板 (★ 最高优先级)。
  *
  * ★ Sprint 47 单 189 (PM msg-20261115-189): 按真实数据细化 —— ep21 的剧情目的分布是
@@ -82,6 +148,10 @@ export interface EmotionContext {
   intentFunction?: string | null
   /** 角色性格基线 —— 次之 */
   personality?: string | null
+  /** ★ Sprint 50 T2 (PM msg-20261117-202): 角色立场 (characters.role, 如 反派/女主/配角) */
+  characterRole?: string | null
+  /** ★ Sprint 50 T2: 角色简介 (characters.description) —— 威严/强势的描述线索 */
+  characterDescription?: string | null
   /** 台词情绪词 —— 兜底 */
   dialogue?: string | null
   /** 视觉氛围 —— 最后 (deprecated, 保留兼容老调用方) */
@@ -93,6 +163,15 @@ export interface EmotionContext {
  * @returns 情绪; 全无信号 → 'neutral'
  */
 export function inferEmotion(ctx: EmotionContext): TTSEmotion {
+  // ★ Sprint 50 T2 (PM msg-20261117-202): 【强势角色的命令/斥责/威胁句】→ angry
+  //   放在【剧情目的】之前: 反派角色的狠话常落在"反转"意图的镜里, 而 反转→surprised
+  //   → 威严的母亲听起来像"被吓到"(实测 drama21/ep22 梁母 12 段里 4 段被配成 surprised)。
+  //   ★ 双条件才生效 (① 台词是命令/斥责/威胁 ② 说话人强势/反派/威严) → 女主等普通角色不受影响。
+  //   ★ 不动 surprised 的正常用途: 真正意外/反转的【非命令句】仍然是 surprised。
+  const authoritative = isAuthoritativeRole(ctx.characterRole, ctx.personality, ctx.characterDescription)
+  if (authoritative && isCommandOrThreatLine(ctx.dialogue)) {
+    return 'angry'
+  }
   // 1. 剧情目的 (最高): 这场戏在整集里干什么
   const intent = ctx.intentFunction ? String(ctx.intentFunction).trim() : ''
   if (intent) {
