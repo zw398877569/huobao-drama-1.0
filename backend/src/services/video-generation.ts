@@ -226,10 +226,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             .from(schema.storyboards).where(eq(schema.storyboards.id, vRecord.storyboardId)).all()[0]?.episodeId ?? null)
           : null
         const tpl = getEpisodeTemplate(storyboardEpisodeId)
-        // ★ Sprint 52 (PM msg-20261117-207): 本镜【出场角色的形象图】(只对 minimax_h3_803 生效)
+        // ★ Sprint 52 (PM msg-20261117-207) + 单 208 B1/B2:
+        //   这里【不】用 record.model === 803 预判 —— 工作流是 adapter 按实际路由定的 (可能与提交的 model 不同)
+        //   → 只按【开关】+【参考模式】决定要不要查, 最终要不要注入由 adapter 按它最终用的工作流判断 (B2)。
         const resolvedCharacterReferenceImages = await resolveStoryboardCharacterReferenceImages(
           vRecord.id, vRecord.storyboardId, storyboardEpisodeId,
-          vRecord.includeCharacterRefs !== 0 && String(vRecord.model || '') === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+          { switchOn: vRecord.includeCharacterRefs !== 0, referenceMode: vRecord.referenceMode },
         )
 
 
@@ -852,15 +854,26 @@ async function resolveStoryboardCharacterReferenceImages(
   vRecordId: number,
   storyboardId: number | null | undefined,
   episodeId: number | null | undefined,
-  enabled: boolean,
+  opts: { switchOn: boolean; referenceMode: string | null | undefined },
 ): Promise<{ url: string; name: string; subjectIndex: number }[]> {
   if (!storyboardId || !episodeId) return []
   try {
-    if (!enabled) {
+    // ★ 单 208 B1: 五种跳过原因各自可区分 (开关关 / 模式不是 first_last / 没有关联角色 / 角色没图 / 最终工作流不是 803)
+    if (!opts.switchOn) {
       logTaskProgress('VideoTask', 'char-refs-skipped', {
         videoGenId: vRecordId, storyboardId,
-        reason: 'switch-off-or-not-803',
-        hint: '角色参考图开关关着 (或本镜不是 803 工作流) → 不注入 (请求体与改动前一致)',
+        reason: 'switch-off',
+        hint: '用户关掉了「角色参考图」开关 → 不注入 (请求体与改动前一致)',
+      })
+      return []
+    }
+    // ★ 单 208 B1: 非 first_last 模式【不做角色图查询】(省一次 DB 往返 + 避免日志噪音)
+    if (opts.referenceMode !== 'first_last') {
+      logTaskProgress('VideoTask', 'char-refs-skipped', {
+        videoGenId: vRecordId, storyboardId,
+        reason: 'mode-not-first-last',
+        referenceMode: opts.referenceMode || '(none)',
+        hint: '只有 first_last 路线才有「首帧 slot0 / 尾帧 slot1 + 角色图 slot2 起」的槽位语义',
       })
       return []
     }
@@ -881,7 +894,14 @@ async function resolveStoryboardCharacterReferenceImages(
       .from(schema.storyboardCharacters)
       .where(eq(schema.storyboardCharacters.storyboardId, storyboardId)).all()
     const ids = [...new Set(links.map(l => l.characterId).filter(Boolean))]
-    if (!ids.length) return []
+    if (!ids.length) {
+      logTaskProgress('VideoTask', 'char-refs-skipped', {
+        videoGenId: vRecordId, storyboardId,
+        reason: 'no-linked-characters',
+        hint: '本镜没有关联任何角色 → 没有角色形象图可喂',
+      })
+      return []
+    }
     // 本 episode 的角色序列 (characters.id 升序) = <Subject N> 编号顺序
     const epLinks = db.select({ characterId: schema.episodeCharacters.characterId })
       .from(schema.episodeCharacters)
@@ -910,7 +930,7 @@ async function resolveStoryboardCharacterReferenceImages(
       count: out.length,
       characters: out.map(c => ({ name: c.name, subjectIndex: c.subjectIndex })),
       skipped,
-      hint: '本镜出场角色的形象图 (按 <Subject N> 升序) → 803 路线追加在 ref_image_2 起',
+      hint: '本镜出场角色的形象图 (按 <Subject N> 升序) → 是否注入由 adapter 按它最终用的工作流判断 (单 208 B2)',
     })
     return out
   } catch (e: any) {

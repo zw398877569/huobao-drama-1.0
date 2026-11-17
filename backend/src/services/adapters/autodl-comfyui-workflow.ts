@@ -729,19 +729,27 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
           body.prompt = `${body.prompt}\n${charSentence}`
         }
       }
-      // ★ Sprint 52: 角色图槽位清单进 flow-log —— 事后能一眼看出"这次到底喂了角色图没有"
-      if (charRefsEnabled) {
-        logCharacterRefSlots({
-          videoGenId: record.id,
-          storyboardId: record.storyboardId,
-          workflowId,
-          slots: charSlots,
-          dropped: droppedCharRefs,
-          hint: charSlots.length
-            ? '角色形象图已追加在首尾帧之后 (slot 2 起); 命名句在官方限制项之前'
-            : '本镜没有可用的角色形象图 (角色没图 / 没关联角色) → 请求体与改动前一致',
-        })
-      }
+      // ★ Sprint 52 + 单 208 B2: 角色图槽位清单进 flow-log —— 事后能一眼看出"这次到底喂了角色图没有";
+      //   没喂的时候也要说清【为什么】(开关关 / 最终工作流不是 803 / 模式不是 first_last / 本镜没角色图)。
+      logCharacterRefSlots({
+        videoGenId: record.id,
+        storyboardId: record.storyboardId,
+        workflowId,
+        slots: charSlots,
+        dropped: droppedCharRefs,
+        reason: charSlots.length
+          ? 'injected'
+          : record.includeCharacterRefs === false
+            ? 'switch-off'
+            : workflowId !== AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803
+              ? 'not-803-workflow'
+              : mode !== 'first_last'
+                ? 'mode-not-first-last'
+                : 'no-character-refs',
+        hint: charSlots.length
+          ? '角色形象图已追加在首尾帧之后 (slot 2 起); 命名句在官方限制项之前'
+          : '没有注入角色形象图 → 请求体与改动前一致',
+      })
       // 参考图清单进 flow-log —— 事后能核对"这次到底发了哪几张、分别是什么、道具图排第几"
       logTaskProgress('VideoTask', 'video-ref-slots', {
         videoGenId: record.id,

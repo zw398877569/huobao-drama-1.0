@@ -180,6 +180,9 @@ export interface TTSSegmentMeta {
   pitchUsed?: number
   /** 最终采用的 voice_modify.intensity */
   intensityUsed?: number
+  // ★ 单 208 A2: 降参【前】的角色配置原值 (用于判断用户有没有手动改过角色配置)
+  pitchBase?: number
+  intensityBase?: number
 }
 
 export interface TTSComposeResult {
@@ -207,13 +210,46 @@ function coalesceAdjacent(segments: DialogueSegment[]): Array<{ speaker: string;
 
 /**
  * ★ Sprint 51 T2 (PM msg-20261117-204): 音高体检的判定与重试参数
- *   · 绝对下限 340Hz: 女声正常段 203~302Hz / 异常段 385~524Hz → 340 是两侧各留 40+Hz 的干净中间带
+ *   · 绝对下限 365Hz (★ 单 208 A3: 340 → 365):
+ *       340 是【只统计了祝英台】定的 → 漏看了梁母的 angry 命令句能到 340.3Hz (我方测法) / 329.9Hz (QA 测法)
+ *       → 刚好越过 340 → 梁母镜#17 被误判 → 无谓降参 (用户听到"这一镜怎么比别的低")
+ *       365 的依据 (11-17 全量实测, 我方测法): 梁母镜#17 = 340.3Hz (留 25Hz 余量) / 祝英台异常 3 镜 = 388.1 / 407.8 / 409.8Hz
+ *       (留 23Hz 余量, 仍全部检出)
  *   · 相对基线 ×1.3: 【天生偏高】的角色不会被误判 (相对口径比绝对口径稳)
  *   · 最多 3 次: 原样 → 原样 → 降参 (与 175 单批量重试口径一致)
  */
-const PITCH_ANOMALY_ABS_HZ = 340
+const PITCH_ANOMALY_ABS_HZ = 365
 const PITCH_ANOMALY_RATIO = 1.3
 const PITCH_HEALTH_MAX_ATTEMPTS = 3
+
+/**
+ * ★ 单 208 A2: 取本镜上次生成的【最终采用参数】(降参结果) → 重新生成时直接沿用
+ *   ★ 用户手动改过角色的音高/音量时以用户的新值为准 (比对落库时记下的 base 值)
+ *   ★ 查不到 / 坏 JSON → 返回空 (按角色配置原值走, 行为与改动前一致)
+ */
+function loadPreviousAdoptedPitchParams(
+  storyboardId: number,
+  speaker: string,
+): { pitchUsed?: number; intensityUsed?: number; pitchBase?: number; intensityBase?: number } {
+  try {
+    const [sb] = db.select({ segs: schema.storyboards.ttsSegments })
+      .from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+    if (!sb?.segs) return {}
+    let arr: any[] = []
+    try { arr = JSON.parse(sb.segs) } catch { return {} }
+    const hit = (arr || []).find((g: any) => g?.speaker === speaker
+      && (g?.pitchUsed != null || g?.intensityUsed != null))
+    if (!hit) return {}
+    return {
+      pitchUsed: hit.pitchUsed ?? undefined,
+      intensityUsed: hit.intensityUsed ?? undefined,
+      pitchBase: hit.pitchBase ?? undefined,
+      intensityBase: hit.intensityBase ?? undefined,
+    }
+  } catch {
+    return {}
+  }
+}
 
 /** 音频文件的绝对路径 (generateTTS 返回的是 'static/audio/xxx.mp3' 相对路径) */
 function resolveAudioAbsPath(rel: string): string {
@@ -490,8 +526,29 @@ export async function generateTTSForDialogue(
       PITCH_ANOMALY_ABS_HZ,
       baselineHz > 0 ? baselineHz * PITCH_ANOMALY_RATIO : 0,
     )
+    // ★ 单 208 A2: 沿用【上次降参后】的参数 → 重新生成不用再走一遍"先生成高的、再检测、再降参"
+    //   ★ 用户手动改过角色的音高/音量时以用户的新值为准 (比对落库时记下的 base 值)
+    const prevAdopted = loadPreviousAdoptedPitchParams(storyboardId, m.speaker)
     let usedPitch = speakerParams.pitch
     let usedIntensity = segVoiceModify?.intensity
+    const basePitch = speakerParams.pitch ?? undefined
+    const baseIntensity = segVoiceModify?.intensity ?? undefined
+    if (prevAdopted.pitchUsed != null
+      && (prevAdopted.pitchBase == null || prevAdopted.pitchBase === basePitch)) {
+      usedPitch = prevAdopted.pitchUsed
+    }
+    if (prevAdopted.intensityUsed != null
+      && (prevAdopted.intensityBase == null || prevAdopted.intensityBase === baseIntensity)) {
+      usedIntensity = prevAdopted.intensityUsed
+    }
+    if (usedPitch !== basePitch || usedIntensity !== baseIntensity) {
+      logTaskProgress('TTSConcat', 'pitch-params-reused', {
+        storyboardId, episodeId, speaker: m.speaker,
+        pitch: usedPitch, intensity: usedIntensity,
+        basePitch, baseIntensity,
+        hint: '沿用上次降参后的参数 (角色配置未改动 → 直接用, 不用重新降一遍)',
+      })
+    }
     let segPath = ''
     let health = { f0Hz: 0, frames: 0, spread: 0 }
     let attempts = 0
@@ -516,17 +573,25 @@ export async function generateTTSForDialogue(
       health = await measurePitchHealth(resolveAudioAbsPath(segPath))
       pitchAnomaly = health.f0Hz > 0 && health.f0Hz > anomalyThresholdHz
       if (!pitchAnomaly) break
+      // ★ 单 208 A1: hint 必须准确描述【下一次重试会用什么参数】——
+      //   attempt 1 用原值 → 下一次降 1 档; attempt 2 用降 1 档 → 下一次再降 1 档;
+      //   attempt 3 用降 2 档 → 没有下一次 (重试用尽)。
+      //   ★ 配合每次 attempt 都记的 pitch/intensity, 三条日志连起来能准确还原整条重试链。
+      const nextHint = attempt === 1
+        ? '下一次重试: 降参重试 (pitch -1 / intensity -10)'
+        : attempt === 2
+          ? '下一次重试: 再降一档 (pitch -2 / intensity -20)'
+          : '重试用尽, 保留最后一次 (并提示用户试听/手动重试)'
       logTaskWarn('TTSConcat', 'pitch-anomaly-detected', {
         storyboardId, episodeId, speaker: m.speaker, attempt,
         f0Hz: health.f0Hz, thresholdHz: Math.round(anomalyThresholdHz), baselineHz: Math.round(baselineHz),
         pitch: usedPitch, intensity: usedIntensity,
-        hint: attempt === 1 ? '原样重试一次' : attempt === 2 ? '降参重试 (pitch -1 / intensity -10)' : '重试用尽',
+        hint: nextHint,
       })
-      if (attempt === 1) continue              // ★ 第 1 次重试 = 原样
-      if (attempt === 2) {                    // ★ 第 2 次起 = 降参
-        usedPitch = (usedPitch ?? 0) - 1
-        if (usedIntensity != null) usedIntensity = usedIntensity - 10
-      }
+      // ★ 单 208 A1: 下一次重试 = 降参 (原样重试对【稳定偏高】的台词无效:
+      //   工单证据3 —— 镜#9 连续三次原样都 >435Hz; 而阈值修到 365 后不会再有误判段白降参)
+      usedPitch = (usedPitch ?? 0) - 1
+      if (usedIntensity != null) usedIntensity = usedIntensity - 10
     }
     if (pitchAnomaly) {
       // ★ 3 次仍异常 → 明确记录 (前端会据此提示用户试听/手动重试), 不静默吞掉
@@ -549,6 +614,10 @@ export async function generateTTSForDialogue(
       pitchRetries: attempts > 1 ? attempts - 1 : undefined,
       pitchUsed: usedPitch,
       intensityUsed: usedIntensity,
+      // ★ 单 208 A2: 落库时记下【降参前】的角色配置原值 → 下次重新生成时能判断
+      //   "用户有没有手动改过角色的音高/音量" (改了就用用户的新值, 没改才沿用降参结果)
+      pitchBase: basePitch,
+      intensityBase: baseIntensity,
     })
   }
 
