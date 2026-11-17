@@ -378,6 +378,9 @@ export const videoGenerations = sqliteTable('video_generations', {
   duration: integer('duration'),
   fps: integer('fps'),
   resolution: text('resolution'),
+  // ★ Sprint 52 (PM msg-20261117-207): 是否注入【角色形象图】(只对 minimax_h3_803 生效)
+  //   1/NULL = 开 (默认); 0 = 关 (请求体与改动前逐字一致)
+  includeCharacterRefs: integer('include_character_refs').default(1),
   aspectRatio: text('aspect_ratio'),
   style: text('style'),
   motionLevel: integer('motion_level'),

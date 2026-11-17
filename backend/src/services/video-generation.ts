@@ -3,6 +3,8 @@ import { db, schema } from '../db/index.js'
 import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
+// ★ Sprint 52 (PM msg-20261117-207): 803 专属 —— 本镜出场角色的形象图 (用 adapter 的常量, 不写死字面量)
+import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
 import { buildDialogueTimeline, formatDialogueTimeline, injectDialogueTimeline, countDialogueMarkers, stripLegacyUntimedDialogueBlock, H3_PROMPT_MAX_CHARS } from '../utils/dialogue-timeline.js'
 // Sprint 17 (PM msg-20261021-076) Task B/E: 首帧锚点 (英文固定句, 翻译后注入) + 代码层清洗
@@ -77,6 +79,8 @@ interface GenerateVideoParams {
   aspectRatio?: string
   /** ★ Sprint 43: 用户指定的【分辨率档位】(如 '960p'; 竖/横由 aspectRatio 决定) */
   resolution?: string
+  /** ★ Sprint 52 (PM msg-20261117-207): 是否注入【角色形象图】(只对 minimax_h3_803 生效; 缺省 = 开) */
+  includeCharacterRefs?: boolean
   configId?: number
   negativePrompt?: string
   seed?: number
@@ -147,6 +151,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     aspectRatio: params.aspectRatio || '16:9',
     // ★ Sprint 43: 分辨率档位 (前端下拉选的; 空 = 用该工作流的默认档)
     resolution: params.resolution || undefined,
+    // ★ Sprint 52 (PM msg-20261117-207): 角色形象图开关【落库】——
+    //   视频生成是异步的 (前端提交 → 建 record → 排队 → adapter 执行) → 开关必须跟着 record 走, 否则排队期间就丢了。
+    includeCharacterRefs: params.includeCharacterRefs === false ? 0 : 1,
     negativePrompt: params.negativePrompt || null,
     seed: params.seed || null,
     status: 'processing',
@@ -219,6 +226,12 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
             .from(schema.storyboards).where(eq(schema.storyboards.id, vRecord.storyboardId)).all()[0]?.episodeId ?? null)
           : null
         const tpl = getEpisodeTemplate(storyboardEpisodeId)
+        // ★ Sprint 52 (PM msg-20261117-207): 本镜【出场角色的形象图】(只对 minimax_h3_803 生效)
+        const resolvedCharacterReferenceImages = await resolveStoryboardCharacterReferenceImages(
+          vRecord.id, vRecord.storyboardId, storyboardEpisodeId,
+          vRecord.includeCharacterRefs !== 0 && String(vRecord.model || '') === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803,
+        )
+
 
         // 翻译决策仍然只看【原始】prompt —— 台词时间轴是中文的, 如果拿注入后的文本去判断,
         // 会把「本来是纯英文的 prompt」也拖进翻译, 属于本单不该引入的行为变化。
@@ -408,6 +421,9 @@ async function processVideoGeneration(id: number, config: AIConfig, source: 'sto
           referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
           // ★ Sprint 31: 本镜显式关联的道具图 (后端从 storyboard_props 查, 前端不传参)
           propReferenceImages: resolvedPropReferenceImages,
+          // ★ Sprint 52: 本镜出场角色的形象图 (后端从 storyboard_characters + characters.image_url 查)
+          characterReferenceImages: resolvedCharacterReferenceImages,
+          includeCharacterRefs: vRecord.includeCharacterRefs !== 0,
           audioUrls: resolvedAudioUrls,
           duration: vRecord.duration,
           aspectRatio: vRecord.aspectRatio,
@@ -816,6 +832,93 @@ async function resolveStoryboardPropReferenceImages(
       storyboardId,
       error: e?.message || String(e),
       hint: '道具关联查询失败, 道具图未进参考图 (不影响本次视频生成)',
+    })
+    return []
+  }
+}
+
+/**
+ * ★ Sprint 52 (PM msg-20261117-207): 本镜【出场角色的形象图】(只对 minimax_h3_803 生效)
+ *
+ * 数据来源:
+ *   · 关联: storyboard_characters (用户在分镜页手工勾选的出场角色)
+ *   · 图片: characters.image_url (角色形象图)
+ *   · 顺序: 本 episode 的角色序列按 characters.id 升序 —— ★ 这个顺序就是 prompt 里 <Subject N> 的编号顺序
+ *     (与 resolveGenerationInjectContext 取角色表的顺序完全一致 → 编号对得上)
+ *
+ * ★ fail-safe: 查表失败 / 角色没图 → 返回空数组, 绝不连带视频生成失败 (与道具参考图同一套行为)。
+ */
+async function resolveStoryboardCharacterReferenceImages(
+  vRecordId: number,
+  storyboardId: number | null | undefined,
+  episodeId: number | null | undefined,
+  enabled: boolean,
+): Promise<{ url: string; name: string; subjectIndex: number }[]> {
+  if (!storyboardId || !episodeId) return []
+  try {
+    if (!enabled) {
+      logTaskProgress('VideoTask', 'char-refs-skipped', {
+        videoGenId: vRecordId, storyboardId,
+        reason: 'switch-off-or-not-803',
+        hint: '角色参考图开关关着 (或本镜不是 803 工作流) → 不注入 (请求体与改动前一致)',
+      })
+      return []
+    }
+    // ★ character_entry 类过渡镜: 人物尚未入画 → 带角色图等于人提前入画 (与生图侧既有规则一致)
+    const [sb] = db.select({
+      isTransition: schema.storyboards.isTransition,
+      transitionKind: schema.storyboards.transitionKind,
+    }).from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
+    if (sb?.isTransition && sb?.transitionKind === 'character_entry') {
+      logTaskProgress('VideoTask', 'char-refs-skipped', {
+        videoGenId: vRecordId, storyboardId,
+        reason: 'character-entry-transition',
+        hint: 'character_entry 类过渡镜 (人物尚未入画) → 不带角色图',
+      })
+      return []
+    }
+    const links = db.select({ characterId: schema.storyboardCharacters.characterId })
+      .from(schema.storyboardCharacters)
+      .where(eq(schema.storyboardCharacters.storyboardId, storyboardId)).all()
+    const ids = [...new Set(links.map(l => l.characterId).filter(Boolean))]
+    if (!ids.length) return []
+    // 本 episode 的角色序列 (characters.id 升序) = <Subject N> 编号顺序
+    const epLinks = db.select({ characterId: schema.episodeCharacters.characterId })
+      .from(schema.episodeCharacters)
+      .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
+    const epIds = [...new Set(epLinks.map(l => l.characterId).filter(Boolean))].sort((a, b) => a - b)
+    const subjectIndexOf = new Map<number, number>(epIds.map((id, i) => [id, i + 1]))
+    const rows = db.select({
+      id: schema.characters.id,
+      name: schema.characters.name,
+      imageUrl: schema.characters.imageUrl,
+    }).from(schema.characters).where(inArray(schema.characters.id, ids)).all()
+    const out: { url: string; name: string; subjectIndex: number }[] = []
+    const skipped: Array<{ name: string; reason: string }> = []
+    for (const r of rows.sort((a, b) => a.id - b.id)) {
+      const name = String(r.name || '').trim()
+      const subjectIndex = subjectIndexOf.get(r.id)
+      if (!subjectIndex) { skipped.push({ name, reason: 'not-in-episode-characters' }); continue }
+      const raw = String(r.imageUrl || '').trim()
+      if (!raw) { skipped.push({ name, reason: 'no-image' }); continue }
+      const url = await normalizeVideoReferenceUrl(vRecordId, raw)
+      if (!url) { skipped.push({ name, reason: 'url-normalize-failed' }); continue }
+      out.push({ url, name, subjectIndex })
+    }
+    logTaskProgress('VideoTask', 'char-refs-resolved', {
+      videoGenId: vRecordId, storyboardId,
+      count: out.length,
+      characters: out.map(c => ({ name: c.name, subjectIndex: c.subjectIndex })),
+      skipped,
+      hint: '本镜出场角色的形象图 (按 <Subject N> 升序) → 803 路线追加在 ref_image_2 起',
+    })
+    return out
+  } catch (e: any) {
+    // ★ 查表失败【绝不能】连带视频生成失败 → 返回空, 行为跟改动前一致
+    logTaskWarn('VideoTask', 'char-refs-lookup-failed', {
+      videoGenId: vRecordId, storyboardId,
+      error: e?.message || String(e),
+      hint: '角色关联查询失败 → 不注入角色图 (不影响本次视频生成)',
     })
     return []
   }

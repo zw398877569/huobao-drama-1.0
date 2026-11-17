@@ -28,6 +28,11 @@ import { getWorkflowDurationLimit } from '../../constants/workflow-duration-limi
 import { logTaskWarn, logTaskProgress } from '../../utils/task-logger.js'
 // ★ Sprint 32 (PM msg-20261103-138): 道具图并进参考图的公共逻辑 (与 136 单同一套槽位规则)
 import { mergePropRefsIntoSlots, buildPropRefNotes } from './prop-refs.js'
+// ★ Sprint 52 (PM msg-20261117-207): 803 专属 —— 本镜出场角色的形象图并进 ref_image_N
+import {
+  mergeCharacterRefsIntoSlots, buildCharacterRefNotes, logCharacterRefSlots,
+  type CharacterRefSlot,
+} from './character-refs.js'
 
 export class AutoDLComfyUIWorkflowAdapter implements VideoProviderAdapter {
   readonly provider = 'autodl-comfyui'
@@ -682,6 +687,25 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
         propSlots = merged.propSlots
         droppedRefs = merged.dropped
       }
+      // ★ Sprint 52 (PM msg-20261117-207): 803 专属 —— 本镜【出场角色的形象图】追加在首尾帧之后。
+      //   槽位铁律: ref_image_0 = 首帧 / ref_image_1 = 尾帧 【不动】(插前面会让 prompt 里的编号整体错位 → 人物身份漂移);
+      //   角色图从 slot 2 起, 按 <Subject N> 升序; 总数上限 9 (超出的丢弃并记 flow-log)。
+      //   ★ 入口条件: 只对 minimax_h3_803 + first_last + 开关开着 → 其它工作流/路线【一个字节都不变】。
+      const charRefsEnabled = (
+        workflowId === AutoDLComfyUIWorkflowAdapter.WORKFLOW_REF2V_803
+        && mode === 'first_last'
+        && record.includeCharacterRefs !== false
+      )
+      let charSlots: CharacterRefSlot[] = []
+      let droppedCharRefs: string[] = []
+      if (charRefsEnabled && (record.characterReferenceImages || []).length) {
+        const merged = mergeCharacterRefsIntoSlots(
+          refs, record.characterReferenceImages || [], AutoDLComfyUIWorkflowAdapter.REF2V_MAX_IMAGES,
+        )
+        refs = merged.refs
+        charSlots = merged.slots
+        droppedCharRefs = merged.dropped
+      }
       refs.slice(0, 9).forEach((url, i) => {
         body[`ref_image_${i}`] = url
       })
@@ -690,6 +714,33 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
       //   ★ 编号 = 槽位 + 1 (H3 约定: <Picture N> = ref_image_{N-1}) → 这里跟实际发出的槽位自洽。
       if (propSlots.length) {
         body.prompt = `${body.prompt}\n${buildPropRefNotes(propSlots)}`
+      }
+      // ★ Sprint 52: 角色形象图的点名句 —— 模型不知道那张立绘是谁 → 不点名会【多出人/换脸/串角色】。
+      //   · 用 "Image N" 指代 (首尾帧模式下 <Picture N> 指的是首/尾帧, 用错编号模型会串)
+      //   · 用 <Subject N> 指代角色 (代码层权威编号; prompt 里的角色名是英文的, 数据库 name 是中文, 对不上)
+      //   · 必须留在【官方限制项之前】(与 D1 那句同一套插入逻辑: 末段是 "No text..." 时插到它前一段)
+      if (charSlots.length) {
+        const charSentence = buildCharacterRefNotes(charSlots)
+        const cParas = String(body.prompt).split('\n\n')
+        const cLastPara = (cParas[cParas.length - 1] || '').trim()
+        if (cParas.length > 1 && /^No text\b/i.test(cLastPara)) {
+          body.prompt = [...cParas.slice(0, -1), charSentence, cLastPara].join('\n\n')
+        } else {
+          body.prompt = `${body.prompt}\n${charSentence}`
+        }
+      }
+      // ★ Sprint 52: 角色图槽位清单进 flow-log —— 事后能一眼看出"这次到底喂了角色图没有"
+      if (charRefsEnabled) {
+        logCharacterRefSlots({
+          videoGenId: record.id,
+          storyboardId: record.storyboardId,
+          workflowId,
+          slots: charSlots,
+          dropped: droppedCharRefs,
+          hint: charSlots.length
+            ? '角色形象图已追加在首尾帧之后 (slot 2 起); 命名句在官方限制项之前'
+            : '本镜没有可用的角色形象图 (角色没图 / 没关联角色) → 请求体与改动前一致',
+        })
       }
       // 参考图清单进 flow-log —— 事后能核对"这次到底发了哪几张、分别是什么、道具图排第几"
       logTaskProgress('VideoTask', 'video-ref-slots', {

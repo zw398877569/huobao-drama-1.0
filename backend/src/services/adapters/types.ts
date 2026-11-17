@@ -123,6 +123,11 @@ export interface VideoGenerationRecord {
    *   Ref2V 多图参考路径把它们并进 ref_image_N (末尾追加; 首帧仍占 ref_image_0)。
    */
   propReferenceImages?: { url: string; name: string }[] | null
+  // ★ Sprint 52 (PM msg-20261117-207): 本镜【出场角色的形象图】(只对 minimax_h3_803 生效)
+  //   subjectIndex = 该角色在本 episode 角色序列里的 1-based 下标 (= prompt 里 <Subject N> 的 N)
+  characterReferenceImages?: { url: string; name: string; subjectIndex: number }[] | null
+  /** ★ Sprint 52: 是否注入角色形象图 (默认开; false = 请求体与改动前逐字一致) */
+  includeCharacterRefs?: boolean | null
   // ... 其他字段
 }
 

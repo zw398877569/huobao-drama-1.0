@@ -482,6 +482,11 @@ ensureColumn('video_generations', 'source', "TEXT DEFAULT 'storyboard'")
 //   启动 ensureColumn 自动加列, 无需手动 docker exec / 手动跑 SQL。
 ensureColumn('video_generations', 'fallback_reason', 'TEXT')
 
+// 2026-11-17 Sprint 52 (PM msg-20261117-207): video_generations 加 include_character_refs 列
+//   是否注入【角色形象图】(只对 minimax_h3_803 生效)。1/默认 = 开; 0 = 关。
+//   ★ 视频生成是异步的 (前端提交 → 建 record → 排队 → adapter 执行) → 开关必须落库, 否则排队期间就丢了。
+ensureColumn('video_generations', 'include_character_refs', 'INTEGER DEFAULT 1')
+
 // 2026-09-24 split appearance: 拆 characters.appearance 为永久外貌 (PERMANENT) + 剧情态变化 (PLOT_STATE)
 // PM msg-20260924-002 — 解决角色立绘 plot 态污染 (dramaId=7 characterId=21 案例)
 // 2026-10-10 V2 治本 (PM msg-20261010-001): 见上方注释, plot_state 从 character 移到 storyboard, characters.appearance_plot_state 列被 manual migration DROP

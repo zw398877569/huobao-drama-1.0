@@ -94,6 +94,9 @@ app.post('/', async (c) => {
       aspectRatio: body.aspect_ratio,
       // ★ Sprint 43: 前端分辨率下拉选的档位 (如 '960p')
       resolution: body.resolution,
+      // ★ Sprint 52 (PM msg-20261117-207): 是否注入角色形象图 (只对 minimax_h3_803 生效)
+      //   缺省 = 开 (不传这个参数的其它入口行为不变); 传 false = 关 (请求体与改动前逐字一致)
+      includeCharacterRefs: body.include_character_refs === false ? false : undefined,
       negativePrompt: body.negative_prompt,
       seed: body.seed,
       configId,
