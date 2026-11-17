@@ -5,9 +5,11 @@ import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
 import { getActiveVideoConfigLabel } from '../services/ai.js'
+// ★ Sprint 50 T2 (PM msg-20261117-201): 存量角色重算要有 flow-log 记录 (处理了哪些角色/新旧值)
+import { logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
 // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数的批量自动推导
 import {
-  deriveCharacterVoiceParams, serializeVoiceParams, isVoiceParamsEmpty,
+  deriveCharacterVoiceParams, serializeVoiceParams, isVoiceParamsEmpty, parseVoiceParams,
 } from '../services/character-voice-params.js'
 
 const app = new Hono()
@@ -176,8 +178,13 @@ app.post('/:id/characters/voice-params/derive', async (c) => {
   if (!drama) return notFound(c, 'Drama not found')
   const chars = db.select().from(schema.characters)
     .where(eq(schema.characters.dramaId, id)).all()
-  const items: Array<{ id: number; name: string; params: any }> = []
-  let changed = 0
+  const items: Array<{ id: number; name: string; params: any; before: any }> = []
+  let changed = 0      // ★ 推导出了参数的角色数 (前端提示用)
+  let updated = 0      // ★ 落库值与旧值【真的不同】的角色数 (工单 201 T2 验收要能看出来)
+  logTaskProgress('VoiceParamsDerive', 'derive-start', {
+    dramaId: id, total: chars.length,
+    hint: '按角色特征重新推导音高/音量档位 (Sprint 50 T1 新档表: 45-59 新增一档, 女声不再被压进男声区)',
+  })
   for (const ch of chars) {
     if (ch.deletedAt) continue
     const derived = deriveCharacterVoiceParams({
@@ -188,19 +195,35 @@ app.post('/:id/characters/voice-params/derive', async (c) => {
       appearancePermanent: ch.appearancePermanent,
       permanentTraits: ch.permanentTraits,
     })
+    // ★ 旧值 (解析成对象, 便于日志/响应里对比新旧)
+    const before = parseVoiceParams(ch.voiceParams ?? null)
     if (isVoiceParamsEmpty(derived)) {
-      items.push({ id: ch.id, name: ch.name, params: {} })
+      items.push({ id: ch.id, name: ch.name, params: {}, before })
+      logTaskProgress('VoiceParamsDerive', 'character-empty', {
+        dramaId: id, characterId: ch.id, name: ch.name, before,
+        hint: '推导不出参数 (年龄/性别读不出来) → 保持现状, 不写入',
+      })
       continue
     }
     const serialized = serializeVoiceParams(derived)
+    const valueChanged = serialized !== (ch.voiceParams ?? '')
     db.update(schema.characters)
       .set({ voiceParams: serialized, updatedAt: now() })
       .where(eq(schema.characters.id, ch.id))
       .run()
     changed++
-    items.push({ id: ch.id, name: ch.name, params: derived })
+    if (valueChanged) updated++
+    items.push({ id: ch.id, name: ch.name, params: derived, before })
+    logTaskProgress('VoiceParamsDerive', 'character-derived', {
+      dramaId: id, characterId: ch.id, name: ch.name,
+      before, after: derived, valueChanged,
+    })
   }
-  return success(c, { dramaId: id, total: chars.length, changed, items })
+  logTaskSuccess('VoiceParamsDerive', 'derive-done', {
+    dramaId: id, total: chars.length, derived: changed, updated,
+    hint: 'derived = 推导出了参数的角色数; updated = 落库值与旧值真的不同的角色数',
+  })
+  return success(c, { dramaId: id, total: chars.length, changed, updated, items })
 })
 
 app.put('/:id/characters', async (c) => {

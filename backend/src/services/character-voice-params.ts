@@ -172,7 +172,32 @@ export function toVoiceModify(params: CharacterVoiceParams | null | undefined): 
  *   → 现在整张表就是【整数档】, 不做小数再取整 (表本身可维护, 也省掉精度丢失)。
  *
  * 【锚点】17 岁女 = +1 (用户 2026-11-16 实机试听认可的值)
- * 【约束】同年龄档男女差 1 (不许撞值) · 相邻年龄档同性别差 ≥ 1 · 老年档幅度维持 -3 现状
+ * 【约束】同年龄档男女不许撞值 · 相邻年龄档同性别差 ≥ 1
+ *
+ * ★ Sprint 50 T1 (PM msg-20261117-201): 年龄档【重新标定】—— 45 岁女听起来像男声
+ *
+ * 【现象 (工单实测)】drama21/ep22 的梁母 (45 岁女 / 反派) 12 段配音里 4 段情绪/音高听起来像男声:
+ *   她落到了 '年长/老年' 档 (45 > 44) → pitch -3 → 实测基频 F0 中位 173 Hz
+ *   → 正好压在本项目男声组的实际上限 (111-170 Hz) 上 → 威严的母亲听起来像"被吓到 / 像男的"。
+ *
+ * 【根因 (不是模型不稳, 是档表本身错)】
+ *   ① 年龄档只有 4 档, 45 岁与 60+ 落进同一档 (工单要求: 45 岁不能与老年同档);
+ *   ② ★ 更关键: 【年长侧女档音高是负的】, 但项目里年长女性用的音色
+ *      (阅历姐姐 Wise_Women / 慈祥奶奶 Kind-hearted_Elder) 天然基频本来就在 180-230 Hz,
+ *      已经在男/女分界上 —— 再往下压 (pitch -3) 就直接掉进男声区。
+ *      → 女声的音高下限必须是【不低于该音色的自然基频】, 而不是"年龄越大越低"。
+ *
+ * 【重新标定的依据 (实测, 不是拍脑袋)】
+ *   · 梁母 (Wise_Women) 现状 pitch=-3 → 实测 F0 中位 173 Hz (工单用同一套 ffmpeg+自相关脚本测的)
+ *   · 祝英台 (Mature_Woman) 现状 pitch=0  → 实测 F0 中位 258 Hz (标准女声区)
+ *   · 本项目女声组 195-321 Hz · 男声组 111-170 Hz
+ *   · 音高是半音量纲: F0(p) = F0(0) × 2^(p/12) → 梁母从 -3 改到 +1 = ×1.26 → 约 218 Hz
+ *     (落在女声区内、明显高于男声上限、又比 18 岁女低 ~40 Hz → 两个女性角色仍能听出区别)
+ *   · 祝英台 18 岁 → 少女/少女档 +1 → 约 273 Hz (与 17 岁的 +1 一致, 离"特别尖锐"的 +4 很远)
+ *
+ * 【新表的形状 (女性侧不再随年龄单调下降 —— 这是刻意的)】
+ *   年龄感交给【音色 + 音量 + 刚劲度】, 音高只负责一件事: 别让女声掉进男声区。
+ *   45-59 档给 +1 是因为这一档的角色基本都用"阅历姐姐" (天然基频最低的那个音色)。
  */
 export interface VoiceTierRow {
   /** 档位名 */
@@ -188,10 +213,15 @@ export interface VoiceTierRow {
 }
 
 export const VOICE_TIER_TABLE: VoiceTierRow[] = [
-  { label: '少年/少女', maxAgeYears: 17, pitchFemale: 1, pitchMale: 0, volScale: 1 },
-  { label: '青年', maxAgeYears: 29, pitchFemale: 0, pitchMale: -1, volScale: 1 },
-  { label: '中年', maxAgeYears: 44, pitchFemale: -1, pitchMale: -2, volScale: 1 },
-  { label: '年长/老年', maxAgeYears: 999, pitchFemale: -3, pitchMale: -4, volScale: 0.85 },
+  // ★ 少年/少女: 上限 17 → 18 (工单 201: 18 岁女也要落在 +1~2, 与 17 岁同档 → 两集祝英台一致)
+  { label: '少年/少女', maxAgeYears: 18, pitchFemale: 1, pitchMale: 0, volScale: 1.00 },
+  { label: '青年', maxAgeYears: 29, pitchFemale: 0, pitchMale: -1, volScale: 1.00 },
+  { label: '中年', maxAgeYears: 44, pitchFemale: -1, pitchMale: -2, volScale: 0.95 },
+  // ★ 中年偏上 (45-59): 【新增档】—— 45 岁以前与 60+ 分开 (工单 201 要求)
+  //   女 +1: 这一档的角色基本都用"阅历姐姐"(天然基频 180-210Hz, 已在男女分界上) → 往上抬回女声区
+  { label: '中年偏上', maxAgeYears: 59, pitchFemale: 1, pitchMale: -3, volScale: 0.90 },
+  // ★ 年长/老年 (60+): 女 -3 → 0 (同样把基频抬回女声区; 60+ 与 45-59 音高/音量都不同)
+  { label: '年长/老年', maxAgeYears: 999, pitchFemale: 0, pitchMale: -4, volScale: 0.85 },
 ]
 
 /** ★ 年龄/性别都读不出来时的档位: 【不做任何猜测】(不抬不降) */
