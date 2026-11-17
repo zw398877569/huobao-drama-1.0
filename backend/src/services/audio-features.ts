@@ -89,14 +89,14 @@ function pcm16ToFloat(buf: Buffer): Float32Array {
  * 用 ffmpeg 解码成 16k 单声道 s16le PCM。
  * @returns Buffer (空 = 解码失败)
  */
-export function decodeToPcm(filePath: string): Promise<Buffer> {
+export function decodeToPcm(filePath: string, sampleRate: number = SAMPLE_RATE): Promise<Buffer> {
   return new Promise((resolve) => {
     const args = [
       '-v', 'error',
       '-i', filePath,
       '-f', 's16le',
       '-acodec', 'pcm_s16le',
-      '-ar', String(SAMPLE_RATE),
+      '-ar', String(sampleRate),
       '-ac', '1',
       '-',
     ]
@@ -274,4 +274,118 @@ export function cacheAudioFeatures(voiceId: string, f: AudioFeatures): void {
 
 export function getCachedAudioFeatures(voiceId: string): AudioFeatures | null {
   return featureCache.get(voiceId) ?? null
+}
+
+
+/**
+ * ★ Sprint 51 T1 (PM msg-20261117-204): 配音【音高体检】用的基频估计 (宽窗口)
+ *
+ * 【为什么要单独一个, 不能改上面的 estimatePitchHz】
+ *   上面的 estimatePitchHz 是【音色分配 agent】用的特征 (8kHz 降采样 + LAG_MIN=25 → 最高 320Hz),
+ *   它的语义与用途不能动 (音色试听/音色分配的输出要保持不变)。
+ *   而【音高体检】要能测出 385~524Hz 的异常段 —— 窄窗会把它们截断/误报成 ~290Hz
+ *   (QA 第一轮就踩了这个坑: 窗口上限不够 → 400Hz+ 的段落被当成 290Hz)。
+ *   → 这里单独实现一套: 32kHz 单声道 + 搜索窗 60~800Hz, 与上面的特征完全隔离。
+ *
+ * 【测法】逐帧 (2048 点 = 64ms, 帧移 1024) 做归一化自相关:
+ *   · 在 lag 窗 [32000/800, 32000/60] = [40, 533] 里找【局部峰里自相关值最大的那个】
+ *     (只取局部峰 = 不会把谐波当成基频; 取最大值 = 不会挑到次谐波把基频砍半)
+ *   · 抛物线插值取亚采样精度 → 每帧一个 F0
+ *   · 整段取【中位数】(抗异常帧, 跟上面的实现同一口径)
+ */
+export const PITCH_HEALTH_MIN_HZ = 60
+export const PITCH_HEALTH_MAX_HZ = 800
+/** 体检专用采样率 (MiniMax TTS 输出本身就是 32k) */
+export const PITCH_HEALTH_SAMPLE_RATE = 32000
+/** 帧长 2048 点 (64ms) / 帧移 1024 点 (32ms) */
+const HEALTH_FRAME = 2048
+const HEALTH_HOP = 1024
+/** 自相关可信阈值 (低于这个值说明这帧没有明显的周期) */
+const HEALTH_MIN_CONF = 0.6
+
+export interface PitchHealth {
+  /** 中位基频 (Hz); 0 = 没测出来 */
+  f0Hz: number
+  /** 参与统计的帧数 */
+  frames: number
+  /** 帧间波动 = 最大值/中位数 (越大说明这次渲染越不稳) */
+  spread: number
+}
+
+/**
+ * 测一段音频的基频 (音高体检用)。
+ * @param filePath 音频文件绝对路径
+ */
+export async function measurePitchHealth(filePath: string): Promise<PitchHealth> {
+  const empty: PitchHealth = { f0Hz: 0, frames: 0, spread: 0 }
+  try {
+    if (!fs.existsSync(filePath)) return empty
+  } catch {
+    return empty
+  }
+  let pcm: Buffer
+  try {
+    pcm = await decodeToPcm(filePath, PITCH_HEALTH_SAMPLE_RATE)
+  } catch {
+    return empty
+  }
+  if (!pcm.length) return empty
+  const samples = pcm16ToFloat(pcm)
+  if (samples.length < HEALTH_FRAME) return empty
+
+  const lagMin = Math.max(2, Math.floor(PITCH_HEALTH_SAMPLE_RATE / PITCH_HEALTH_MAX_HZ))
+  const lagMax = Math.min(Math.floor(PITCH_HEALTH_SAMPLE_RATE / PITCH_HEALTH_MIN_HZ), Math.floor(samples.length / 2))
+  const vals: number[] = []
+
+  for (let start = 0; start + HEALTH_FRAME <= samples.length; start += HEALTH_HOP) {
+    const seg = samples.subarray(start, start + HEALTH_FRAME)
+    // 去均值 + 能量门限 (静音帧不参与)
+    let mean = 0
+    for (let i = 0; i < seg.length; i++) mean += seg[i]
+    mean /= seg.length
+    let energy = 0
+    for (let i = 0; i < seg.length; i++) { const v = seg[i] - mean; energy += v * v }
+    if (energy / seg.length < 1e-6) continue
+
+    // 归一化自相关 (2*sum / (sum1+sum2))
+    const acf = new Float32Array(lagMax + 1)
+    let bestVal = 0
+    let bestLag = 0
+    for (let lag = lagMin; lag <= lagMax; lag++) {
+      let sum = 0
+      let norm = 0
+      const n = seg.length - lag
+      for (let i = 0; i < n; i++) {
+        const a = seg[i] - mean
+        const b = seg[i + lag] - mean
+        sum += a * b
+        norm += a * a + b * b
+      }
+      const val = norm > 0 ? (2 * sum) / norm : 0
+      acf[lag] = val
+      // ★ 只在【局部峰】里取最大值 (谐波不算基频; 也不会挑到次谐波把基频砍半)
+      if (lag > lagMin && lag < lagMax && val > acf[lag - 1] && val >= acf[lag + 1] && val > bestVal) {
+        bestVal = val
+        bestLag = lag
+      }
+    }
+    if (!bestLag || bestVal < HEALTH_MIN_CONF) continue
+    // 抛物线插值 (亚采样精度)
+    const y0 = acf[bestLag - 1]
+    const y1 = acf[bestLag]
+    const y2 = acf[bestLag + 1]
+    const denom = y0 - 2 * y1 + y2
+    const shift = denom !== 0 ? (y0 - y2) / (2 * denom) : 0
+    const f0 = PITCH_HEALTH_SAMPLE_RATE / (bestLag + shift)
+    if (f0 >= PITCH_HEALTH_MIN_HZ && f0 <= PITCH_HEALTH_MAX_HZ) vals.push(f0)
+  }
+  if (!vals.length) return empty
+  vals.sort((a, b) => a - b)
+  const mid = Math.floor(vals.length / 2)
+  const median = vals.length % 2 ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2
+  return {
+    f0Hz: Math.round(median * 10) / 10,
+    frames: vals.length,
+    spread: median > 0 ? Math.round((vals[vals.length - 1] / median) * 100) / 100 : 0,
+  }
 }
