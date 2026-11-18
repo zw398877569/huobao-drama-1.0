@@ -1257,6 +1257,13 @@
                     <div class="dub-desc">{{ getDialogueText(sb) || '未填写文本' }}<span v-if="getDialogueLineCount(sb) > 1" class="tag tag-info" style="margin-left:6px">{{ getDialogueLineCount(sb) }} 段</span></div>
                     </div>
                     <span class="tag" :class="hasTTS(sb) ? 'tag-success' : ''">{{ hasTTS(sb) ? '已生成' : '待生成' }}</span>
+                    <!-- ★ Sprint 54 T2: 批量(重新)生成失败的镜要标出来 ——
+                         后端失败时不写 DB → 页面还显示着旧音频 → 别让用户以为已经是新的 -->
+                    <span
+                      v-if="isBatchTTSFailed(sb.id)"
+                      class="tag tag-failed"
+                      :title="batchTTSFailureMode(sb.id) === 'regenerate' ? '这镜【重新生成失败】, 现在播的还是旧音频 (可点上面的『只重试失败的 N 条』)' : '这镜【生成失败】, 没有音频'"
+                    >{{ batchTTSFailureMode(sb.id) === 'regenerate' ? '重生成失败' : '生成失败' }}</span>
                     <!-- ★ Sprint 51 T3: 音高异常提示 (只在真的有异常镜时出现, 没有异常不加任何东西) -->
                     <span
                       v-if="getPitchAnomalyInfo(sb).anomaly"
@@ -2981,6 +2988,8 @@ const {
   batchRegenerateShotTTS,
   // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误 + 只重试失败的入口)
   batchTTSFailures,
+  // ★ Sprint 54 T2: 失败镜标记 (重新生成失败时页面还显示着旧音频 → 要让用户看出来)
+  isBatchTTSFailed, batchTTSFailureMode,
   getDialogueLineCount,
   editTarget, editText, editPreview, editPreviewing, editSaving,
   openEditDialog, closeEditDialog, scheduleEditPreview, applyNormalizedDialogue, saveEditDialog,

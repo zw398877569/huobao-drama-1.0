@@ -15,6 +15,27 @@ type Deps = {
   refresh: () => Promise<void>,
 }
 
+/**
+ * ★ Sprint 54 T2 (PM msg-20261118-215 追加): 批量配音的【取数口径】(纯函数 → 可离线断言)
+ *
+ *  · generate      → 只处理【还没有配音】的镜 (现有『批量生成』的语义, 一个字不许变)
+ *  · retryFailures → 按【失败清单】取 (★ 不看有没有配音:
+ *      重新生成失败的镜恰恰还持有一份旧音频 → 若先按 !hasTTS 过滤, 那些镜永远轮不到重试)
+ */
+export function pickBatchTTSTargets(
+  shots: any[],
+  failures: Array<{ storyboardId: number }>,
+  mode: 'generate' | 'retryFailures',
+  hasDialogue: (sb: any) => boolean,
+  hasTTS: (sb: any) => boolean,
+): any[] {
+  if (mode === 'retryFailures') {
+    const failed = new Set((failures || []).map(f => f.storyboardId))
+    return (shots || []).filter(sb => hasDialogue(sb) && failed.has(sb.id))
+  }
+  return (shots || []).filter(sb => hasDialogue(sb) && !hasTTS(sb))
+}
+
 export function useShotTTS(deps: Deps) {
   const { ctx, refresh } = deps
 
@@ -161,11 +182,17 @@ export function useShotTTS(deps: Deps) {
   }>>([])
 
   async function batchShotTTS(opts?: { retryFailures?: boolean }) {
-    const eligible = ctx.sbs.value.filter(sb => hasDialogue(sb) && !hasTTS(sb))
-    // 只重试上次失败的那些 (T4: 一键只重试失败的)
-    const pending = opts?.retryFailures
-      ? eligible.filter(sb => batchTTSFailures.value.some(f => f.storyboardId === sb.id))
-      : eligible
+    // ★ Sprint 54 T2 (PM msg-20261118-215 追加): 取数口径抽成纯函数
+    //   ★ retryFailures 【不能】被『只补没有配音的』这层前置过滤卡住:
+    //     批量【重新生成】失败的镜, 后端抛错时不写 DB → tts_audio_url 还是旧值 → hasTTS=true
+    //     → 恰恰是【应该重试】的那些镜被那一层排掉了 (逻辑正好反了)
+    const pending = pickBatchTTSTargets(
+      ctx.sbs.value,
+      batchTTSFailures.value,
+      opts?.retryFailures ? 'retryFailures' : 'generate',
+      hasDialogue,
+      hasTTS,
+    )
     if (!pending.length) {
       // pending is 0: either every eligible sb already has TTS, or no sb has dialogue at all.
       // Disambiguate via inline count (avoid cross-composable dep on ttsEligibleCount).
@@ -174,14 +201,14 @@ export function useShotTTS(deps: Deps) {
       else toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
       return
     }
-    await runBatchTTSList(pending, { successText: (n) => `已生成 ${n} 条镜头配音` })
+    await runBatchTTSList(pending, { successText: (n) => `已生成 ${n} 条镜头配音`, mode: 'generate' })
   }
 
   /**
    * ★ Sprint 54 (PM msg-20261118-215): 批量跑一段【镜头列表】的公共实现
    *   ★ 并发闸门 / 退避重试 / 失败明细 / pending 互斥 —— 全部复用『批量生成』这一套 (D3/D4)
    */
-  async function runBatchTTSList(list: any[], opts: { successText: (ok: number) => string }) {
+  async function runBatchTTSList(list: any[], opts: { successText: (ok: number) => string; mode: 'generate' | 'regenerate' }) {
     // 批量配音一次性 push 所有 id 进 pending, 模板批量按钮绑 isBatchTTSPending 整体置灰
     const pendingIds = list.map(sb => sb.id)
     for (const id of pendingIds) {
@@ -214,6 +241,9 @@ export function useShotTTS(deps: Deps) {
         failures.push({
           storyboardId: sb.id,
           shotNumber,
+          // ★ Sprint 54 T2: 记清这镜是【批量生成】还是【批量重新生成】失败的
+          //   (重新生成失败时后端没写 DB → 页面还显示着旧音频, 需要让用户看出"这镜没重生成成功")
+          mode: opts.mode,
           reason: res.retryable
             ? `provider 临时错误 (已自动重试 ${outcome.attempts} 次仍失败, 等一会儿再点重试)`
             : 'provider 报错 (重试也没用, 看原始错误)',
@@ -244,7 +274,7 @@ export function useShotTTS(deps: Deps) {
       toast.info('当前没有可生成的对白或旁白')
       return
     }
-    await runBatchTTSList(all, { successText: (n) => `已重新生成 ${n} 条镜头配音` })
+    await runBatchTTSList(all, { successText: (n) => `已重新生成 ${n} 条镜头配音`, mode: 'regenerate' })
   }
 
   // ── Sprint 18 Task C: 台词编辑弹窗 + 实时解析预览 ──
@@ -318,6 +348,20 @@ export function useShotTTS(deps: Deps) {
     }
   }
 
+  /**
+   * ★ Sprint 54 T2: 某镜是否在【最近一次批量】的失败清单里
+   *   (批量重新生成失败时, 页面还显示着旧音频 → 用户要能看出"这镜没重生成成功")
+   */
+  function isBatchTTSFailed(storyboardId: number): boolean {
+    return batchTTSFailures.value.some(f => f.storyboardId === storyboardId)
+  }
+
+  /** 失败镜的批次类型 (generate / regenerate) —— 页面用它决定提示文案 */
+  function batchTTSFailureMode(storyboardId: number): 'generate' | 'regenerate' | null {
+    const hit = batchTTSFailures.value.find(f => f.storyboardId === storyboardId)
+    return (hit as any)?.mode ?? null
+  }
+
   return {
     IGNORE_TTS_SPEAKERS, IGNORE_TTS_TEXT,
     getDialogueSpeakerRaw, getDialogueText, getDialogueBodyNormalized, isTTSIgnorable,
@@ -329,6 +373,10 @@ export function useShotTTS(deps: Deps) {
     genShotTTS, batchShotTTS,
     // ★ Sprint 54: 批量重新生成【已有】配音 (与『批量生成』并存)
     batchRegenerateShotTTS,
+    // ★ Sprint 54 T2: 失败镜标记 (重新生成失败时页面还显示着旧音频 → 要让用户看出来)
+    isBatchTTSFailed, batchTTSFailureMode,
+    // ★ Sprint 54 T2: 批量取数口径 (纯函数, 便于离线断言)
+    pickBatchTTSTargets,
     // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误)
     batchTTSFailures,
     editTarget, editText, editPreview, editPreviewing, editSaving,
