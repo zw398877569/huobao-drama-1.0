@@ -1210,6 +1210,17 @@
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
                   {{  pendingTTSIds?.length ?? 0 > 0 ? '生成中…' : '批量生成'  }}
                 </button>
+                <!-- ★ Sprint 54 (PM msg-20261118-215): 批量重新生成【已有】配音 (与『批量生成』并存, 语义不同) -->
+                <button
+                  class="btn btn-sm"
+                  :disabled="(pendingTTSIds?.length ?? 0) > 0"
+                  title="重新生成【所有有台词的镜】的配音 (会覆盖已有音频)"
+                  @click="onBatchRegenerateTTS"
+                >
+                  <Loader2 v-if="pendingTTSIds?.length > 0" :size="11" class="animate-spin" />
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                  {{  pendingTTSIds?.length ?? 0 > 0 ? '生成中…' : '批量重新生成'  }}
+                </button>
               </div>
             </div>
 
@@ -2966,6 +2977,8 @@ const {
   getPitchAnomalyInfo,
   pendingTTSIds, isPendingTTS,
   genShotTTS, batchShotTTS,
+  // ★ Sprint 54 (PM msg-20261118-215): 批量重新生成【已有】配音
+  batchRegenerateShotTTS,
   // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误 + 只重试失败的入口)
   batchTTSFailures,
   getDialogueLineCount,
@@ -2975,6 +2988,29 @@ const {
   ctx: { sbs },
   refresh,
 })
+
+/**
+ * ★ Sprint 54 (PM msg-20261118-215): 【批量重新生成】的二次确认 (破坏性操作, 必须确认)
+ *   ★ 确认框里写清: 会【覆盖】已有配音 + 本次涉及多少镜 / 多少段 (用户据此判断要花多少钱)
+ *   ★ 取消 → 什么都不发生 (不覆盖任何音频)
+ */
+function onBatchRegenerateTTS() {
+  const list = (sbs.value || []).filter((sb: any) => hasDialogue(sb))
+  if (!list.length) {
+    toast.info('当前没有可生成的对白或旁白')
+    return
+  }
+  const segments = list.reduce((n: number, sb: any) => n + getDialogueLineCount(sb), 0)
+  const willOverwrite = list.filter((sb: any) => hasTTS(sb)).length
+  const ok = window.confirm(
+    `确认批量重新生成配音？\n\n`
+    + `· 本次会重新生成 ${list.length} 个镜的配音（其中 ${willOverwrite} 个已有配音，会被【覆盖】）\n`
+    + `· 共约 ${segments} 段对白\n\n`
+    + `★ 这是破坏性操作：已有配音文件会被覆盖；取消则什么都不发生。`,
+  )
+  if (!ok) return
+  batchRegenerateShotTTS()
+}
 
 // Episode pipeline navigation: sidebar sections, progress, stage gating, script-step nav
 const {

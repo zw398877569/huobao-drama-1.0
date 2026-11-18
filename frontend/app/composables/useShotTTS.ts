@@ -174,8 +174,16 @@ export function useShotTTS(deps: Deps) {
       else toast.info(eligibleCount ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
       return
     }
+    await runBatchTTSList(pending, { successText: (n) => `已生成 ${n} 条镜头配音` })
+  }
+
+  /**
+   * ★ Sprint 54 (PM msg-20261118-215): 批量跑一段【镜头列表】的公共实现
+   *   ★ 并发闸门 / 退避重试 / 失败明细 / pending 互斥 —— 全部复用『批量生成』这一套 (D3/D4)
+   */
+  async function runBatchTTSList(list: any[], opts: { successText: (ok: number) => string }) {
     // 批量配音一次性 push 所有 id 进 pending, 模板批量按钮绑 isBatchTTSPending 整体置灰
-    const pendingIds = pending.map(sb => sb.id)
+    const pendingIds = list.map(sb => sb.id)
     for (const id of pendingIds) {
       if (!isPendingTTS(id)) pendingTTSIds.value.push(id)
     }
@@ -183,7 +191,7 @@ export function useShotTTS(deps: Deps) {
     let okCount = 0
     try {
       // ★ T3: 并发闸门 (与批量生图共用同一份并发配置)
-      await runWithConcurrency(pending, loadBatchConcurrency(), async (sb) => {
+      await runWithConcurrency(list, loadBatchConcurrency(), async (sb) => {
         const shotNumber = Number(sb?.storyboard_number ?? sb?.storyboardNumber ?? sb?.id ?? 0)
         let lastDelay = 0
         // ★ T2: 只重试【这一条】(不整批重跑 → 不重复扣已成功那些的钱)
@@ -215,12 +223,28 @@ export function useShotTTS(deps: Deps) {
         })
       })
       batchTTSFailures.value = failures
-      if (okCount) toast.success(`已生成 ${okCount} 条镜头配音`)
+      if (okCount) toast.success(opts.successText(okCount))
       if (failures.length) toast.error(`${failures.length} 条镜头配音生成失败`)
       await refresh()
     } finally {
       pendingTTSIds.value = pendingTTSIds.value.filter(item => !pendingIds.includes(item))
     }
+  }
+
+  /**
+   * ★ Sprint 54 (PM msg-20261118-215): 【批量重新生成】已有配音
+   *   范围 = 本集【所有有台词的镜】(不管当前有没有配音)
+   *   ★ 与『批量生成』(只补没有配音的镜) 并存, 两个按钮各司其职 (D1/D5: 不改『批量生成』的语义)
+   *   ★ 复用同一套: 并发闸门 + 退避重试 + 失败明细 +『只重试失败的 N 条』(D3)
+   *   ★ 破坏性操作 (会覆盖已有音频) → 二次确认由页面侧负责 (D2)
+   */
+  async function batchRegenerateShotTTS() {
+    const all = ctx.sbs.value.filter(sb => hasDialogue(sb))
+    if (!all.length) {
+      toast.info('当前没有可生成的对白或旁白')
+      return
+    }
+    await runBatchTTSList(all, { successText: (n) => `已重新生成 ${n} 条镜头配音` })
   }
 
   // ── Sprint 18 Task C: 台词编辑弹窗 + 实时解析预览 ──
@@ -303,6 +327,8 @@ export function useShotTTS(deps: Deps) {
     getPitchAnomalyInfo,
     pendingTTSIds, isPendingTTS,
     genShotTTS, batchShotTTS,
+    // ★ Sprint 54: 批量重新生成【已有】配音 (与『批量生成』并存)
+    batchRegenerateShotTTS,
     // ★ Sprint 41 T4: 批量配音的失败明细 (镜号 + 原因分类 + 原始错误)
     batchTTSFailures,
     editTarget, editText, editPreview, editPreviewing, editSaving,
