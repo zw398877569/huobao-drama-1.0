@@ -5423,16 +5423,23 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 .model-select:focus { border-color: var(--accent); }
 
 /* ★ Sprint 38: 批量生成首尾帧 —— 进度条 + 失败明细 */
+/* ★ Sprint 54 T3 (PM msg-20261118-215 追加): flex-shrink: 0 ——
+   .prod-content 是 display:flex; flex-direction:column → 它的直接子元素默认 flex-shrink:1,
+   空间不够时【先被压扁】; 而带 overflow:auto 的元素 min-height 自动为 0 → 能被压到 0 高,
+   内容被自己的 overflow 裁掉 → 批量失败明细块被压成一条扁条, 里面的『只重试失败的 N 条』按钮点不到。
+   ★ 加了 flex-shrink:0 → 该块保持自然高度, 内容超出时由 .prod-content 自己滚动。 */
 .batch-shot-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 6px 10px; margin-bottom: 8px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg-1);
+  flex-shrink: 0;
 }
 .batch-shot-failures {
   display: flex; flex-direction: column; gap: 3px;
   max-height: 160px; overflow: auto;
   padding: 6px 10px; margin-bottom: 8px;
   border: 1px solid var(--border); border-radius: 6px;
+  flex-shrink: 0;
 }
 .batch-shot-failure { font-size: 11px; color: var(--text-2); }
 
