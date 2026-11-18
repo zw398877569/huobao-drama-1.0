@@ -14,8 +14,8 @@
  *   node backend/scripts/prompt-regression.mjs --samples all --no-trigger   # 只查已有日志
  *
  * 参数:
- *   --base      后端地址            默认 http://192.168.3.48:5679
- *   --flowlog   flow-log 根目录     默认 /Volumes/aicg1.0/data/flow-logs
+ *   --base      后端地址            默认 http://127.0.0.1:5679 (2026-11-17: Intel Mac 转 server)
+ *   --flowlog   flow-log 根目录     默认 /Users/mac/aicg1.0/data/flow-logs
  *   --drama     drama id            默认 15
  *   --episode   episode id          默认 15
  *   --samples   逗号分隔 / all      默认 all
@@ -32,8 +32,8 @@ const arg = (name, def) => {
 }
 const has = (name) => argv.includes('--' + name)
 
-const BASE = arg('base', 'http://192.168.3.48:5679')
-const FLOWLOG = arg('flowlog', '/Volumes/aicg1.0/data/flow-logs')
+const BASE = arg('base', 'http://127.0.0.1:5679')
+const FLOWLOG = arg('flowlog', '/Users/mac/aicg1.0/data/flow-logs')
 const DRAMA = Number(arg('drama', '15'))
 const EPISODE = Number(arg('episode', '15'))
 const SAMPLES = arg('samples', 'all')

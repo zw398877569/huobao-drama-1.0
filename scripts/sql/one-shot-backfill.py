@@ -1,22 +1,22 @@
 """
-one-shot-backfill.py — Windows 一键 backfill cron_runs.outputs
+one-shot-backfill.py — 一键 backfill cron_runs.outputs
 
-正确路径 (2026-09-29):
-  - Windows 项目根: D:\aicg1.0\huobao-drama-1.0\
-  - DB 文件:       D:\aicg1.0\data\huobao_drama.db
-  - 本脚本路径:     D:\aicg1.0\huobao-drama-1.0\scripts\sql\one-shot-backfill.py
+正确路径 (2026-11-17 更新, Intel Mac 转 server 后):
+  - Mac 项目根:    /Users/mac/Documents/aicg-dev/huobao-drama-1.0/
+  - Mac 数据盘:    /Users/mac/aicg1.0/data/
+  - DB 文件:       /Users/mac/aicg1.0/data/huobao_drama.db
+  - 本脚本路径:     /Users/mac/Documents/aicg-dev/huobao-drama-1.0/scripts/sql/one-shot-backfill.py
 
-用法 (PowerShell, 必须先停 backend 避免 SQLite 锁冲突):
+用法 (Mac, 必须先停 backend 避免 SQLite 锁冲突):
   docker stop huobao-drama-1.0
-  cd D:\aicg1.0\data
-  python -u D:\aicg1.0\huobao-drama-1.0\scripts\sql\one-shot-backfill.py --db huobao_drama.db
+  cd /Users/mac/aicg1.0/data
+  python3 -u /Users/mac/Documents/aicg-dev/huobao-drama-1.0/scripts/sql/one-shot-backfill.py --db huobao_drama.db
   docker start huobao-drama-1.0
 
-路径记忆:
-  - Mac 看的是 SMB 挂载:  /Volumes/aicg1.0/data/huobao_drama.db
-  - 后端 Docker 看的是:   /app/data/huobao_drama.db (volume 映射 D:/aicg1.0/data)
-  - Windows 看的是:        D:\aicg1.0\data\huobao_drama.db
-  - 三者是同一文件 (Windows 通过 Docker volume 把 D:\aicg1.0\data 挂到容器的 /app/data)
+路径记忆 (2026-11-17 之前是 SMB 方案, 已废弃):
+  - Mac 本地:        /Users/mac/aicg1.0/data/huobao_drama.db
+  - 后端 Docker 看:  /app/data/huobao_drama.db (volume 映射 /Users/mac/aicg1.0/data)
+  - ★ 同一文件, 不再跨 SMB → SQLite WAL 正常, 不再有 "Mac 只看到主库" 的坑
 
 v2 改进:
 - 加 sys.stdout.reconfigure(encoding="utf-8") 处理 Windows 中文编码

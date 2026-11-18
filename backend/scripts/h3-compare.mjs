@@ -13,7 +13,7 @@
  *
  * 用法:
  *   node backend/scripts/h3-compare.mjs --mode offline
- *   node backend/scripts/h3-compare.mjs --mode prompt --base http://192.168.3.48:5679 --drama 15 --episode 15
+ *   node backend/scripts/h3-compare.mjs --mode prompt --base http://127.0.0.1:5679 --drama 15 --episode 15
  */
 import fs from 'fs'
 import path from 'path'
@@ -27,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const argv = process.argv.slice(2)
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d }
 const MODE = arg('mode', 'offline')
-const BASE = arg('base', 'http://192.168.3.48:5679')
+const BASE = arg('base', 'http://127.0.0.1:5679')
 const DRAMA = Number(arg('drama', '15'))
 const EPISODE = Number(arg('episode', '15'))
 const GOLDEN = arg('golden', '/tmp/golden')
