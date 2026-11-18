@@ -223,6 +223,96 @@ const PITCH_ANOMALY_RATIO = 1.3
 const PITCH_HEALTH_MAX_ATTEMPTS = 3
 
 /**
+ * ★ Sprint 53 (PM msg-20261117-210): 降参的【收敛规则】—— 防止越降越低
+ *
+ * 【问题】实测: 镜#9 祝英台的 pitchUsed 一路 +1 → -1 → -3 → -4 (比同角色其它镜低 5 个半音),
+ *   用户实听「9，16 祝英台的声音都有点变了」。两个原因:
+ *   ① 降参【没有下限】(每判一次异常就 -1);
+ *   ② 降参结果会被【存下来当下次的起点】(单 208 A2 的复用) → 每重新生成一次就可能再低一档 → 棘轮效应。
+ *
+ * 【D1 下限】降参后的 pitchUsed 不得低于 (角色 pitchBase - 1) / intensity 不得低于 (intensityBase - 10)。
+ *   ★ 降 1 档的听感变化很轻 (频率差 6%); 再往下用户直接听出「声音变了」→ 到了下限就收手。
+ * 【D2 阈值边缘】超出阈值不足 PITCH_ANOMALY_OVERSHOOT_TOLERANCE 时不降参 (但仍标记异常)。
+ *   ★ 取值依据: MiniMax 同参数同台词的基频极差可达 230Hz (工单 204 证据4) → 1~10Hz 的超出是【随机波动】
+ *     不是"真刺耳"。实测镜#9 第二轮: 375.1 (超 10.1Hz) → 降; 366.2 (超 1.2Hz) → 又降 → 白降 2 个半音。
+ *   ★ 这个口径是【固定的绝对 Hz】, 不随角色/情绪/基线变化 (工单要求)。
+ * 【D3 收敛】到达下限后稳定复用同一个值 —— 复用时也要把【库里已经过度降参的老值】夹回下限。
+ * ★ 检测口径一律不动 (阈值 365 / 相对基线 ×1.3 / 基线来源)。
+ */
+const PITCH_ANOMALY_OVERSHOOT_TOLERANCE = 20
+const PITCH_DECREMENT_FLOOR_OFFSET = 1
+const INTENSITY_DECREMENT_FLOOR_OFFSET = 10
+
+/** 把音高/刚劲夹到降参下限 (角色基线 - 1 半音 / - 10) */
+function clampToDecrementFloor(
+  pitch: number | undefined,
+  intensity: number | undefined,
+  basePitch: number | undefined,
+  baseIntensity: number | undefined,
+): { pitch: number | undefined; intensity: number | undefined } {
+  let p = pitch
+  let i = intensity
+  if (p != null && basePitch != null) p = Math.max(p, basePitch - PITCH_DECREMENT_FLOOR_OFFSET)
+  if (i != null && baseIntensity != null) i = Math.max(i, baseIntensity - INTENSITY_DECREMENT_FLOOR_OFFSET)
+  return { pitch: p, intensity: i }
+}
+
+export interface PitchDecrementDecision {
+  /** ok=没超阈值 / stop-small-overshoot=小幅超出收手 / stop-floor=到下限收手 / decrement=降一档 */
+  action: 'ok' | 'stop-small-overshoot' | 'stop-floor' | 'decrement'
+  nextPitch?: number
+  nextIntensity?: number | null
+  /** 超出阈值多少 Hz */
+  overshootHz: number
+  reason: string
+}
+
+/**
+ * ★ Sprint 53: 降参决策 (纯函数 → 可离线断言)
+ */
+export function decidePitchDecrement(input: {
+  f0Hz: number
+  thresholdHz: number
+  usedPitch?: number
+  usedIntensity?: number | null
+  basePitch?: number
+  baseIntensity?: number | null
+}): PitchDecrementDecision {
+  const overshootHz = Math.round((input.f0Hz - input.thresholdHz) * 10) / 10
+  if (input.f0Hz <= input.thresholdHz) {
+    return { action: 'ok', overshootHz, reason: '未超阈值' }
+  }
+  // ★ D2: 阈值边缘的小幅超出 → 不降参 (仍标记异常, 由上层提示用户)
+  if (overshootHz < PITCH_ANOMALY_OVERSHOOT_TOLERANCE) {
+    return {
+      action: 'stop-small-overshoot', overshootHz,
+      reason: `只超出阈值 ${overshootHz}Hz (< ${PITCH_ANOMALY_OVERSHOOT_TOLERANCE}Hz → 随机波动) → 不降参, 保留当前参数并标记异常`,
+    }
+  }
+  // ★ D1: 降一档, 但不许越过下限
+  const curPitch = input.usedPitch
+  const curIntensity = input.usedIntensity ?? undefined
+  const nextPitch = curPitch != null
+    ? Math.max(curPitch - 1, input.basePitch != null ? input.basePitch - PITCH_DECREMENT_FLOOR_OFFSET : -Infinity)
+    : undefined
+  const nextIntensity = curIntensity != null
+    ? Math.max(curIntensity - 10, input.baseIntensity != null ? input.baseIntensity - INTENSITY_DECREMENT_FLOOR_OFFSET : -Infinity)
+    : undefined
+  const pitchStuck = curPitch != null && nextPitch === curPitch
+  const intensityStuck = curIntensity != null && nextIntensity === curIntensity
+  if ((curPitch == null || pitchStuck) && (curIntensity == null || intensityStuck)) {
+    return {
+      action: 'stop-floor', overshootHz,
+      reason: `已到降参下限 (pitchBase-${PITCH_DECREMENT_FLOOR_OFFSET} / intensityBase-${INTENSITY_DECREMENT_FLOOR_OFFSET}) → 不再继续降, 保留该值并提示用户`,
+    }
+  }
+  return {
+    action: 'decrement', nextPitch, nextIntensity: nextIntensity ?? null, overshootHz,
+    reason: `降一档 → pitch ${nextPitch ?? '(不变)'} / intensity ${nextIntensity ?? '(不变)'}`,
+  }
+}
+
+/**
  * ★ 单 208 A2: 取本镜上次生成的【最终采用参数】(降参结果) → 重新生成时直接沿用
  *   ★ 用户手动改过角色的音高/音量时以用户的新值为准 (比对落库时记下的 base 值)
  *   ★ 查不到 / 坏 JSON → 返回空 (按角色配置原值走, 行为与改动前一致)
@@ -541,6 +631,23 @@ export async function generateTTSForDialogue(
       && (prevAdopted.intensityBase == null || prevAdopted.intensityBase === baseIntensity)) {
       usedIntensity = prevAdopted.intensityUsed
     }
+    // ★ 单 210 D1/D3: 复用的值也要夹回降参下限 ——
+    //   库里可能已经存着【过度降参】的老值 (实测镜#9 = -4, 下限是 0) → 不夹的话每次重新生成都从这个老值起步。
+    const clamped = clampToDecrementFloor(usedPitch, usedIntensity, basePitch, baseIntensity)
+    if (clamped.pitch !== usedPitch || clamped.intensity !== usedIntensity) {
+      logTaskProgress('TTSConcat', 'pitch-params-clamped-to-floor', {
+        storyboardId, episodeId, speaker: m.speaker,
+        before: { pitch: usedPitch, intensity: usedIntensity },
+        after: clamped,
+        floor: {
+          pitch: basePitch != null ? basePitch - PITCH_DECREMENT_FLOOR_OFFSET : null,
+          intensity: baseIntensity != null ? baseIntensity - INTENSITY_DECREMENT_FLOOR_OFFSET : null,
+        },
+        hint: '上次落库的降参值低于下限 → 夹回下限 (Sprint 53 D1)',
+      })
+      usedPitch = clamped.pitch
+      usedIntensity = clamped.intensity
+    }
     if (usedPitch !== basePitch || usedIntensity !== baseIntensity) {
       logTaskProgress('TTSConcat', 'pitch-params-reused', {
         storyboardId, episodeId, speaker: m.speaker,
@@ -573,25 +680,43 @@ export async function generateTTSForDialogue(
       health = await measurePitchHealth(resolveAudioAbsPath(segPath))
       pitchAnomaly = health.f0Hz > 0 && health.f0Hz > anomalyThresholdHz
       if (!pitchAnomaly) break
-      // ★ 单 208 A1: hint 必须准确描述【下一次重试会用什么参数】——
-      //   attempt 1 用原值 → 下一次降 1 档; attempt 2 用降 1 档 → 下一次再降 1 档;
-      //   attempt 3 用降 2 档 → 没有下一次 (重试用尽)。
-      //   ★ 配合每次 attempt 都记的 pitch/intensity, 三条日志连起来能准确还原整条重试链。
-      const nextHint = attempt === 1
-        ? '下一次重试: 降参重试 (pitch -1 / intensity -10)'
-        : attempt === 2
-          ? '下一次重试: 再降一档 (pitch -2 / intensity -20)'
-          : '重试用尽, 保留最后一次 (并提示用户试听/手动重试)'
+      // ★ 单 210: 降参决策 (下限 + 阈值边缘收手) —— 纯函数 decidePitchDecrement
+      const decision = decidePitchDecrement({
+        f0Hz: health.f0Hz,
+        thresholdHz: anomalyThresholdHz,
+        usedPitch, usedIntensity, basePitch, baseIntensity,
+      })
       logTaskWarn('TTSConcat', 'pitch-anomaly-detected', {
         storyboardId, episodeId, speaker: m.speaker, attempt,
         f0Hz: health.f0Hz, thresholdHz: Math.round(anomalyThresholdHz), baselineHz: Math.round(baselineHz),
+        overshootHz: decision.overshootHz,
         pitch: usedPitch, intensity: usedIntensity,
-        hint: nextHint,
+        action: decision.action,
+        // ★ hint 准确描述【下一次会怎么做】(单 208 A1) + 为什么收手 (单 210)
+        hint: decision.action === 'decrement' ? `下一次重试: ${decision.reason}` : decision.reason,
       })
-      // ★ 单 208 A1: 下一次重试 = 降参 (原样重试对【稳定偏高】的台词无效:
-      //   工单证据3 —— 镜#9 连续三次原样都 >435Hz; 而阈值修到 365 后不会再有误判段白降参)
-      usedPitch = (usedPitch ?? 0) - 1
-      if (usedIntensity != null) usedIntensity = usedIntensity - 10
+      if (decision.action !== 'decrement') {
+        // ★ D1/D2: 收手 (保留当前参数, 仍标记异常 → 前端会显示「音高异常」tag)
+        if (decision.action === 'stop-floor') {
+          logTaskWarn('TTSConcat', 'pitch-anomaly-floor-reached', {
+            storyboardId, episodeId, speaker: m.speaker, attempt,
+            f0Hz: health.f0Hz, thresholdHz: Math.round(anomalyThresholdHz),
+            pitch: usedPitch, intensity: usedIntensity,
+            hint: '已到降参下限 → 不再继续降 (避免用户听到「声音变了」); 仍标记为音高异常, 由用户决定要不要手动调',
+          })
+        } else {
+          logTaskWarn('TTSConcat', 'pitch-anomaly-no-decrement', {
+            storyboardId, episodeId, speaker: m.speaker, attempt,
+            f0Hz: health.f0Hz, thresholdHz: Math.round(anomalyThresholdHz),
+            overshootHz: decision.overshootHz,
+            pitch: usedPitch, intensity: usedIntensity,
+            hint: '只比阈值高一点点 (随机波动) → 不降参; 仍标记为音高异常',
+          })
+        }
+        break
+      }
+      usedPitch = decision.nextPitch
+      usedIntensity = decision.nextIntensity ?? undefined
     }
     if (pitchAnomaly) {
       // ★ 3 次仍异常 → 明确记录 (前端会据此提示用户试听/手动重试), 不静默吞掉
