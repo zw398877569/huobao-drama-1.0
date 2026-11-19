@@ -115,7 +115,11 @@ app.put('/:id', async (c) => {
   // Map snake_case to camelCase for drizzle
   const drizzleUpdates: Record<string, any> = { updatedAt: now() }
   if ('content' in updates) drizzleUpdates.content = updates.content
-  if ('script_content' in updates) drizzleUpdates.scriptContent = updates.script_content
+  if ('script_content' in updates) {
+    drizzleUpdates.scriptContent = updates.script_content
+    // ★ 193 A: 剧本一改就记时间 → 前端拿它跟分镜创建时间比, 提示"剧本已改, 分镜还是旧的"
+    drizzleUpdates.scriptUpdatedAt = now()
+  }
   if ('title' in updates) drizzleUpdates.title = updates.title
   if ('description' in updates) drizzleUpdates.description = updates.description
   if ('status' in updates) drizzleUpdates.status = updates.status

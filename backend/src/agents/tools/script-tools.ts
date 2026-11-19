@@ -81,7 +81,8 @@ ${source}`,
     }),
     execute: async ({ content }) => {
       db.update(schema.episodes)
-        .set({ scriptContent: content, updatedAt: now() })
+        // ★ 193 A: AI 改写剧本也要记 script_updated_at (否则前端判断不出"剧本改过没重拆")
+        .set({ scriptContent: content, updatedAt: now(), scriptUpdatedAt: now() })
         .where(eq(schema.episodes.id, episodeId))
         .run()
       return { message: `Script saved`, word_count: content.length }

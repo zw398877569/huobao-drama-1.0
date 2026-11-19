@@ -34,6 +34,9 @@ export const episodes = sqliteTable('episodes', {
   title: text('title').notNull(),
   content: text('content'),
   scriptContent: text('script_content'),
+  // ★ 193 A (用户 2026-11-19 拍板): 剧本最后一次修改时间
+  //   → 与分镜的创建时间比, 就能判断【剧本改过但没重拆】(实测: drama20/ep21 剧本改了没重拆 → 台词保留率 1.7%, 31 条硬违规)
+  scriptUpdatedAt: text('script_updated_at'),
   description: text('description'),
   duration: integer('duration').default(0),
   status: text('status').default('draft'),

@@ -544,6 +544,12 @@
                 <!-- 删除 .shot-list-title 节点 (用户不要 '镜头序列' 标题, 三个按钮均分主区头部宽度) -->
                 <div class="shot-list-actions">
                   <span class="tag mono">{{ sbsTotalDuration }}s</span>
+                  <!-- ★ 193 A+B: 剧本在上次拆解之后改过 → 提示用户重拆 (台词/配音/成片都还是旧剧本的) -->
+                  <span
+                    v-if="scriptNewerThanShots"
+                    class="tag tag-warning"
+                    title="剧本在这次拆解之后被改过, 现在的分镜/配音/成片都还是按旧剧本走的"
+                  >剧本已改</span>
                   <!-- V4 wizard (PM msg-20261010-005): 主区可发现, 老 + 新 button 同 row -->
                   <button class="btn btn-sm" :disabled="rn" @click="doBreakdown" title="1 步跑完 (auto mode)">
                     <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
@@ -560,6 +566,11 @@
                     重新分步拆解
                   </button>
                 </div>
+              </div>
+              <!-- ★ 193 A: 剧本改过但没重拆 → 显式提示 (否则用户要到配音/合成阶段才发现对不上) -->
+              <div v-if="scriptNewerThanShots" class="script-stale-hint">
+                ★ 剧本在这次拆解之后被改过 —— 现在的分镜、台词、配音、成片都还是【旧剧本】的。
+                建议先点【重新拆解】再配音/生成视频, 否则成片跟剧本对不上。
               </div>
               <div class="shot-list-body">
                 <div
@@ -2879,6 +2890,21 @@ onMounted(() => { loadStylesForShot() })
 // (放到 useImageGeneration deps 里的话只在 composable 闭包内, template scope 拿不到 → click 时传 undefined → config_id 漏)
 const imageConfigId = computed(() => imageConfigIds.value[prodTab.value] ?? null)
 const videoConfigId = computed(() => videoConfigIds.value['videos'] ?? null)
+
+/* ★ 193 A+B (用户 2026-11-19 拍板): 剧本改过但分镜没重拆 → 提示 + 给【重新拆解】加角标
+   实测 (drama20/ep21): 剧本 11-15 改过、分镜没按新剧本重拆 → 台词保留率 1.7% + 31 条硬违规, 成片按旧剧本走 */
+const scriptNewerThanShots = computed(() => {
+  const scriptAt = (episode.value as any)?.script_updated_at
+  if (!scriptAt) return false
+  const list = sbs.value || []
+  if (!list.length) return false
+  const latestShotAt = list.reduce((max: string, sb: any) => {
+    const t = String(sb?.created_at || '')
+    return t > max ? t : max
+  }, '')
+  if (!latestShotAt) return false
+  return String(scriptAt) > latestShotAt
+})
 
 // Image generation: character/scene/shot-frame image (state + handlers extracted to composable)
 const {
@@ -6342,6 +6368,18 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 
 /* V4 wizard button position adjust (PM msg-20261010-005) — 主区老按钮 + 新按钮并排 */
 .empty-actions { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+/* ★ 193 A+B (用户 2026-11-19 拍板): 剧本改过但分镜没重拆的提示条 */
+.script-stale-hint {
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: 8px;
+  background: var(--warning-bg, rgba(245, 158, 11, 0.10));
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .shot-list-actions { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .shot-list-actions > .btn { flex: 1; justify-content: center; min-width: 0; padding: 0 8px; }
 .shot-list-actions > .tag { margin-right: 4px; flex-shrink: 0; }
