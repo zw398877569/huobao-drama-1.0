@@ -1,0 +1,35 @@
+# Intel Mac 专用 compose (独立完整文件, 不是 override)
+#
+# ⚠️ 为什么单独一个文件:
+#   docker-compose.yml 是 Win host 在用的 (volume 路径 D:/aicg1.0/...)
+#   两边共用一个文件时改路径会互相打脸 (2026-11-18 踩过, 已撤回一次)
+#   → 共享文件永远不动, 平台差异全放独立文件
+#
+# 用法 A — 命令行起:
+#   docker compose -f docker-compose.mac.yml up -d
+#
+# 用法 B — Portainer 里建 stack (推荐, 这样 Portainer 能完全管控):
+#   Portainer → Stacks → Add stack
+#     Repository: https://github.com/zw398877569/huobao-drama-1.0
+#     Ref: refs/heads/master
+#     Compose path: docker-compose.mac.yml
+#
+# ⚠️ 不设 container_name:
+#   让 Portainer / compose 自己命名 (huobao-drama-mac-huobao-drama-1),
+#   避免跟 Win host 上那个 huobao-drama-1.0 同名混淆
+
+services:
+  huobao-drama:
+    image: ghcr.io/zw398877569/huobao-drama-1.0:latest
+    ports:
+      # "5679:5679" = 绑 0.0.0.0 → M3 Max 也能访问本机后端
+      - "5679:5679"
+    volumes:
+      - /Users/mac/aicg1.0/data:/app/data
+      - /Users/mac/aicg1.0/config/config.yaml:/app/configs/config.yaml
+    environment:
+      - NODE_ENV=production
+      - PORT=5679
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+# deploy-trigger: 2026-11-19T01:06:00Z
