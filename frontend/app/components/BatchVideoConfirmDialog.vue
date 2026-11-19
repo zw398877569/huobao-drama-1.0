@@ -18,7 +18,7 @@
       <div class="modal-body">
         <div class="form-row">
           <label>视频配置</label>
-          <select v-model="localConfigId">
+          <select v-model="localConfigId" class="input">
             <option v-for="c in videoConfigs" :key="c.id" :value="c.id">
               {{ c.name }} (id={{ c.id }}){{ c.provider ? ' · ' + c.provider : '' }}
             </option>
@@ -33,7 +33,7 @@
 
         <div class="form-row">
           <label>工作流</label>
-          <select v-model="localWorkflow" :disabled="workflowOptions.length === 0">
+          <select v-model="localWorkflow" class="input" :disabled="workflowOptions.length === 0">
             <option v-for="wf in workflowOptions" :key="wf.id" :value="wf.id">{{ wf.label }}</option>
           </select>
           <div v-if="workflowOptions.length === 0" class="dim" style="font-size:11px">
@@ -46,7 +46,7 @@
 
         <div class="form-row">
           <label>分辨率档位</label>
-          <select v-model="localResolution" :disabled="resolutionOptions.length === 0">
+          <select v-model="localResolution" class="input" :disabled="resolutionOptions.length === 0">
             <option v-for="t in resolutionOptions" :key="t" :value="t">{{ t }}</option>
           </select>
           <div v-if="resolutionOptions.length === 0" class="dim" style="font-size:11px">
@@ -70,14 +70,14 @@
               本集没有【还没有视频】的镜 → 没有可批量生成的内容
             </div>
           </div>
-          <div class="dim" style="font-size:11px">
+          <div v-if="shots.length" class="dim" style="font-size:11px">
             <button type="button" class="btn btn-sm" @click="selectAllShots">全选</button>
             <button type="button" class="btn btn-sm" @click="selectNoneShots">全不选</button>
           </div>
         </div>
 
         <div class="batch-video-summary">
-          本次将生成 <b>{{ selectedCount }}</b> 个镜的 video（合计约 <b>{{ selectedSeconds }}</b> 秒）
+          本次将生成 <b>{{ selectedCount }}</b> 个镜的视频（合计约 <b>{{ selectedSeconds }}</b> 秒）
           <span v-if="estimateCny > 0" class="dim"> · 费用估算 ¥{{ estimateCny }}（按项目现有单镜重做口径，仅供参考）</span>
           <span v-if="running" class="dim"> · 已提交 {{ progress?.submitted ?? 0 }} / 共 {{ progress?.total ?? selectedCount }}</span>
         </div>
@@ -253,6 +253,57 @@ function onConfirm() {
 </script>
 
 <style scoped>
+/* ★ 弹窗基础样式 (与 BatchDownloadModal.vue / VideoSchedulePlan.vue 同一套设计 token)
+   ★ 为什么要自带一份: .modal-overlay / .modal / .modal-head / .modal-body / .modal-foot /
+     .form-row / .form-error 这些类只定义在 episode 页的 <style scoped> 里 —— scoped 样式
+     跨组件不生效 → 本弹窗原来【没有遮罩、没有卡片底、没有排版】, 文字直接压在页面内容上
+     (2026-11-19 用户实机截图发现) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.modal {
+  background: var(--bg-1, #fff);
+  border-radius: 10px;
+  width: 560px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+.modal-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal-title { font-weight: 600; font-size: 15px; }
+.modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.form-row { display: flex; flex-direction: column; gap: 6px; }
+.form-row label { font-size: 12px; color: var(--text-1); font-weight: 500; }
+.form-error { color: var(--error); font-size: 12px; }
 .batch-video-modal { max-width: 640px; }
 .batch-video-shots {
   display: flex;

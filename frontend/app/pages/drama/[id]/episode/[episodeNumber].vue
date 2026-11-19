@@ -2907,11 +2907,17 @@ const videoConfigId = computed(() => videoConfigIds.value['videos'] ?? null)
 /* ★ Sprint 55 T1 (PM msg-20261119-220): 批量视频的确认窗 */
 const batchVideoDialogOpen = ref(false)
 // 顶部选中的可能是复合格式 '<configId>:<workflow>' → 拆开给弹窗用
+// ★ 2026-11-19 修: 用户没在顶部模型弹层手动选过 (videoConfigIds['videos'] 为空) 时,
+//   不能再回落成"清单第一个" —— 那会选中别的 provider 甚至 is_active=0 的停用配置,
+//   跟顶部显示的【本集锁定配置】对不上 (实机截图: 顶部 H3 / 弹窗 Agnes id=3)。
+//   → 改用本集锁定的 video_config_id, 与顶部显示保持一致。
 const currentVideoConfigId = computed<number | null>(() => {
   const raw = videoConfigId.value
-  if (raw == null) return null
-  const id = Number(String(raw).split(':')[0])
-  return Number.isFinite(id) ? id : null
+  if (raw != null) {
+    const id = Number(String(raw).split(':')[0])
+    if (Number.isFinite(id)) return id
+  }
+  return lockedVideoConfigId.value ?? null
 })
 const currentVideoWorkflow = computed<string>(() => {
   const raw = videoConfigId.value
