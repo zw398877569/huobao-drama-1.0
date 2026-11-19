@@ -2925,9 +2925,7 @@ const currentVideoWorkflow = computed<string>(() => {
   const parts = String(raw).split(':')
   return parts.length > 1 ? parts[1] : ''
 })
-// ★ 单 223 T2: 候选镜 = 还没有视频的镜 (弹窗里默认全选, 用户可以减)
-const batchVideoCandidateShots = computed<any[]>(() =>
-  (sbs.value || []).filter((sb: any) => !hasVid(sb)))
+// ★ 单 223 T2 候选镜 → ★ 2026-11-19 改成【全部镜】(新定义在 useVideoGeneration 之后, 要用到 isPendingVideo)
 // ★ 单 223 T4: 批量提交进度
 const batchVideoProgress = ref<{ submitted: number; total: number } | null>(null)
 async function onBatchVideoConfirm(payload: {
@@ -3028,6 +3026,17 @@ const {
   sleep,
   isPendingShotFrame,  // ★ Sprint 36: 后一镜首帧正在生成 → 给足等待时间; 没生成 → 不干等
 })
+
+/**
+ * ★ 2026-11-19: 批量视频的候选镜 = 【全部】镜 (含已有视频的)
+ *   起因: 用户实机反馈「已经生成过的分镜没办法重新批量生成了 —— 效果不好会重新生成, 这是很常见的场合」。
+ *   事实: 单镜的『生成视频』按钮对已有视频的镜也是直接【覆盖重做】(同一链路 videoAPI.generate),
+ *        批量只是少了一步"把已有视频的镜也列出来" → 补上即可, backend 一行不用改。
+ *   ★ 正在生成中的镜排除 (重复提交 = 重复扣费); 提交时 composable 里还会再过滤一次 (防御)。
+ *   ★ 弹窗里默认只勾【还没视频】的; 已有视频的需要用户显式勾 (会覆盖原视频 → 弹窗里醒目提示)。
+ */
+const batchVideoCandidateShots = computed<any[]>(() =>
+  (sbs.value || []).filter((sb: any) => !isPendingVideo(sb.id)))
 
 // Grid tool: state + handlers for the宫格图 wizard (load + prompt + generate + assign + split)
 const {

@@ -395,10 +395,17 @@ const failedVideoMessages = ref<Record<number, string>>({})
     shotIds?: number[] | null,
     onProgress?: (p: { submitted: number; total: number }) => void,
   ): Promise<void> {
-    const pendingIds = (shotIds && shotIds.length)
+    // ★ 2026-11-19: 候选 = 用户勾的镜 (可含【已有视频】的 → 批量重做, 与单镜『生成视频』同一链路)
+    const requestedIds = (shotIds && shotIds.length)
       ? [...shotIds]
       : ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-    if (!pendingIds.length) return Promise.resolve()
+    // ★ 正在生成中的镜跳过 (重复提交 = 重复扣费)
+    const pendingIds = requestedIds.filter(id => !isPendingVideo(id))
+    const skipped = requestedIds.length - pendingIds.length
+    if (!pendingIds.length) {
+      if (skipped) toast.warning(`选中的 ${skipped} 个镜正在生成中, 已跳过 (没有重复提交)`)
+      return Promise.resolve()
+    }
 
     // Sprint 13 Task B: 串行 + 间隔提交 (替代原 pendingIds.forEach 一次性全量提交)。
     //   间隔放在 for 循环里, 最后一镜之后不等 (跟后端 triggerPlanImpl 逻辑对称)。
@@ -415,7 +422,17 @@ const failedVideoMessages = ref<Record<number, string>>({})
     }
 
     // UI 反馈: 间隔期间用户可能以为卡住, 提前告知为什么要等 (工单明确要求)
-    toast.info(`开始批量生成 ${pendingIds.length} 个视频, 每隔 ${BATCH_SUBMIT_INTERVAL_MS / 1000}s 提交一个`)
+    // ★ 2026-11-19: 其中多少个是【重做已有视频】(覆盖) —— 要在 toast 里说清楚
+    const redoCount = pendingIds.filter(id => {
+      const sb = ctx.sbs.value.find(s => s.id === id)
+      return !!sb && hasVid(sb)
+    }).length
+    toast.info(
+      `开始批量生成 ${pendingIds.length} 个视频`
+      + (redoCount ? ` (其中 ${redoCount} 个是重做已有视频, 会覆盖)` : '')
+      + `, 每隔 ${BATCH_SUBMIT_INTERVAL_MS / 1000}s 提交一个`
+      + (skipped ? `; 跳过 ${skipped} 个正在生成中的镜` : '')
+    )
 
     pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
     const submitted = submitAll()

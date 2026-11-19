@@ -57,7 +57,7 @@
         <div class="form-row">
           <label>
             要生成哪几个镜
-            <span class="dim" style="font-weight:normal">（默认全选；每个镜都会单独提交一次 → 会按次计费）</span>
+            <span class="dim" style="font-weight:normal">（默认只勾【还没视频】的；勾上【已生成】的 = 重做，会覆盖原视频）</span>
           </label>
           <div class="batch-video-shots">
             <label v-for="sb in shots" :key="sb.id" class="batch-video-shot">
@@ -65,14 +65,17 @@
               <span class="mono">#{{ sb.storyboard_number ?? sb.storyboardNumber ?? sb.id }}</span>
               <span class="dim">{{ (sb.title || sb.description || '无标题').slice(0, 18) }}</span>
               <span class="dim mono">{{ sb.duration || 0 }}s</span>
+              <span class="tag" :class="hasVideoOf(sb) ? 'tag-warning' : 'tag-info'">{{ hasVideoOf(sb) ? '已生成' : '待生成' }}</span>
             </label>
             <div v-if="!shots.length" class="dim" style="font-size:11px">
-              本集没有【还没有视频】的镜 → 没有可批量生成的内容
+              本集没有镜头 → 没有可批量生成的内容
             </div>
           </div>
           <div v-if="shots.length" class="dim" style="font-size:11px">
             <button type="button" class="btn btn-sm" @click="selectAllShots">全选</button>
             <button type="button" class="btn btn-sm" @click="selectNoneShots">全不选</button>
+            <button type="button" class="btn btn-sm" @click="selectPendingShots">只留待生成的 {{ pendingShots.length }} 个</button>
+            <button type="button" class="btn btn-sm" @click="selectGeneratedShots">也选上已生成的 {{ generatedShots.length }} 个</button>
           </div>
         </div>
 
@@ -82,11 +85,17 @@
           <span v-if="running" class="dim"> · 已提交 {{ progress?.submitted ?? 0 }} / 共 {{ progress?.total ?? selectedCount }}</span>
         </div>
 
+        <!-- ★ 2026-11-19: 勾了已有视频的镜 = 重做并覆盖 (破坏性 → 必须醒目告知) -->
+        <div v-if="selectedGeneratedCount > 0 && !running" class="form-error">
+          ★ 其中 <b>{{ selectedGeneratedCount }}</b> 个镜<b>已有视频</b> → 本次会【重做并覆盖】原视频（按次计费）；
+          已经合成过的成片会过期（视频换新后需要重新合成）。
+        </div>
+
         <div v-if="!canConfirm && !running" class="form-error">
           {{ confirmHint }}
         </div>
         <div v-else-if="!running" class="dim" style="font-size:11px">
-          ★ 只处理你勾选的镜（已生成过的不会被重跑）；取消则什么都不发生。
+          ★ 只处理你勾选的镜；取消则什么都不发生。
         </div>
       </div>
       <div class="modal-foot">
@@ -193,7 +202,8 @@ watch(() => props.show, (v) => {
   localConfigId.value = initialConfigId.value
   localWorkflow.value = ''          // 下面 watch 会按新配置归位
   localResolution.value = props.resolution || ''
-  selectedShotIds.value = props.shots.map((s: any) => s.id)   // ★ 默认全选
+  // ★ 2026-11-19: 默认只勾【还没视频】的 (重做已有视频 = 覆盖 + 计费, 不默认勾)
+  selectedShotIds.value = pendingShots.value.map((s: any) => s.id)
 })
 
 // 配置定下来 → 工作流/分辨率跟着归位
@@ -209,11 +219,21 @@ const effectiveWorkflow = computed<string>(() => localWorkflow.value || defaultW
 const resolutionOptions = computed<string[]>(() =>
   props.resolutionTiers?.[effectiveWorkflow.value]?.tiers || [])
 
+// ★ 2026-11-19: 该镜是否已有视频 (单镜『生成视频』对已有视频的镜也是直接覆盖 → 批量重做是同一条链路)
+function hasVideoOf(sb: any): boolean {
+  return !!(sb?.video_url || sb?.videoUrl)
+}
+/** 还没视频的镜 (默认勾选) */
+const pendingShots = computed<any[]>(() => props.shots.filter((s: any) => !hasVideoOf(s)))
+/** 已有视频的镜 (重做 → 要用户显式勾) */
+const generatedShots = computed<any[]>(() => props.shots.filter((s: any) => hasVideoOf(s)))
 // ★ 单 223 T2: 勾选状态
 const selectedShots = computed<any[]>(() => {
   const set = new Set(selectedShotIds.value)
   return props.shots.filter((s: any) => set.has(s.id))
 })
+/** 勾选里有多少个是【重做已有视频】的 (破坏性 → 弹窗里醒目提示) */
+const selectedGeneratedCount = computed(() => selectedShots.value.filter((s: any) => hasVideoOf(s)).length)
 const selectedCount = computed(() => selectedShots.value.length)
 const selectedSeconds = computed(() =>
   selectedShots.value.reduce((n: number, sb: any) => n + Number(sb?.duration || 0), 0))
@@ -228,6 +248,16 @@ function selectAllShots() {
 }
 function selectNoneShots() {
   selectedShotIds.value = []
+}
+/** 只留还没视频的 (默认状态) */
+function selectPendingShots() {
+  selectedShotIds.value = pendingShots.value.map((s: any) => s.id)
+}
+/** 也把已有视频的镜勾上 (= 批量重做, 会覆盖原视频) */
+function selectGeneratedShots() {
+  const set = new Set(selectedShotIds.value)
+  for (const s of generatedShots.value) set.add(s.id)
+  selectedShotIds.value = [...set]
 }
 
 // ★ 单 223 T1: 没选配置 / 没选工作流 / 一个镜都没勾 → 不允许确认 (绝不静默回落)
