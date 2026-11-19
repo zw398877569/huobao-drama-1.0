@@ -1768,8 +1768,8 @@
               :workflow="currentVideoWorkflow"
               :resolution="videoResolutionTier"
               :resolution-tiers="autodlResolutionTiers"
-              :target-count="batchVideoTargetCount"
-              :total-seconds="batchVideoTargetSeconds"
+              :shots="batchVideoCandidateShots"
+              :progress="batchVideoProgress"
               @update:show="batchVideoDialogOpen = $event"
               @confirm="onBatchVideoConfirm"
             />
@@ -2919,24 +2919,31 @@ const currentVideoWorkflow = computed<string>(() => {
   const parts = String(raw).split(':')
   return parts.length > 1 ? parts[1] : ''
 })
-// 本次会处理多少镜 (只处理还没有视频的镜 —— 与 batchVideos 的取数一致)
-const batchVideoTargetCount = computed(() => {
-  const list = sbs.value || []
-  return list.filter((sb: any) => !hasVid(sb)).length
-})
-const batchVideoTargetSeconds = computed(() => {
-  const list = sbs.value || []
-  return list
-    .filter((sb: any) => !hasVid(sb))
-    .reduce((n: number, sb: any) => n + Number(sb?.duration || 0), 0)
-})
-function onBatchVideoConfirm(payload: { configId: number | null; workflow: string; resolution: string | null }) {
-  batchVideoDialogOpen.value = false
-  // ★ 复合格式 '<configId>:<workflow>' (不选工作流就只传 configId → 后端用该配置的默认工作流)
+// ★ 单 223 T2: 候选镜 = 还没有视频的镜 (弹窗里默认全选, 用户可以减)
+const batchVideoCandidateShots = computed<any[]>(() =>
+  (sbs.value || []).filter((sb: any) => !hasVid(sb)))
+// ★ 单 223 T4: 批量提交进度
+const batchVideoProgress = ref<{ submitted: number; total: number } | null>(null)
+async function onBatchVideoConfirm(payload: {
+  configId: number | null
+  workflow: string
+  resolution: string | null
+  shotIds: number[]
+}) {
+  // ★ 复合格式 '<configId>:<workflow>' —— 工作流一定是具体的 (弹窗里选的就是要下发的)
   const composite = payload.workflow
     ? `${payload.configId}:${payload.workflow}`
     : (payload.configId != null ? String(payload.configId) : videoConfigId.value)
-  batchVideos(composite, payload.resolution ?? videoResolutionTier, videoCharacterRefs)
+  // ★ 只提交【勾选的镜】(不勾的那几镜一条请求都不发)
+  await batchVideos(
+    composite,
+    payload.resolution ?? videoResolutionTier,
+    videoCharacterRefs,
+    payload.shotIds,
+    (p) => { batchVideoProgress.value = p },
+  )
+  batchVideoProgress.value = null
+  batchVideoDialogOpen.value = false
 }
 
 /* ★ 193 A+B (用户 2026-11-19 拍板): 剧本改过但分镜没重拆 → 提示 + 给【重新拆解】加角标

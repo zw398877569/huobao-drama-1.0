@@ -382,13 +382,23 @@ const failedVideoMessages = ref<Record<number, string>>({})
     toast.error('视频生成超时')
   }
 
+  /**
+   * 批量生成视频
+   * @param shotIds      ★ Sprint 55 单 223 T2: 只提交【用户勾选的镜】(不传 = 全部还没有视频的镜)
+   * @param onProgress   ★ 单 223 T4: 提交进度 (已提交 / 共 M)
+   * @returns           ★ 提交阶段结束的 Promise (供调用方等它关窗)
+   */
   function batchVideos(
     configId?: number | string | null,
     resolution?: string | null,
     includeCharacterRefs?: boolean,
-  ) {
-    const pendingIds = ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-    if (!pendingIds.length) return
+    shotIds?: number[] | null,
+    onProgress?: (p: { submitted: number; total: number }) => void,
+  ): Promise<void> {
+    const pendingIds = (shotIds && shotIds.length)
+      ? [...shotIds]
+      : ctx.sbs.value.filter(s => !hasVid(s)).map(s => s.id)
+    if (!pendingIds.length) return Promise.resolve()
 
     // Sprint 13 Task B: 串行 + 间隔提交 (替代原 pendingIds.forEach 一次性全量提交)。
     //   间隔放在 for 循环里, 最后一镜之后不等 (跟后端 triggerPlanImpl 逻辑对称)。
@@ -398,6 +408,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
         const id = pendingIds[i]
         const sb = ctx.sbs.value.find(item => item.id === id)
         if (sb) await genVid(sb, configId, resolution, includeCharacterRefs)
+        // ★ 单 223 T4: 进度 (已提交 N / 共 M) —— 让用户看得见跑到哪了
+        onProgress?.({ submitted: i + 1, total: pendingIds.length })
         if (i < pendingIds.length - 1) await sleep(BATCH_SUBMIT_INTERVAL_MS)
       }
     }
@@ -406,7 +418,7 @@ const failedVideoMessages = ref<Record<number, string>>({})
     toast.info(`开始批量生成 ${pendingIds.length} 个视频, 每隔 ${BATCH_SUBMIT_INTERVAL_MS / 1000}s 提交一个`)
 
     pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
-    void submitAll()
+    const submitted = submitAll()
     // watchAsyncResult 只轮询完成状态, 与提交节奏无关, 不用改 (工单 do_not_touch)
     void watchAsyncResult(() => pendingIds.every(id => {
       const target = ctx.sbs.value.find(s => s.id === id)
@@ -417,6 +429,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
       if (isFailed) toast.error(target?.error_msg || target?.errorMsg || '视频生成失败')
       return done
     }), 80, 4000)
+    // ★ 返回提交阶段的 Promise (调用方等它关窗; 生成本身仍在后台轮询)
+    return submitted
   }
 
   async function doCompose(sb: any) {
