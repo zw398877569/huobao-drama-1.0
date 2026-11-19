@@ -429,7 +429,7 @@ ensureColumn('episodes', 'prompt_template', "TEXT NOT NULL DEFAULT 'minimax-h3'"
 
 // 2026-11-19 Sprint 55 / 193 A (用户拍板): episodes 加 script_updated_at 列
 //   剧本最后一次保存时间 → 前端用它跟【分镜创建时间】比, 判断"剧本改过但分镜还是旧的"。
-ensureColumn('episodes', 'script_updated_at', 'TEXT')  // ★ Sprint 25 (PM msg-20261027-112): 默认模板 general → minimax-h3
+ensureColumn('episodes', 'script_updated_at', 'TEXT')
 ensureColumn('storyboards', 'negative_prompt', 'TEXT')
 
 // P0 Scene Intention: derived from scene_intention agent

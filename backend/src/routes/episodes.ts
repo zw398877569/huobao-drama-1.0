@@ -101,7 +101,8 @@ app.post('/estimate-target-duration', async (c) => {
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   // ★ Sprint 26 Task B follow-up (可选边界 a): 已软删的集当不存在 —— 不允许再改名/改配置。
-  if (!getActiveEpisode(id)) return notFound(c, 'Episode not found')
+  const currentEp = getActiveEpisode(id)
+  if (!currentEp) return notFound(c, 'Episode not found')
   const body = await c.req.json()
 
   // Step 4.E: target_duration 加入允许字段 (UI 编辑 episode 也可改)
@@ -118,7 +119,11 @@ app.put('/:id', async (c) => {
   if ('script_content' in updates) {
     drizzleUpdates.scriptContent = updates.script_content
     // ★ 193 A: 剧本一改就记时间 → 前端拿它跟分镜创建时间比, 提示"剧本已改, 分镜还是旧的"
-    drizzleUpdates.scriptUpdatedAt = now()
+    // ★ 单 221 T2: 【内容真的变了】才记 —— 前端 saveScr() 会被【提取】等流程无条件调用一次
+    //   (一个字没改也保存) → 无条件记时间会让"剧本已改"提示【必然误报】, 用户会白拆一遍分镜。
+    if (String(updates.script_content ?? '') !== String(currentEp.scriptContent ?? '')) {
+      drizzleUpdates.scriptUpdatedAt = now()
+    }
   }
   if ('title' in updates) drizzleUpdates.title = updates.title
   if ('description' in updates) drizzleUpdates.description = updates.description

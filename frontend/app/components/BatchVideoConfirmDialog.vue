@@ -118,19 +118,32 @@ const workflowOptions = computed<{ id: string; label: string }[]>(() => {
   return models.map((m) => ({ id: m, label: getModelLabel(m, cfg.provider) }))
 })
 
+// ★ 单 221 T1: 【实际生效的工作流】—— 选了工作流用它; 没选 → 该配置 model 清单里的第一个;
+//   再没有 → 顶部当前选的工作流。★ 换配置时必须重新归位 (不能留着上一个配置的工作流:
+//   下发到不支持该工作流的配置上 → 平台侧会自动换工作流 → 用户以为在跑自己选的那个, 实际不是)。
+const effectiveWorkflow = computed<string>(() =>
+  localWorkflow.value || workflowOptions.value[0]?.id || props.workflow || '')
+
+// 换【视频配置】→ 工作流与分辨率归位到新配置自己的取值
+watch(localConfigId, (newId, oldId) => {
+  if (newId === oldId) return
+  localWorkflow.value = ''   // 归位 = 用新配置的默认工作流
+  const wf = localWorkflow.value || workflowOptions.value[0]?.id || props.workflow || ''
+  const tiers = props.resolutionTiers?.[wf]?.tiers || []
+  localResolution.value = props.resolutionTiers?.[wf]?.defaultTier || tiers[0] || ''
+})
+
 // 换工作流 → 分辨率档位跟着换 (档位的事实来源是后端)
-watch([localWorkflow, localConfigId], () => {
-  const wf = localWorkflow.value || props.workflow || ''
+watch(effectiveWorkflow, () => {
+  const wf = effectiveWorkflow.value
   const tiers = props.resolutionTiers?.[wf]?.tiers || []
   if (tiers.length && !tiers.includes(localResolution.value)) {
     localResolution.value = props.resolutionTiers?.[wf]?.defaultTier || tiers[0] || ''
   }
 })
 
-const resolutionOptions = computed<string[]>(() => {
-  const wf = localWorkflow.value || props.workflow || ''
-  return props.resolutionTiers?.[wf]?.tiers || []
-})
+const resolutionOptions = computed<string[]>(() =>
+  props.resolutionTiers?.[effectiveWorkflow.value]?.tiers || [])
 
 const estimateCny = computed(() => {
   const n = props.targetCount || 0
