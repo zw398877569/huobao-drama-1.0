@@ -12,6 +12,13 @@ type Deps = {
   refresh: () => Promise<void>,
 }
 
+/**
+ * 单镜重做的估算成本 (CNY) —— ★ Sprint 55 T1 提到模块层并导出:
+ *   批量视频的确认窗要用它做【费用估算】(同一个口径, 免得两处各写一个数)。
+ *   Mirrors estimateRetakeCostCNY in backend/src/services/retake.ts.
+ */
+export const RETAKE_COST_CNY_PER_SHOT = 2.0
+
 export function useStoryboardEdit(deps: Deps) {
   const { ctx, refresh } = deps
 
@@ -335,11 +342,6 @@ export function useStoryboardEdit(deps: Deps) {
   // ── Retake helpers ────────────────────────────────────────────────
   // UI-facing soft cap (the backend hard limit is 10).
   const RETAKE_UI_SOFT_CAP = 3
-  // Approximate per-shot cost in CNY. Mirrors estimateRetakeCostCNY in
-  // backend/src/services/retake.ts. Override via HUOBAO_RETAKE_COST_CNY
-  // env var (configurable on the backend; we just pick a sensible
-  // default for the UI).
-  const RETAKE_COST_CNY_PER_SHOT = 2.0
 
   const RETAKE_DIMENSIONS = [
     { key: 'prompt',     label: '提示词契合度', hint: '让描述更贴合 intended 画面' },

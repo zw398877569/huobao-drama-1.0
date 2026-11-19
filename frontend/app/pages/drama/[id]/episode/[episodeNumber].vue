@@ -1760,6 +1760,19 @@
 
           <!-- Sub: Videos -->
           <div v-else-if="prodTab === 'videos'" class="prod-content">
+            <!-- ★ Sprint 55 T1 (PM msg-20261119-220): 批量视频的确认窗 (选工作流/分辨率 + 本次镜数) -->
+            <BatchVideoConfirmDialog
+              :show="batchVideoDialogOpen"
+              :video-configs="videoConfigs"
+              :config-id="currentVideoConfigId"
+              :workflow="currentVideoWorkflow"
+              :resolution="videoResolutionTier"
+              :resolution-tiers="autodlResolutionTiers"
+              :target-count="batchVideoTargetCount"
+              :total-seconds="batchVideoTargetSeconds"
+              @update:show="batchVideoDialogOpen = $event"
+              @confirm="onBatchVideoConfirm"
+            />
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{  sbs?.length ?? 0  }} 个镜头</span>
               <span class="tag mono">{{  shotVidCount  }}/{{  sbs?.length ?? 0  }} 已生成</span>
@@ -1791,7 +1804,7 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   批量下载
                 </button>
-                <button class="btn btn-sm" @click="batchVideos(videoConfigId, videoResolutionTier, videoCharacterRefs)">
+                <button class="btn btn-sm" @click="batchVideoDialogOpen = true">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
@@ -2890,6 +2903,41 @@ onMounted(() => { loadStylesForShot() })
 // (放到 useImageGeneration deps 里的话只在 composable 闭包内, template scope 拿不到 → click 时传 undefined → config_id 漏)
 const imageConfigId = computed(() => imageConfigIds.value[prodTab.value] ?? null)
 const videoConfigId = computed(() => videoConfigIds.value['videos'] ?? null)
+
+/* ★ Sprint 55 T1 (PM msg-20261119-220): 批量视频的确认窗 */
+const batchVideoDialogOpen = ref(false)
+// 顶部选中的可能是复合格式 '<configId>:<workflow>' → 拆开给弹窗用
+const currentVideoConfigId = computed<number | null>(() => {
+  const raw = videoConfigId.value
+  if (raw == null) return null
+  const id = Number(String(raw).split(':')[0])
+  return Number.isFinite(id) ? id : null
+})
+const currentVideoWorkflow = computed<string>(() => {
+  const raw = videoConfigId.value
+  if (!raw) return ''
+  const parts = String(raw).split(':')
+  return parts.length > 1 ? parts[1] : ''
+})
+// 本次会处理多少镜 (只处理还没有视频的镜 —— 与 batchVideos 的取数一致)
+const batchVideoTargetCount = computed(() => {
+  const list = sbs.value || []
+  return list.filter((sb: any) => !hasVid(sb)).length
+})
+const batchVideoTargetSeconds = computed(() => {
+  const list = sbs.value || []
+  return list
+    .filter((sb: any) => !hasVid(sb))
+    .reduce((n: number, sb: any) => n + Number(sb?.duration || 0), 0)
+})
+function onBatchVideoConfirm(payload: { configId: number | null; workflow: string; resolution: string | null }) {
+  batchVideoDialogOpen.value = false
+  // ★ 复合格式 '<configId>:<workflow>' (不选工作流就只传 configId → 后端用该配置的默认工作流)
+  const composite = payload.workflow
+    ? `${payload.configId}:${payload.workflow}`
+    : (payload.configId != null ? String(payload.configId) : videoConfigId.value)
+  batchVideos(composite, payload.resolution ?? videoResolutionTier, videoCharacterRefs)
+}
 
 /* ★ 193 A+B (用户 2026-11-19 拍板): 剧本改过但分镜没重拆 → 提示 + 给【重新拆解】加角标
    实测 (drama20/ep21): 剧本 11-15 改过、分镜没按新剧本重拆 → 台词保留率 1.7% + 31 条硬违规, 成片按旧剧本走 */
