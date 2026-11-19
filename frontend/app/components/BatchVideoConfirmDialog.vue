@@ -22,11 +22,17 @@
         <div class="form-row">
           <label>工作流 (可选; 不选 = 用该配置的默认工作流)</label>
           <select v-model="localWorkflow" :disabled="workflowOptions.length === 0">
-            <option value="">默认工作流 (自动选)</option>
             <option v-for="wf in workflowOptions" :key="wf.id" :value="wf.id">{{ wf.label }}</option>
           </select>
+          <!-- ★ 单 222: 『默认工作流』必须落地成【某个具体工作流】——
+               以前这里有个空值选项『默认工作流 (自动选)』, 提交空 → 后端没有显式 model
+               → first_last 路线退成 FL2V (只传 first_frame/last_frame) → 803 的九图三音/口型同步全没了,
+               而界面显示的是"默认工作流" → 界面与实际下发不一致。 -->
           <div v-if="workflowOptions.length === 0" class="dim" style="font-size:11px">
             该配置下面没有可选工作流 → 只能用它的默认工作流
+          </div>
+          <div v-else class="dim" style="font-size:11px">
+            默认 = {{ defaultWorkflowLabel }}（顶部当前选的工作流；顶部没选过就取该配置清单里第一个非"无图"工作流）
           </div>
         </div>
         <div class="form-row">
@@ -85,14 +91,14 @@ const emit = defineEmits<{
 }>()
 
 const localConfigId = ref<number | null>(props.configId ?? null)
-const localWorkflow = ref<string>(props.workflow || '')
+const localWorkflow = ref<string>('')
 const localResolution = ref<string>(props.resolution || '')
 
 // 每次打开 → 用外部当前值重置 (用户上次的选择不该被悄悄带进下一次)
 watch(() => props.show, (v) => {
   if (!v) return
   localConfigId.value = props.configId ?? null
-  localWorkflow.value = props.workflow || ''
+  localWorkflow.value = defaultWorkflow.value
   localResolution.value = props.resolution || ''
 })
 
@@ -118,17 +124,36 @@ const workflowOptions = computed<{ id: string; label: string }[]>(() => {
   return models.map((m) => ({ id: m, label: getModelLabel(m, cfg.provider) }))
 })
 
-// ★ 单 221 T1: 【实际生效的工作流】—— 选了工作流用它; 没选 → 该配置 model 清单里的第一个;
-//   再没有 → 顶部当前选的工作流。★ 换配置时必须重新归位 (不能留着上一个配置的工作流:
-//   下发到不支持该工作流的配置上 → 平台侧会自动换工作流 → 用户以为在跑自己选的那个, 实际不是)。
-const effectiveWorkflow = computed<string>(() =>
-  localWorkflow.value || workflowOptions.value[0]?.id || props.workflow || '')
+/**
+ * ★ 单 222: 【该配置的默认工作流】—— 必须是一个【具体】的工作流 id。
+ *   取值顺序:
+ *     ① 顶部当前选的工作流 (若它在这个配置的清单里) —— 与【改动前】批量视频的行为一致
+ *        (改动前批量视频用的就是顶部的复合格式, 一直带 model → 不会退成 FL2V);
+ *     ② 否则取清单里第一个【非 no_pic】的工作流 —— ★ no_pic 是无图模式, 会丢掉首尾帧参考;
+ *     ③ 再没有就取清单第一个。
+ *   ★ 绝不能提交空: 空 = 后端没有显式 model → first_last 路线直接退成 FL2V (能力降级)。
+ */
+const defaultWorkflow = computed<string>(() => {
+  const models = workflowOptions.value
+  if (!models.length) return ''
+  if (props.workflow && models.some((m) => m.id === props.workflow)) return props.workflow
+  const notNoPic = models.find((m) => !/no_pic/.test(m.id))
+  return (notNoPic || models[0]).id
+})
+const defaultWorkflowLabel = computed<string>(() => {
+  const hit = workflowOptions.value.find((m) => m.id === defaultWorkflow.value)
+  return hit ? hit.label : '(无)'
+})
+
+// ★ 单 221 T1: 【实际生效的工作流】—— 永远是具体的那个 (单 222: 不再允许空值)
+const effectiveWorkflow = computed<string>(() => localWorkflow.value || defaultWorkflow.value)
 
 // 换【视频配置】→ 工作流与分辨率归位到新配置自己的取值
 watch(localConfigId, (newId, oldId) => {
   if (newId === oldId) return
-  localWorkflow.value = ''   // 归位 = 用新配置的默认工作流
-  const wf = localWorkflow.value || workflowOptions.value[0]?.id || props.workflow || ''
+  // ★ 换配置 → 工作流归位到【新配置自己的默认工作流】(具体值, 不能留着上一个配置的)
+  localWorkflow.value = defaultWorkflow.value
+  const wf = localWorkflow.value
   const tiers = props.resolutionTiers?.[wf]?.tiers || []
   localResolution.value = props.resolutionTiers?.[wf]?.defaultTier || tiers[0] || ''
 })
@@ -154,7 +179,8 @@ const estimateCny = computed(() => {
 function onConfirm() {
   emit('confirm', {
     configId: localConfigId.value,
-    workflow: localWorkflow.value || '',
+    // ★ 单 222: 提交的一定是【具体工作流】(默认 = 该配置的默认工作流) → 不会出现"界面写着默认、实际退成 FL2V"
+    workflow: localWorkflow.value || defaultWorkflow.value || '',
     resolution: localResolution.value || null,
   })
 }
