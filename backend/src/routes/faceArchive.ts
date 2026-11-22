@@ -79,7 +79,9 @@ app.get('/', async (c) => {
  *   3. 校验 total_received == inserted, 不等抛错回滚
  *
  * 幂等性:
- *   - 同 archivedAt 第二次 push: delete 阶段不删 (archived_at 一致), insert 阶段撞 UNIQUE 索引 → 回滚 → 返回 { partialSynced: 0 }
+ *   - 同 archivedAt 第二次 push 且 (factor,externalId) 集合完全一致: 幂等短路 → 200 { skipped: true }
+ *     (2026-11-22 加: 此前这种情况会撞 UNIQUE 索引回滚 → 每次 cron 都 500, 日志噪音无法区分无变化/真故障)
+ *   - 同 archivedAt 但集合不同: 仍走原三阶段事务 (会撞唯一索引回滚, 属于异常, 应报警)
  *   - 不同 archivedAt (face-archive 数据变更): delete 阶段清掉旧 archived_at 条目, insert 新条目 → 全替换
  *
  * atomic_safety: < 100ms 事务, 99.99% 不会撞上 LLM 调用 (Task D code-side SELECT 是只读, 不阻塞)
@@ -105,6 +107,51 @@ app.post('/sync', async (c) => {
   let deletedCount = 0
   let insertedCount = 0
   let receivedCount = rawEntries.length
+
+  // ── 幂等短路 (2026-11-22) ──
+  // 背景: face-types.json 的 last_updated 2 个月未变 → archivedAt 不变
+  //   → DELETE 阶段删 0 行 → INSERT 撞唯一索引 → 整事务回滚 → 每次 cron 都 500
+  //   (数据本身是对的, 但日志噪音大, 且无法区分「无变化」和「真故障」)
+  // 修法: 若 DB 现有 (factor, externalId) 集合与本次传入完全一致, 且无其它 archivedAt
+  //   的残留行 → 直接返回 skipped, 不开事务
+  const keyOf = (f: string, id: string) => `${f}\u0000${id}`
+  const incomingKeys = new Set<string>()
+  for (const e of rawEntries as Array<{ factor: string; externalId: string }>) {
+    incomingKeys.add(keyOf(e.factor, e.externalId))
+  }
+
+  const existingSame = db.select({
+    factor: schema.faceTypeEntries.factor,
+    externalId: schema.faceTypeEntries.externalId,
+    syncedAt: schema.faceTypeEntries.syncedAt,
+  }).from(schema.faceTypeEntries)
+    .where(eq(schema.faceTypeEntries.archivedAt, newArchivedAt))
+    .all()
+  const existingKeys = new Set(existingSame.map((e) => keyOf(e.factor, e.externalId)))
+
+  const totalRows = db.select({ n: sql<number>`count(*)` })
+    .from(schema.faceTypeEntries)
+    .get()?.n ?? 0
+
+  const sameSet = existingKeys.size === incomingKeys.size
+    && [...incomingKeys].every((k) => existingKeys.has(k))
+
+  if (sameSet && totalRows === incomingKeys.size) {
+    // 取已有行的最新 syncedAt 作为「上次真正同步时间」
+    const last = existingSame.reduce<string | null>(
+      (m, r) => (r.syncedAt && (!m || r.syncedAt > m) ? r.syncedAt : m),
+      null,
+    )
+    return success(c, {
+      receivedCount,
+      insertedCount: 0,
+      deletedCount: 0,
+      archivedAt: newArchivedAt,
+      syncedAt: last,
+      skipped: true,
+      reason: 'identical to existing snapshot (same archivedAt + same factor/externalId set)',
+    })
+  }
 
   try {
     db.transaction((tx) => {
