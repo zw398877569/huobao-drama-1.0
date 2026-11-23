@@ -69,6 +69,11 @@ jobs:
           build-args: |
             APT_MIRROR=
             NPM_REGISTRY=
+            # ★ Sprint 57 T3 (PM msg-20261123-225): 构建版本标识 (前后端同一次构建 → 逐字一致)
+            #   BUILD_ID = commit sha; BUILD_TIME = 该 commit 的【提交时间】(不是"构建那一刻":
+            #   同一 commit 重建多次显示同一个时间, 用户不会以为版本一直在跳)
+            BUILD_ID=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

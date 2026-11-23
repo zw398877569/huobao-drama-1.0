@@ -21,6 +21,10 @@
 
       <div class="studio-topbar-side">
         <div class="studio-actions">
+          <!-- ★ Sprint 57 T3 (PM msg-20261123-225): 构建版本 (不一致 = 当前页面是旧版本) -->
+          <span class="build-stamp" :class="{ 'is-stale': buildMismatch }" :title="'页面构建 ' + pageBuildLabel + ' · 服务构建 ' + serverBuildLabel">
+            页面 {{ pageBuildLabel }} · 服务 {{ serverBuildLabel }}
+          </span>
           <button class="btn" @click="refresh">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             刷新
@@ -87,6 +91,12 @@
         </button>
       </div>
     </aside>
+
+    <!-- ★ Sprint 57 T3: 页面版本与服务不一致 → 常驻提示条 (在要花钱的那一刻拦住) -->
+    <div v-if="buildMismatch" class="build-stale-banner">
+      <span>当前页面是旧版本 (页面构建 {{ pageBuildLabel }} · 服务构建 {{ serverBuildLabel }}) —— 刷新后再操作, 否则可能用旧逻辑调用后端</span>
+      <button class="btn btn-sm" @click="reloadPage">刷新页面</button>
+    </div>
 
     <!-- ========== MAIN CONTENT ========== -->
     <main class="main">
@@ -323,7 +333,7 @@
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
                 重新分配
               </button>
-              <button v-if="charsVoiced" class="btn btn-sm" @click="batchGenSamples">
+              <button v-if="charsVoiced" class="btn btn-sm" @click="guardBatchAction(batchGenSamples)">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19 5v14"/></svg>
                 生成试听文件
               </button>
@@ -1082,7 +1092,7 @@
               <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <span v-if="chars.length > visualChars?.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchCharImages">
+                <button class="btn btn-sm" @click="guardBatchAction(batchCharImages)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
@@ -1127,7 +1137,7 @@
               <span v-if="imageConfigIds['scenes']" class="tag" style="font-size:10px">自定义</span>
               <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchSceneImages">
+                <button class="btn btn-sm" @click="guardBatchAction(batchSceneImages)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
@@ -1172,7 +1182,7 @@
               <span v-if="imageConfigIds['props']" class="tag" style="font-size:10px">自定义</span>
               <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchPropImages">
+                <button class="btn btn-sm" @click="guardBatchAction(batchPropImages)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
@@ -1216,7 +1226,7 @@
               <span class="tag mono">{{ ttsGeneratedCount }}/{{ ttsEligibleCount }} 已生成</span>
               <span class="tag">{{ lockedAudioConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="(pendingTTSIds?.length ?? 0) > 0" @click="batchShotTTS()">
+                <button class="btn btn-sm" :disabled="(pendingTTSIds?.length ?? 0) > 0" @click="guardBatchAction(batchShotTTS)">
                   <Loader2 v-if="pendingTTSIds?.length > 0" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
                   {{  pendingTTSIds?.length ?? 0 > 0 ? '生成中…' : '批量生成'  }}
@@ -1226,7 +1236,7 @@
                   class="btn btn-sm"
                   :disabled="(pendingTTSIds?.length ?? 0) > 0"
                   title="重新生成【所有有台词的镜】的配音 (会覆盖已有音频)"
-                  @click="onBatchRegenerateTTS"
+                  @click="guardBatchAction(onBatchRegenerateTTS)"
                 >
                   <Loader2 v-if="pendingTTSIds?.length > 0" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
@@ -1244,7 +1254,7 @@
               <div v-for="f in batchTTSFailures" :key="f.storyboardId" class="batch-shot-failure">
                 #{{ f.shotNumber }} — {{ f.reason }}<span v-if="f.detail">（{{ f.detail }}）</span>
               </div>
-              <button class="btn btn-sm" style="margin-top:6px" @click="batchShotTTS({ retryFailures: true })">
+              <button class="btn btn-sm" style="margin-top:6px" @click="guardBatchAction(batchShotTTS, { retryFailures: true })">
                 只重试失败的 {{ batchTTSFailures.length }} 条
               </button>
             </div>
@@ -1329,7 +1339,7 @@
                   class="btn btn-sm"
                   :disabled="batchShotRunning"
                   :title="'批量生成当前集全部镜的首尾帧 (同 scene 内串行保证接力图, 不同 scene 并行)'"
-                  @click="batchShotFrames()"
+                  @click="guardBatchAction(batchShotFrames)"
                 >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   {{ batchShotRunning ? `批量生成中 ${batchShotDone}/${batchShotTotal}` : '批量生成首尾帧' }}
@@ -1353,7 +1363,7 @@
                 <template v-if="batchShotFailed">· {{ batchShotFailed }} 张失败</template>
               </span>
               <button v-if="batchShotRunning" class="btn btn-sm" @click="interruptBatchShotFrames">中断</button>
-              <button v-else class="btn btn-sm" @click="batchShotFrames({ retryFailures: true })">重试失败的 {{ batchShotFailures.length }} 张</button>
+              <button v-else class="btn btn-sm" @click="guardBatchAction(batchShotFrames, { retryFailures: true })">重试失败的 {{ batchShotFailures.length }} 张</button>
             </div>
             <div v-if="!batchShotRunning && batchShotFailures.length" class="batch-shot-failures">
               <div v-for="f in batchShotFailures" :key="f.storyboardId + ':' + f.frameType" class="batch-shot-failure">
@@ -1804,7 +1814,7 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   批量下载
                 </button>
-                <button class="btn btn-sm" @click="batchVideoDialogOpen = true">
+                <button class="btn btn-sm" @click="guardBatchAction(openBatchVideoDialog)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
@@ -2897,7 +2907,54 @@ const { stylePresets: stylesForShot, load: loadStylesForShot } = useStylePresets
 const positiveShotTokens = computed(() =>
   stylesForShot.value.find(s => s.slug === drama.value?.style)?.positiveShotTokens || ''
 )
-onMounted(() => { loadStylesForShot() })
+// ★ Sprint 57 T3 (PM msg-20261123-225): 构建版本一致性 ——
+//   2026-11-23 事故的根因之一 = 用户在一个【一直没关的旧标签页】里操作 (跑的是旧 bundle)
+//   → 页面显示自己的构建号, 服务返回自己的构建号; 不一致 = 当前页面是旧版本。
+const buildRuntimeConfig = useRuntimeConfig()
+const pageBuildId = String((buildRuntimeConfig.public as any).buildId || 'dev')
+const pageBuildLabel = String((buildRuntimeConfig.public as any).buildTime || 'dev')
+const serverBuildId = ref('')
+const serverBuildLabel = ref('')
+/** 两边都是 dev (本地开发 / 没注入构建标识) → 不比较, 不打扰 */
+const buildMismatch = computed(() =>
+  !!serverBuildId.value
+  && serverBuildId.value !== 'dev'
+  && pageBuildId !== 'dev'
+  && serverBuildId.value !== pageBuildId)
+
+/** 查一次 /health 比对构建号; 不一致 → 返回 false (调用方要拦住, 别发请求) */
+async function checkBuildVersion(): Promise<boolean> {
+  try {
+    const resp: any = await $fetch('/api/v1/health')
+    const data = resp?.data ?? resp
+    serverBuildId.value = String(data?.buildId || 'dev')
+    serverBuildLabel.value = String(data?.buildTime || 'dev')
+  } catch {
+    // 查不到就不拦 (别因为 health 短暂不可用把正常操作全挡住)
+    serverBuildId.value = ''
+    serverBuildLabel.value = ''
+    return true
+  }
+  if (buildMismatch.value) {
+    toast.warning(`当前页面是旧版本 (页面构建 ${pageBuildLabel} · 服务构建 ${serverBuildLabel}) —— 请先刷新页面再操作`)
+    return false
+  }
+  return true
+}
+
+/**
+ * ★ 批量入口统一守卫: 版本不一致 → 【拦住, 一条生成请求都不发出去】
+ *   (T3 的核心价值: 在要花钱的那一刻拦住)
+ */
+async function guardBatchAction(fn: (...a: any[]) => any, ...args: any[]) {
+  if (!(await checkBuildVersion())) return
+  await fn(...args)
+}
+/** 批量视频弹窗 (守卫通过后才开) */
+function openBatchVideoDialog() { batchVideoDialogOpen.value = true }
+function reloadPage() { if (import.meta.client) location.reload() }
+
+onMounted(() => { loadStylesForShot(); checkBuildVersion() })
 
 // 视频/图片 config 显式 override 的 computed — 顶层 const, 模板 click handler 可访问
 // (放到 useImageGeneration deps 里的话只在 composable 闭包内, template scope 拿不到 → click 时传 undefined → config_id 漏)
@@ -6594,4 +6651,25 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   color: var(--accent-text, var(--text-1));
 }
 .preview-text { flex: 1; color: var(--text-1); word-break: break-word; }
+
+/* ★ Sprint 57 T3: 构建版本显示 (一致 = 全灰低调; 不一致 = 黄 + 提示条) */
+.build-stamp {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.build-stamp.is-stale { color: var(--warning, #d98b1f); font-weight: 600; }
+.build-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--warning, #d98b1f);
+  background: var(--warning-bg, rgba(217, 139, 31, 0.12));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-1);
+}
 </style>

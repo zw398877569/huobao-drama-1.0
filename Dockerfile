@@ -14,6 +14,14 @@ ARG NPM_REGISTRY=https://registry.npmmirror.com
 # ── Stage 1: Build frontend ──────────────────────────────────
 FROM node:24-slim AS frontend-build
 
+# ★ Sprint 57 T3 (PM msg-20261123-225): 构建版本标识注入前端产物
+#   (前端用它跟后端 /health 的 buildId 比对 → "我是不是在跑旧页面"一眼可见)
+#   ★ CI 传: --build-arg BUILD_ID=<sha> --build-arg BUILD_TIME=<ISO>
+ARG BUILD_ID=""
+ARG BUILD_TIME=""
+ENV BUILD_ID=$BUILD_ID
+ENV BUILD_TIME=$BUILD_TIME
+
 # Re-declare ARGs (Docker ARG scope is per-stage, unless pre-declared)
 ARG NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
@@ -26,6 +34,12 @@ RUN npm run generate
 
 # ── Stage 2: Build backend native modules ────────────────────
 FROM node:24-slim AS backend-build
+
+# ★ Sprint 57 T3: 同一个构建标识注入后端 → /health 返回它 (前后端同一次构建 → 逐字一致)
+ARG BUILD_ID=""
+ARG BUILD_TIME=""
+ENV BUILD_ID=$BUILD_ID
+ENV BUILD_TIME=$BUILD_TIME
 
 ARG NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY
@@ -47,6 +61,13 @@ RUN npm ci --omit=dev
 
 # ── Stage 3: Production image (lean) ────────────────────────
 FROM node:24-slim
+
+# ★ Sprint 57 T3: ★ 最终镜像的 ENV 不会从 stage2 自动继承 → 这里必须再声明一次
+#   (漏了的话后端 /health 返回 dev, 跟前端永远对不上)
+ARG BUILD_ID=""
+ARG BUILD_TIME=""
+ENV BUILD_ID=$BUILD_ID
+ENV BUILD_TIME=$BUILD_TIME
 
 ARG NPM_REGISTRY
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY

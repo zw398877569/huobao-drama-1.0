@@ -18,6 +18,8 @@ setGlobalDispatcher(new Agent({
 //   用法: docker exec huobao-drama-1.0 tail -f /app/data/llm-debug-{meta,body,resp}.log
 //   关闭: DEBUG_LLM_FILE_META/DEBUG_LLM_FILE_BODY/DEBUG_LLM_FILE_RESP 任一设空值, 或问题定位完删代码.
 import fs from 'fs'
+// ★ Sprint 57 T3: health 的构建标识格式化 (与前端同格式, 统一 UTC)
+import { formatBuildStamp } from './utils/response.js'
 const DEBUG_LLM_FILE_META = process.env.DEBUG_LLM_FILE_META ?? '/app/data/llm-debug-meta.log'
 const DEBUG_LLM_FILE_BODY = process.env.DEBUG_LLM_FILE_BODY ?? '/app/data/llm-debug-body.log'
 const DEBUG_LLM_FILE_RESP = process.env.DEBUG_LLM_FILE_RESP ?? '/app/data/llm-debug-resp.log'
@@ -143,7 +145,19 @@ app.use('*', requestLogger)
 app.use('*', errorHandler)
 
 // Health check
-app.get('/api/v1/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }))
+// ★ Sprint 57 T3 (PM msg-20261123-225): health 带上【构建版本标识】
+//   ★ 为什么要: 2026-11-23 事故 = 用户点在一个【一直没关的旧标签页】里 → 前端是旧 bundle,
+//     批量视频还没有确认框 → 11 个镜一次性提交并计费。
+//     → 页面显示自己的构建号 + 服务返回构建号, 不一致就一眼看得出"我跑的是旧页面"。
+//   ★ buildId/buildTime 来自【构建时】注入的环境变量 (Dockerfile ARG → ENV, CI 传 --build-arg),
+//     不是进程启动时间 —— 进程启动时间区分不了"旧镜像一直在跑"。
+app.get('/api/v1/health', (c) => c.json({
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+  buildId: process.env.BUILD_ID || 'dev',
+  buildTime: formatBuildStamp(process.env.BUILD_TIME),
+  buildTimeIso: process.env.BUILD_TIME || null,
+}))
 
 // API routes
 const api = new Hono()

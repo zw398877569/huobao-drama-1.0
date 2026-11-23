@@ -22,7 +22,30 @@ if (devProxyEnv.NODE_ENV !== 'production') {
   console.log(`[dev-proxy] /api 与 /static 的代理目标 = ${devProxyTarget} (来源: ${devProxyTargetSource})`)
 }
 
+/**
+ * ★ Sprint 57 T3 (PM msg-20261123-225): 构建版本标识注入前端产物
+ *   (与后端 /health 返回的 buildId 比对 → 页面是不是旧版本一眼可见)
+ *   ★ BUILD_ID / BUILD_TIME 由 Docker 构建时注入 (Dockerfile ARG → ENV, CI 传 --build-arg)
+ *   ★ 格式化与后端 formatBuildStamp 逐字一致 (固定北京时间 UTC+8, 不依赖容器/浏览器时区)
+ */
+function formatBuildStamp(iso?: string): string {
+  if (!iso) return 'dev'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'dev'
+  const bj = new Date(d.getTime() + 8 * 3600 * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(bj.getUTCMonth() + 1)}-${p(bj.getUTCDate())} ${p(bj.getUTCHours())}:${p(bj.getUTCMinutes())}`
+}
+const buildId = String(devProxyEnv.BUILD_ID || 'dev')
+const buildTime = formatBuildStamp(devProxyEnv.BUILD_TIME)
+
 export default defineNuxtConfig({
+  runtimeConfig: {
+    public: {
+      buildId,
+      buildTime,
+    },
+  },
   srcDir: 'app/',
   ssr: false,
   devtools: { enabled: false },
