@@ -29,6 +29,14 @@ data/drama_generator.db-shm
 data/huobao_drama.db
 data/huobao_drama.db-wal
 data/huobao_drama.db-shm
+
+# ★ 2026-11-23: 根级 SQLite 规则 (防"用相对路径 huobao_drama.db 跑 sqlite3 → 在仓库根建空库")
+#   2026-11-23 实测踩到: 仓库根出现 0 字节的 huobao_drama.db (误用相对路径), 从没进 git,
+#   但仓库根没有忽略规则 → 下次 git add -A 就会被提交进去。
+#   ★ 仓库里【没有任何】需要入库的 .db 文件 (git ls-files | grep .db 为空) → 加这条不会误伤。
+*.db
+*.db-wal
+*.db-shm
 data/public.sql
 data/*.bak*
 data/static/
