@@ -209,6 +209,28 @@ export function getConfigById(id: number): AIConfig | null {
 }
 
 /**
+ * ★ Sprint 57 T1 (PM msg-20261123-225): 取某配置【完整的】工作流(model)清单
+ *
+ * ★ 为什么不能直接用 getConfigById(): 它只返回 models[0] —— 也就是「清单里的第一个」。
+ *   而「清单里的第一个」恰恰是 2026-11-23 批量视频事故的根因:
+ *   缺工作流时静默落到 minimax_h3_lightx2v_no_pic (无图模式) → 11 个镜一次性提交并计费,
+ *   跑出来的效果还不是用户要的。→ 要判断"是不是只有一个工作流(无歧义)", 必须拿到完整清单。
+ */
+export function getConfigModelList(configId: number): string[] {
+  const [row] = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.id, configId)).all()
+  if (!row?.model) return []
+  try {
+    const arr = JSON.parse(row.model)
+    return Array.isArray(arr)
+      ? arr.filter((m: any) => typeof m === 'string' && m.trim()).map((m: string) => m.trim())
+      : []
+  } catch {
+    return typeof row.model === 'string' && row.model.trim() ? [row.model.trim()] : []
+  }
+}
+
+/**
  * 解析路由入参中的 config_id：
  *   - 数字 / 数字字符串         → { configId }
  *   - "8:gpt-image-2" 复合格式  → { configId: 8, model: "gpt-image-2" }

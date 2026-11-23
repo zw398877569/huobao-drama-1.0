@@ -25,7 +25,7 @@ import { logTaskProgress, logTaskSuccess, logTaskWarn, logTaskError } from '../u
 import { generateVideo } from './video-generation.js'
 // Sprint 045 QA msg-20261016-068 Bug-A: 显式 dramaId: undefined 导致 video_generations.dramaId 全 null
 import { lookupDramaIdByEpisode } from '../utils/drama-lookup.js'
-import { getConfigById } from './ai.js'
+import { getConfigById, getConfigModelList } from './ai.js'
 
 // Sprint 10 v2 Task E (PM msg-20261014-002): 多 plan 防并发 — singleton Semaphore(1)
 //   防止多个 plan 同时 triggerPlan 时视频生成 API 撞 rate limit.
@@ -449,6 +449,23 @@ async function triggerPlanImpl(planId: number): Promise<void> {
     }
     // ★ Sprint 49: 计划指定的工作流优先 (显式选的工作流不被自动路由换掉)
     if (planVideoModel) modelOverride = planVideoModel
+
+    // ★ Sprint 57 T1 (PM msg-20261123-225): 存量计划 (video_model 为 null, 建于新校验之前) 走到这里可能仍没有工作流
+    //   → 同样【不许静默回落】到「配置清单里的第一个」(= no_pic 无图模式)。
+    //   清单里只有一个工作流 → 用它 (无歧义); 否则【跳过这一镜, 一条请求都不发到平台】。
+    if (!modelOverride) {
+      const wfModels = resolvedConfigId ? getConfigModelList(resolvedConfigId) : []
+      if (wfModels.length === 1) {
+        modelOverride = wfModels[0]
+      } else {
+        perShotStatus.push({ shot_id: shotId, status: 'failed', error: '缺少视频工作流: 计划没有指定工作流, 且该视频配置有多个工作流 —— 已跳过(未提交到平台)' })
+        logTaskWarn('BatchVideoScheduler', 'trigger-skip-shot-no-workflow', {
+          planId, shotId, resolvedConfigId, wfModels,
+          hint: 'Sprint 57 T1: 缺工作流不静默回落 (Sprint 57 之前建的存量计划会是这种状态)',
+        })
+        continue
+      }
+    }
 
     logTaskProgress('BatchVideoScheduler', 'shot-mode-decided', {
       planId, shotId, referenceMode, modelOverride, planVideoModel,

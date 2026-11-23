@@ -2,7 +2,8 @@ import { db, schema } from '../db/index.js'
 // ★ Sprint 48 T6 (PM msg-20261116-194): 视频链路接【生图链路同一份】错误分类器
 import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
-import { getActiveConfig, getConfigById, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
+import { getActiveConfig, getConfigById, getConfigModelList, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
+import { decideVideoModel, VideoModelRequiredError } from './video-model-policy.js'
 // ★ Sprint 52 (PM msg-20261117-207): 803 专属 —— 本镜出场角色的形象图 (用 adapter 的常量, 不写死字面量)
 import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
 // Sprint 15 (PM msg-20261020-075): 台词时间轴 —— 拼进 video_prompt 的描述段, 让 H3 知道谁在什么时候说什么
@@ -88,12 +89,23 @@ interface GenerateVideoParams {
   traceId?: string
 }
 
+/** ★ Sprint 57 T1: 解析出【必须显式指定】的视频工作流; 拿不到就抛 VideoModelRequiredError */
+export function resolveExplicitVideoModel(configId: number | null | undefined, explicitModel?: string | null): string {
+  const models = configId ? getConfigModelList(configId) : []
+  const r = decideVideoModel(explicitModel, models)
+  if (!r.ok) throw new VideoModelRequiredError(configId ?? null, models, r.error)
+  return r.model
+}
+
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   const ts = now()
   const config = params.configId
     ? getConfigById(params.configId)
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
+
+  // ★ Sprint 57 T1: 【在落库 / 调平台之前】把工作流定死 —— 缺工作流直接抛错, 不静默回落
+  const effectiveModel = resolveExplicitVideoModel(params.configId, params.model)
 
   // 2026-10-12 sprint 43 FIX-8-AUTOLOAD (QA msg-20261012-047): 后端防御性从 image_generations 表读首帧图
   //   解决 storyboards.first_frame_image 字段不可靠 (image-generation.ts:471 sync update 有时没生效) 的问题
@@ -106,7 +118,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     provider: config.provider,
-    model: params.model || config.model,
+    model: effectiveModel,
     duration: params.duration,
     referenceMode: params.referenceMode || 'none',
     refImageCount: params.referenceImageUrls?.length ?? 0,
@@ -140,7 +152,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     dramaId: params.dramaId,
     source: params.source || 'storyboard',
     prompt: params.prompt,
-    model: params.model || config.model,
+    model: effectiveModel,
     provider: config.provider,
     referenceMode: params.referenceMode || 'none',
     imageUrl: params.imageUrl,

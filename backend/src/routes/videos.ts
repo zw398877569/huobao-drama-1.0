@@ -139,6 +139,12 @@ app.post('/batch-schedules', async (c) => {
   //   不指定 = 沿用该视频配置的默认工作流 (存量计划行为完全不变)。
   const videoModelRaw = typeof body.video_model === 'string' ? body.video_model.trim() : ''
   const videoModel = videoModelRaw || null
+  // ★ Sprint 57 T1 (PM msg-20261123-225): 工作流【必填】——
+  //   不指定就静默用「配置清单里的第一个」= minimax_h3_lightx2v_no_pic (无图模式) → 跑出来的不是用户要的效果还照样计费。
+  //   → 创建时就明确拒绝, 计划里必须写死工作流。
+  if (!videoModel) {
+    return badRequest(c, '必须指定视频工作流 (video_model): 定时计划不允许使用默认工作流 —— 请选一个具体工作流 (如 minimax_h3_803)')
+  }
   if (videoModel && !/^[A-Za-z0-9_.-]{1,64}$/.test(videoModel)) {
     return badRequest(c, `video_model 非法: ${videoModel}`)
   }
