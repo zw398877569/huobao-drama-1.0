@@ -40,7 +40,9 @@
             该配置下面没有可选工作流 → 先换一个配置
           </div>
           <div v-else class="dim" style="font-size:11px">
-            默认 = {{ defaultWorkflowLabel }}（顶部当前选的工作流；顶部没选过就取该配置清单里第一个非"无图"工作流）
+            默认 = {{ defaultWorkflowLabel }}
+            <span v-if="!hasPreferredWorkflow">（当前配置没有 {{ PREFERRED_DEFAULT_WORKFLOW }} → 回落：清单里第一个非"无图"工作流）</span>
+            <span v-else>（最常用配置；顶部模型记忆不再决定这里的默认值）</span>
           </div>
         </div>
 
@@ -171,19 +173,31 @@ const workflowOptions = computed<{ id: string; label: string }[]>(() => {
 })
 
 /**
- * ★ 单 222 / 223: 【该配置的默认工作流】必须是一个【具体】的工作流 id。
- *   ① 顶部当前选的工作流 (若它在这个配置的清单里) —— 与【改动前】批量视频的行为一致;
- *   ② 否则清单里第一个【非 no_pic】的 (no_pic 是无图模式, 会丢掉首尾帧参考);
- *   ③ 再没有就取清单第一个。
- *   ★ 绝不提交空: 空 = 后端没有显式 model → first_last 直接退成 FL2V (能力降级)。
+ * ★ Sprint 57 T2 (PM msg-20261123-225): 【默认工作流】固定成 minimax_h3_803
+ *
+ * ★ 为什么不看「顶部模型记忆」(props.workflow) 了:
+ *   2026-11-23 事故后, 那个记忆里存的就是 minimax_h3_lightx2v_no_pic (无图模式)
+ *   → 弹窗默认值会跟着变成无图模式 → 跑出来的效果不对还照样计费。
+ *   ★ PM 拍板: minimax_h3_803 + 1088p 是【以后最常用的配置】, 弹窗默认就应该是它。
+ *
+ * 规则:
+ *   ① 当前配置的清单里有 minimax_h3_803 → 用它
+ *   ② 没有 → 回落「清单里第一个【非 no_pic】的」(no_pic 是无图模式, 会丢掉首尾帧参考)
+ *   ③ 再没有 → 清单第一个
+ *   ★ 绝不提交空: 空 = 后端没有显式 model → 单 222 起后端会直接拒绝 (4xx)
  */
+const PREFERRED_DEFAULT_WORKFLOW = 'minimax_h3_803'
 const defaultWorkflow = computed<string>(() => {
   const models = workflowOptions.value
   if (!models.length) return ''
-  if (props.workflow && models.some((m) => m.id === props.workflow)) return props.workflow
+  const preferred = models.find((m) => m.id === PREFERRED_DEFAULT_WORKFLOW)
+  if (preferred) return preferred.id
   const notNoPic = models.find((m) => !/no_pic/.test(m.id))
   return (notNoPic || models[0]).id
 })
+/** ★ 当前配置里没有 803 (走了回落) → 界面上要说清楚回落到了哪一个 */
+const hasPreferredWorkflow = computed(() =>
+  workflowOptions.value.some((m) => m.id === PREFERRED_DEFAULT_WORKFLOW))
 const defaultWorkflowLabel = computed<string>(() => {
   const hit = workflowOptions.value.find((m) => m.id === defaultWorkflow.value)
   return hit ? hit.label : '(无)'
