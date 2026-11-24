@@ -1797,7 +1797,8 @@
                 class="res-select"
                 title="分辨率档位 (该工作流支持的档位; 竖/横按每个镜头的画幅自动选)"
               >
-                <option v-for="t in videoResolutionOptions" :key="t" :value="t">{{ t }}</option>
+                <!-- ★ Sprint 58 追加 (230): 只改【显示文案】, :value 仍是纯档位 ('768p') → 提交/落库不受影响 -->
+                <option v-for="t in videoResolutionOptions" :key="t" :value="t">{{ resolutionTierLabel(t, currentVideoWorkflowId) }}</option>
               </select>
               <!-- ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (默认开; 只对 minimax_h3_803 生效) -->
               <label
@@ -2746,6 +2747,8 @@ import {
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, propsAPI, imageAPI, videoAPI, composeAPI, mergeAPI, mediaLibraryAPI, gridAPI, aiConfigAPI, voicesAPI, agentAPI, downloadBinaryFile, autodlResolutionAPI } from '~/composables/useApi'
 // ★ Sprint 41 追加单 177: 视频卡片懒加载 (默认只挂封面图, 点了才挂 <video>)
 import { useLazyVideoCards } from '~/composables/useLazyVideoCards'
+// ★ Sprint 58 追加 (PM msg-20261124-230): 档位显示备注 (803 的 768p 只有竖屏)
+import { resolutionTierLabel } from '~/utils/resolution-tier-label'
 import { useAgent } from '~/composables/useAgent'
 import { useEpisodeContext } from '~/composables/useEpisodeContext'
 import { useImageGeneration } from '~/composables/useImageGeneration'

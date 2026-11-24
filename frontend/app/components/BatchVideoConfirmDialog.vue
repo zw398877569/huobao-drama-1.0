@@ -49,7 +49,8 @@
         <div class="form-row">
           <label>分辨率档位</label>
           <select v-model="localResolution" class="input" :disabled="resolutionOptions.length === 0">
-            <option v-for="t in resolutionOptions" :key="t" :value="t">{{ t }}</option>
+            <!-- ★ Sprint 58 追加 (230): 只改【显示文案】, :value 仍是纯档位 ('768p') → 提交/落库不受影响 -->
+            <option v-for="t in resolutionOptions" :key="t" :value="t">{{ resolutionTierLabel(t, effectiveWorkflow) }}</option>
           </select>
           <div v-if="resolutionOptions.length === 0" class="dim" style="font-size:11px">
             该工作流没有可选档位 → 用它的默认档
@@ -113,6 +114,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { getModelLabel } from '~/composables/useSettingsAi'
+// ★ Sprint 58 追加 (PM msg-20261124-230): 档位显示备注 (803 的 768p 只有竖屏)
+import { resolutionTierLabel } from '~/utils/resolution-tier-label'
 // ★ Sprint 55 T1: 金额用项目现有的 retake 成本口径 (单镜重做), 明确标注是估算
 import { RETAKE_COST_CNY_PER_SHOT } from '~/composables/useStoryboardEdit'
 
