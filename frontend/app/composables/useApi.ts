@@ -287,6 +287,10 @@ export const aiConfigAPI = {
   del: (id: number) => api.del(`/ai-configs/${id}`),
   test: (d: any) => api.post('/ai-configs/test', d),
   huobaoPreset: (apiKey: string) => api.post('/ai-configs/huobao-preset', { api_key: apiKey }),
+  // ★ Sprint 58 (PM msg-20261124-226): 全局默认模型 (image / video 各一个)
+  defaultModels: () => api.get('/ai-configs/default-models'),
+  setDefaultModel: (serviceType: string, value: string) =>
+    api.put('/ai-configs/default-models', { service_type: serviceType, value }),
 }
 
 export const agentConfigAPI = {

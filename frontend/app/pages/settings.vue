@@ -91,6 +91,15 @@
                 <div class="section-subtitle">{{ serviceMeta[st.type].desc }}</div>
               </div>
               <span v-if="countActive(st.type)" class="tag tag-accent">{{ countActive(st.type) }} 已启用</span>
+              <!-- ★ Sprint 58 (PM msg-20261124-226): 默认模型配置 (在「+ 添加」【左边】) -->
+              <button
+                v-if="st.type === 'image' || st.type === 'video'"
+                class="btn btn-ghost btn-sm"
+                :title="'没在生成页手动选模型时, 用这个默认 (会覆盖本集锁定的配置)。当前: ' + (globalDefaults?.[st.type]?.model || '未设置')"
+                @click="openDefaultModelDialog(st.type)"
+              >
+                默认模型配置
+              </button>
               <button class="btn btn-ghost btn-sm ml-auto" @click="startAddCfg(st.type)"><Plus :size="13" /> 添加</button>
             </div>
             <div class="config-list">
@@ -270,6 +279,32 @@
       </div>
     </div>
 
+    <!-- ★ Sprint 58 (PM msg-20261124-226): 默认模型配置弹窗 -->
+    <div v-if="defaultModelDialog" class="overlay" @click.self="defaultModelDialog = false">
+      <div class="modal card config-modal">
+        <div class="config-modal-head">
+          <div>
+            <div class="setup-kicker">Default Model</div>
+            <h2 class="modal-title">默认模型配置 · {{ serviceMeta[defaultModelTarget].label }}</h2>
+            <div class="modal-note">生成页没手动选模型时, 就用这个默认 (它会覆盖本集锁定的配置)。</div>
+          </div>
+          <span class="tag tag-accent">{{ serviceMeta[defaultModelTarget].label }}</span>
+        </div>
+        <label class="field">
+          <span class="field-label">默认模型</span>
+          <select class="input" v-model="defaultModelValue">
+            <option value="">（不设默认 → 保持现在的行为）</option>
+            <option v-for="o in defaultModelOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+        </label>
+        <div v-if="defaultModelError" style="color:var(--error);font-size:12px">{{ defaultModelError }}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+          <button class="btn btn-ghost" @click="defaultModelDialog = false">取消</button>
+          <button class="btn btn-primary" @click="saveDefaultModel">保存</button>
+        </div>
+      </div>
+    </div>
+
     <!-- AI Config Dialog -->
     <div v-if="cfgDialog" class="overlay" @click.self="cfgDialog = false">
       <form class="modal card config-modal" @submit.prevent="saveCfg">
@@ -427,7 +462,42 @@ const {
   startAddCfg, startEditCfg,
   testCfgPayload, testDraftCfg, testExistingCfg, saveCfg,
   applyHuobaoPreset,
+  // ★ Sprint 58: 全局默认模型
+  globalDefaults, loadGlobalDefaults, saveGlobalDefault, modelListOf,
 } = useSettingsAi(loadAgents)
+
+// ===== ★ Sprint 58 (PM msg-20261124-226): 默认模型配置 (图片 / 视频各一个全局默认) =====
+//   值 = 复合 "configId:modelName" (换模型常常要连配置一起换: nano-banana 里没有 gpt-image-2.5)
+const defaultModelDialog = ref(false)
+const defaultModelTarget = ref('image')   // ★ 纯 JS: 别写类型注解
+const defaultModelValue = ref('')
+const defaultModelError = ref('')
+/** 选项 = 【各配置自己的 model 清单】(不写死) */
+const defaultModelOptions = computed(() => {
+  const out = []   // ★ settings.vue 是纯 JS (无 lang=ts) → 别写类型注解
+  for (const c of byType(defaultModelTarget.value)) {
+    for (const m of modelListOf(c)) out.push({ value: `${c.id}:${m}`, label: `${c.name} · ${m}` })
+  }
+  return out
+})
+function openDefaultModelDialog(type) {
+  defaultModelTarget.value = type
+  defaultModelValue.value = globalDefaults.value?.[type]?.value || ''
+  defaultModelError.value = ''
+  defaultModelDialog.value = true
+}
+async function saveDefaultModel() {
+  defaultModelError.value = ''
+  try {
+    await saveGlobalDefault(defaultModelTarget.value, defaultModelValue.value)
+    toast.success('默认模型配置已保存')
+    defaultModelDialog.value = false
+  } catch (e) {
+    // ★ 后端校验失败 → 把原文显示出来 (不要吞掉)
+    defaultModelError.value = e?.message || '保存失败'
+    toast.error(defaultModelError.value)
+  }
+}
 
 // ===== Agent Configs =====
 const agentCfgs = ref([])
@@ -1252,7 +1322,7 @@ async function saveAgentCfg(type) {
   }
 }
 
-onMounted(loadAgents)
+onMounted(() => { loadAgents(); loadGlobalDefaults() })
 </script>
 
 <style scoped>

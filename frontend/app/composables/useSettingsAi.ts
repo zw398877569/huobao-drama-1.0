@@ -91,6 +91,38 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
   const huobaoForm = reactive({ apiKey: '' })
 
   // Provider metadata (single source of truth for UI labels + presets)
+  // ★ Sprint 58 (PM msg-20261124-226): 全局默认模型 (image / video 各一个全局默认)
+  //   存的是复合值 "configId:modelName" —— 因为换模型常常要连配置一起换
+  const globalDefaults = ref<Record<string, any>>({ image: null, video: null })
+  async function loadGlobalDefaults() {
+    try {
+      const resp: any = await aiConfigAPI.defaultModels()
+      globalDefaults.value = (resp?.data ?? resp) || { image: null, video: null }
+    } catch (e: any) {
+      // 查不到就不显示 (不影响别的功能)
+      globalDefaults.value = { image: null, video: null }
+    }
+  }
+  /** 保存全局默认; ★ 后端校验失败时把【原文】抛出去 (前端要显示给用户) */
+  async function saveGlobalDefault(serviceType: 'image' | 'video', value: string) {
+    const resp = await aiConfigAPI.setDefaultModel(serviceType, value)
+    await loadGlobalDefaults()
+    return resp
+  }
+  /** 某个配置自己的 model 清单 (宽松解析: 兼容 JSON 数组 / 逗号分隔) */
+  function modelListOf(c: any): string[] {
+    const m = c?.model
+    if (Array.isArray(m)) return m.filter((x: any) => typeof x === 'string' && x.trim())
+    if (typeof m === 'string' && m.trim()) {
+      try {
+        const arr = JSON.parse(m)
+        if (Array.isArray(arr)) return arr.filter((x: any) => typeof x === 'string' && x.trim())
+      } catch {}
+      return m.split(',').map((s: string) => s.trim()).filter(Boolean)
+    }
+    return []
+  }
+
   const serviceTypes = [
     { type: 'text', label: '文本' },
     { type: 'image', label: '图片' },
@@ -369,6 +401,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     cfgForm, huobaoForm,
     // metadata
     serviceTypes, providers, providerSelectOptions, serviceMeta,
+    // ★ Sprint 58: 全局默认模型
+    globalDefaults, loadGlobalDefaults, saveGlobalDefault, modelListOf,
     providerPresets, huobaoPresetCards, endpointPrefixes, endpointHint,
     // helpers
     byType, countActive, fmtModel, presetsByType, applyProviderPreset,

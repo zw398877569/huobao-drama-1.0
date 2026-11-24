@@ -1089,7 +1089,7 @@
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <span v-if="imageConfigIds['chars']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">{{ imageDefaultTag }}</span>
               <span v-if="chars.length > visualChars?.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="guardBatchAction(batchCharImages)">
@@ -1135,7 +1135,7 @@
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <span v-if="imageConfigIds['scenes']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">{{ imageDefaultTag }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="guardBatchAction(batchSceneImages)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -1180,7 +1180,7 @@
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <span v-if="imageConfigIds['props']" class="tag" style="font-size:10px">自定义</span>
-              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">默认</span>
+              <span v-else class="tag" style="font-size:10px;color:var(--text-3)">{{ imageDefaultTag }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="guardBatchAction(batchPropImages)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -2954,7 +2954,23 @@ async function guardBatchAction(fn: (...a: any[]) => any, ...args: any[]) {
 function openBatchVideoDialog() { batchVideoDialogOpen.value = true }
 function reloadPage() { if (import.meta.client) location.reload() }
 
-onMounted(() => { loadStylesForShot(); checkBuildVersion() })
+// ★ Sprint 58 (PM msg-20261124-226): 生成页显示【当前生效的默认模型名】
+//   全局默认 (设置页可配) > 本集锁定 > 清单第一个; 没配全局默认时维持现状显示
+const globalDefaults = ref<Record<string, any>>({ image: null, video: null })
+async function loadGlobalDefaults() {
+  try {
+    const resp: any = await $fetch('/api/v1/ai-configs/default-models')
+    globalDefaults.value = (resp?.data ?? resp) || { image: null, video: null }
+  } catch (e) {
+    globalDefaults.value = { image: null, video: null }
+  }
+}
+const imageDefaultTag = computed(() =>
+  globalDefaults.value.image?.model ? `默认: ${globalDefaults.value.image.model}` : '默认')
+const videoDefaultTag = computed(() =>
+  globalDefaults.value.video?.model ? `默认: ${globalDefaults.value.video.model}` : '默认')
+
+onMounted(() => { loadStylesForShot(); checkBuildVersion(); loadGlobalDefaults() })
 
 // 视频/图片 config 显式 override 的 computed — 顶层 const, 模板 click handler 可访问
 // (放到 useImageGeneration deps 里的话只在 composable 闭包内, template scope 拿不到 → click 时传 undefined → config_id 漏)
@@ -3535,7 +3551,7 @@ const modelPopoverTab = ref<string | null>(null)
 // ★ Sprint 25 fix_2: 宫格图工具的生图模型标签 (跟 currentModelLabel 同口径, 只是取 imageConfigIds['grid'])
 const gridModelLabel = computed(() => {
   const stored = imageConfigIds.value['grid']
-  if (!stored) return lockedImageConfigLabel.value || '未配置'
+  if (!stored) return globalDefaults.value.image ? imageDefaultTag.value : (lockedImageConfigLabel.value || '未配置')
   const configId = parseModelValue(stored)
   if (!configId) return '未配置'
   const cfg = imageConfigs.value.find(c => c.id === configId)
@@ -3554,7 +3570,7 @@ const gridModelLabel = computed(() => {
 
 const currentModelLabel = computed(() => {
   const stored = imageConfigIds.value[prodTab.value]
-  if (!stored) return lockedImageConfigLabel.value || '未配置'
+  if (!stored) return globalDefaults.value.image ? imageDefaultTag.value : (lockedImageConfigLabel.value || '未配置')
   // stored 格式为 "configId:modelName"，解析出 configId
   const configId = parseModelValue(stored)
   if (!configId) return '未配置'
@@ -3581,7 +3597,7 @@ function closeModelPopover() {
 // 视频子 tab 当前选中模型的显示标签 (解析 "<id>:<model>" 复合格式)
 const currentVideoModelLabel = computed(() => {
   const stored = videoConfigIds.value['videos']
-  if (!stored) return lockedVideoConfigLabel.value || '未配置'
+  if (!stored) return globalDefaults.value.video ? videoDefaultTag.value : (lockedVideoConfigLabel.value || '未配置')
   const configId = parseModelValue(stored)
   if (!configId) return '未配置'
   const cfg = videoConfigs.value.find(c => c.id === configId)
