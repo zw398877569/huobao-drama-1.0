@@ -2,7 +2,7 @@ import { db, schema } from '../db/index.js'
 // ★ Sprint 48 T6 (PM msg-20261116-194): 视频链路接【生图链路同一份】错误分类器
 import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
-import { getActiveConfig, getConfigById, getConfigModelList, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
+import { getActiveConfig, getConfigById, getConfigModelList, getGlobalDefaultModel, translateVideoPromptToEnglish, hasNonEnglishChars } from './ai.js'
 import { decideVideoModel, VideoModelRequiredError } from './video-model-policy.js'
 // ★ Sprint 52 (PM msg-20261117-207): 803 专属 —— 本镜出场角色的形象图 (用 adapter 的常量, 不写死字面量)
 import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
@@ -99,13 +99,25 @@ export function resolveExplicitVideoModel(configId: number | null | undefined, e
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId)
+  // ★ Sprint 58 (PM msg-20261124-226): 生效顺序 (Q1=A 拍板) —— 只在 Sprint 57 的 4xx 保护【前面】加一层
+  //   ① 页面显式选的 (params.model 存在) → 用它
+  //   ② 【全局视频默认】("configId:modelName" 复合值: configId 决定 provider/端点/密钥, modelName 是工作流 id)
+  //   ③ 没有全局默认 → 交给 resolveExplicitVideoModel: 清单唯一才用, 否则【仍然 4xx】(Sprint 57 保护一个字没改)
+  //   ★ 全局默认没配 → 行为与 Sprint 57 逐字一致。
+  const explicitModel = (params.model || '').trim()
+  const globalDefault = explicitModel ? null : getGlobalDefaultModel('video')
+  const effectiveConfigId = globalDefault ? globalDefault.configId : (params.configId ?? undefined)
+  const config = effectiveConfigId
+    ? getConfigById(effectiveConfigId)
     : getActiveConfig('video')
-  if (!config) throw new Error('No active video AI config')
+  if (!config) {
+    throw new Error(globalDefault
+      ? `全局视频默认指向的配置 (id=${globalDefault.configId}) 不可用 (可能已停用) —— 请到设置页改默认模型配置`
+      : 'No active video AI config')
+  }
 
   // ★ Sprint 57 T1: 【在落库 / 调平台之前】把工作流定死 —— 缺工作流直接抛错, 不静默回落
-  const effectiveModel = resolveExplicitVideoModel(params.configId, params.model)
+  const effectiveModel = resolveExplicitVideoModel(effectiveConfigId, explicitModel || globalDefault?.model)
 
   // 2026-10-12 sprint 43 FIX-8-AUTOLOAD (QA msg-20261012-047): 后端防御性从 image_generations 表读首帧图
   //   解决 storyboards.first_frame_image 字段不可靠 (image-generation.ts:471 sync update 有时没生效) 的问题

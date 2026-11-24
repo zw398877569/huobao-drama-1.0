@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById, hasNonEnglishChars, translateImagePromptToEnglish } from './ai.js'
+import { getActiveConfig, getConfigById, getGlobalDefaultModel, hasNonEnglishChars, translateImagePromptToEnglish } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
 import { getImageAdapter } from './adapters/registry'
@@ -36,10 +36,26 @@ interface GenerateImageParams {
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId)
+  // ★ Sprint 58 (PM msg-20261124-226): 生效顺序 (Q1=A 拍板)
+  //   ① 页面显式选的 (params.model 存在 = 前端传的复合值 "configId:model") → 用它
+  //   ② 【全局图片默认】→ 连配置一起换 (nano-banana → grsai 就属于这种: 换模型必须换 provider)
+  //   ③ 本集锁定的配置 (params.configId, 由 route 层从 episode.image_config_id 回落而来)
+  //   ④ 激活配置的清单第一个 (现状)
+  //   ★ 全局默认没配 → ③④ 与改动前【逐字一致】。
+  //   ★ 放 service 层 → 角色/场景/道具/镜头/宫格/批量 七个入口一次覆盖。
+  const explicitModel = (params.model || '').trim()
+  const globalDefault = explicitModel ? null : getGlobalDefaultModel('image')
+  const effectiveConfigId = globalDefault ? globalDefault.configId : (params.configId ?? undefined)
+  const config = effectiveConfigId
+    ? getConfigById(effectiveConfigId)
     : getActiveConfig('image')
-  if (!config) throw new Error('No active image AI config')
+  if (!config) {
+    throw new Error(globalDefault
+      ? `全局图片默认指向的配置 (id=${globalDefault.configId}) 不可用 (可能已停用) —— 请到设置页改默认模型配置`
+      : 'No active image AI config')
+  }
+  // ★ 落库的 model 必须反映【实际生效】的那一套 (不是清单第一个)
+  const effectiveModel = explicitModel || globalDefault?.model || config.model
 
   const res = db.insert(schema.imageGenerations).values({
     storyboardId: params.storyboardId,
@@ -48,7 +64,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     characterId: params.characterId,
     propId: params.propId,
     prompt: params.prompt,
-    model: params.model || config.model,
+    model: effectiveModel,
     provider: config.provider,
     size: params.size || '1920x1080',
     frameType: params.frameType,
@@ -67,13 +83,13 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     characterId: params.characterId,
     propId: params.propId,
     frameType: params.frameType,
-    model: params.model || config.model,
+    model: effectiveModel,
   })
   logTaskPayload('ImageTask', 'enqueue params', {
     id: lastId,
     config: {
       provider: config.provider,
-      model: config.model,
+      model: effectiveModel,
       baseUrl: config.baseUrl,
     },
     params,
