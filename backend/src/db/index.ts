@@ -403,6 +403,16 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_batch_video_schedules_episode_id ON batch_video_schedules(episode_id);
   CREATE INDEX IF NOT EXISTS idx_batch_video_schedules_status ON batch_video_schedules(status);
+  -- Sprint 58 (PM msg-20261124-226): 全局默认模型 (image / video 各一条)
+  -- value = 复合字符串 "configId:modelName" (换模型时要连配置一起换)
+  CREATE TABLE IF NOT EXISTS global_default_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_global_default_models_service_type ON global_default_models(service_type);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {

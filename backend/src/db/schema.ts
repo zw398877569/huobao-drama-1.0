@@ -534,6 +534,22 @@ export const batchVideoSchedules = sqliteTable('batch_video_schedules', {
   perShotStatus: text('per_shot_status'),
 })
 
+/**
+ * ★ Sprint 58 (PM msg-20261124-226): 全局默认模型 —— 每个 service_type 一条 (image / video)
+ *   值 = 复合字符串 "configId:modelName" (与前端 imageConfigIds / videoConfigIds 同格式)
+ *   ★ 为什么必须存【配置+模型】而不是裸模型名: 换模型往往要连配置一起换
+ *     (例: nano-banana provider 里【没有】gpt-image-2.5 → 必须 7 → 8 一起换)
+ */
+export const globalDefaultModels = sqliteTable('global_default_models', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  // image / video
+  serviceType: text('service_type').notNull(),
+  // 复合值 "configId:modelName"
+  value: text('value').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
 export const faceTypeEntries = sqliteTable('face_type_entries', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   factor: text('factor').notNull(),

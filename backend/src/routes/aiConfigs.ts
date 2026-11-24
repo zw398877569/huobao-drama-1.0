@@ -5,6 +5,7 @@ import { success, notFound, created, badRequest, now } from '../utils/response.j
 import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
+import { getGlobalDefaultModel, setGlobalDefaultModel } from '../services/ai.js'
 
 const app = new Hono()
 
@@ -488,6 +489,35 @@ app.post('/test', async (c) => {
 })
 
 // GET /ai-configs/:id
+// ★ Sprint 58 (PM msg-20261124-226): 全局默认模型 (image / video 各一条)
+//   ★ 路由必须声明在 '/:id' 【之前】—— 否则 Hono 会让 :id 通配段抢先 match "default-models"
+//     (跟 Sprint 10 Bug C 同一个坑)
+app.get('/default-models', async (c) => {
+  return success(c, {
+    image: getGlobalDefaultModel('image'),
+    video: getGlobalDefaultModel('video'),
+  })
+})
+
+// 保存 / 清空全局默认 (value 为空字符串 → 清空 = "没有默认")
+app.put('/default-models', async (c) => {
+  const body = await c.req.json()
+  const serviceType = String(body?.service_type || '').trim()
+  if (serviceType !== 'image' && serviceType !== 'video') {
+    return badRequest(c, `service_type 必须是 image 或 video (收到: ${serviceType})`)
+  }
+  const value = body?.value == null ? '' : String(body.value)
+  const result = setGlobalDefaultModel(serviceType, value)
+  if (!result.ok) {
+    // ★ 原文返回给前端 (前端要把它显示出来)
+    return badRequest(c, result.error)
+  }
+  return success(c, {
+    cleared: result.cleared,
+    default: getGlobalDefaultModel(serviceType),
+  })
+})
+
 app.get('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const [row] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).all()

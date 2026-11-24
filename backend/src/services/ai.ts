@@ -231,6 +231,107 @@ export function getConfigModelList(configId: number): string[] {
 }
 
 /**
+ * ★ Sprint 58 (PM msg-20261124-226): 全局默认模型 —— 读取 / 校验 / 保存
+ *
+ * 背景: 用户忘了在生成页显式选模型时, 生成会吃【配置清单里的第一个】——
+ *   而这两个"第一个"恰好都最容易挂: 图片 = nano-banana-fast (平台长期维护中),
+ *   视频 = minimax_h3_lightx2v_no_pic (无图废模型) → 本单给出显式的全局默认。
+ *
+ * ★ 存的是【复合值】"configId:modelName" —— 因为换模型常常要连配置一起换
+ *   (nano-banana provider 里【没有】gpt-image-2.5 → 必须 7 → 8 一起换)。
+ */
+export interface GlobalDefaultModel {
+  serviceType: string
+  /** 复合值 "configId:modelName" */
+  value: string
+  configId: number
+  model: string
+  /** 展示用 */
+  configName: string
+  modelLabel: string
+}
+
+/** 取某个 service_type 的全局默认 (没配 → null; 调用方按"没有默认"处理) */
+export function getGlobalDefaultModel(serviceType: string): GlobalDefaultModel | null {
+  const [row] = db.select().from(schema.globalDefaultModels)
+    .where(eq(schema.globalDefaultModels.serviceType, serviceType)).all()
+  if (!row?.value) return null
+  const parsed = parseConfigIdWithModel(row.value)
+  if (!parsed.configId || !parsed.model) return null
+  const [cfgRow] = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.id, parsed.configId)).all()
+  return {
+    serviceType,
+    value: row.value,
+    configId: parsed.configId,
+    model: parsed.model,
+    configName: (cfgRow as any)?.name || `配置#${parsed.configId}`,
+    modelLabel: parsed.model,
+  }
+}
+
+export type ValidateGlobalDefaultResult =
+  | { ok: true; configId: number; model: string }
+  | { ok: false; error: string }
+
+/**
+ * 校验一个全局默认值 —— ★ 不满足就拒绝, 不静默存一个非法值
+ *   ① 复合值能解析出合法 configId ② 该 config 行存在且启用 ③ model 属于该 config 的清单
+ */
+export function validateGlobalDefaultValue(serviceType: string, rawValue: string): ValidateGlobalDefaultResult {
+  const value = (rawValue || '').trim()
+  if (!value) return { ok: false, error: '默认值不能为空' }
+  const parsed = parseConfigIdWithModel(value)
+  if (!parsed.configId) {
+    return { ok: false, error: `默认值格式不对: ${value} (应为 "configId:modelName", 例如 8:gpt-image-2.5)` }
+  }
+  if (!parsed.model) {
+    return { ok: false, error: `默认值必须指定具体模型: ${value} (例如 8:gpt-image-2.5)` }
+  }
+  const [cfgRow] = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.id, parsed.configId)).all()
+  if (!cfgRow) return { ok: false, error: `配置 id=${parsed.configId} 不存在` }
+  if (!(cfgRow as any).isActive) {
+    return { ok: false, error: `配置 id=${parsed.configId} (${(cfgRow as any).name}) 已停用, 不能设为默认` }
+  }
+  const models = getConfigModelList(parsed.configId)
+  if (!models.includes(parsed.model)) {
+    return {
+      ok: false,
+      error: `模型 ${parsed.model} 不属于配置 ${(cfgRow as any).name} (id=${parsed.configId}) 的清单 [${models.join(', ') || '空'}]`,
+    }
+  }
+  return { ok: true, configId: parsed.configId, model: parsed.model }
+}
+
+/** 保存全局默认 (value 为空 → 清空 = "没有默认") */
+export function setGlobalDefaultModel(
+  serviceType: string,
+  rawValue: string | null,
+): { ok: true; cleared: boolean } | { ok: false; error: string } {
+  const value = (rawValue || '').trim()
+  if (!value) {
+    db.delete(schema.globalDefaultModels)
+      .where(eq(schema.globalDefaultModels.serviceType, serviceType)).run()
+    return { ok: true, cleared: true }
+  }
+  const v = validateGlobalDefaultValue(serviceType, value)
+  if (!v.ok) return v
+  const ts = new Date().toISOString()
+  const [existing] = db.select().from(schema.globalDefaultModels)
+    .where(eq(schema.globalDefaultModels.serviceType, serviceType)).all()
+  if (existing) {
+    db.update(schema.globalDefaultModels)
+      .set({ value, updatedAt: ts })
+      .where(eq(schema.globalDefaultModels.serviceType, serviceType)).run()
+  } else {
+    db.insert(schema.globalDefaultModels)
+      .values({ serviceType, value, createdAt: ts, updatedAt: ts }).run()
+  }
+  return { ok: true, cleared: false }
+}
+
+/**
  * 解析路由入参中的 config_id：
  *   - 数字 / 数字字符串         → { configId }
  *   - "8:gpt-image-2" 复合格式  → { configId: 8, model: "gpt-image-2" }
