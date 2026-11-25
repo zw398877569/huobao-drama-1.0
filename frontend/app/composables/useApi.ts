@@ -170,6 +170,9 @@ export const cronAPI = {
   list: (params: { date?: string; status?: string; name?: string; limit?: number } = {}) =>
     api.get('/cron/runs?' + new URLSearchParams(params as any).toString()),
   get: (runId: string) => api.get(`/cron/runs/${runId}`),
+  // ★ Sprint 57 T2-A: 批量删运行记录 (正式任务名会被后端拒绝)
+  deleteRuns: (params: { name: string; from: string; to: string }) =>
+    api.del(`/cron/runs?${new URLSearchParams(params as any).toString()}`),
 }
 // ★ Sprint 43: 各 AutoDL 工作流支持的分辨率档位 (给前端『分辨率』下拉用; 事实来源是后端 adapter)
 export const autodlResolutionAPI = {

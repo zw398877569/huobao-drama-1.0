@@ -50,6 +50,46 @@ const stats = ref<{ total: number; success: number; failed: number; running: num
   { total: 0, success: 0, failed: 0, running: 0, avgDurationMs: 0 }
 )
 const loading = ref(false)
+// ★ Sprint 57 T2-A (PM msg-20261123-226): 调度健康度 + 清理脏记录
+const error = ref('')
+const health = ref<any[]>([])
+const healthByName = computed<Record<string, any>>(() => {
+  const m: Record<string, any> = {}
+  for (const h of health.value) m[h.taskName] = h
+  return m
+})
+const cleanupOpen = ref(false)
+const cleanupName = ref('')
+const cleanupFrom = ref('')
+const cleanupTo = ref('')
+const cleanupError = ref('')
+const cleanupBusy = ref(false)
+function openCleanup() {
+  cleanupName.value = nameFilter.value || ''
+  cleanupFrom.value = date.value
+  cleanupTo.value = date.value
+  cleanupError.value = ''
+  cleanupOpen.value = true
+}
+async function doCleanup() {
+  cleanupError.value = ''
+  if (!cleanupName.value.trim() || !cleanupFrom.value || !cleanupTo.value) {
+    cleanupError.value = '任务名 / 起止日期都要填'
+    return
+  }
+  if (!confirm(`确认删除 ${cleanupName.value} 在 ${cleanupFrom.value} ~ ${cleanupTo.value} 的运行记录?\n(正式任务名会被后端拒绝)`)) return
+  cleanupBusy.value = true
+  try {
+    const r: any = await cronAPI.deleteRuns({ name: cleanupName.value.trim(), from: cleanupFrom.value, to: cleanupTo.value })
+    toast.success(`已删除 ${r?.deleted ?? 0} 条记录`)
+    cleanupOpen.value = false
+    await load()
+  } catch (e: any) {
+    cleanupError.value = e?.message || '删除失败'
+  } finally {
+    cleanupBusy.value = false
+  }
+}
 const selected = ref<any | null>(null)
 const detailLoading = ref(false)
 
@@ -141,9 +181,13 @@ async function load() {
     const data: any = await cronAPI.list(params)
     runs.value = data?.runs || []
     stats.value = data?.stats || stats.value
+    health.value = data?.health || []
+    error.value = ''
   } catch (e: any) {
     console.warn('load runs failed', e)
     runs.value = []
+    health.value = []
+    error.value = e?.message || '未知错误'
   } finally {
     loading.value = false
   }
@@ -208,6 +252,9 @@ onMounted(load)
         </label>
       </div>
       <div class="tasks-actions">
+        <button class="btn" :disabled="loading" @click="openCleanup" title="按任务名 + 日期范围批量删除运行记录 (正式任务名会被后端拒绝)">
+          清理脏记录
+        </button>
         <button class="btn btn-primary" :disabled="loading" @click="load">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -216,6 +263,12 @@ onMounted(load)
           {{ loading ? '加载中…' : '刷新' }}
         </button>
       </div>
+    </div>
+
+    <!-- ★ Sprint 57 T2-A: 请求失败态 -->
+    <div v-if="error" class="tasks-error">
+      <span>加载失败：{{ error }}</span>
+      <button class="btn btn-sm" @click="load">重试</button>
     </div>
 
     <!-- 统计卡片 -->
@@ -281,6 +334,42 @@ onMounted(load)
       </div>
     </div>
 
+    <!-- ★ Sprint 57 T2-A: 调度健康度 (应跑 / 实跑 / 漏跑) -->
+    <div v-if="health.length" class="tasks-health">
+      <div class="tasks-by-task-title">
+        <span>调度健康度</span>
+        <span class="dim" style="font-size:11px; font-weight:normal">
+          应跑 = 档位表应有条数 · 实跑只算【定时】跑成功的 (手动/未知不计入, 免得调试跑把覆盖率刷高)
+        </span>
+      </div>
+      <div class="tasks-by-task-grid">
+        <div
+          v-for="h in health"
+          :key="h.taskName"
+          class="task-card"
+          :class="{ 'task-card-failed': h.missing > 0 }"
+        >
+          <div class="task-card-head">
+            <span class="task-card-name">{{ h.taskName }}</span>
+            <span :class="['tag', h.missing > 0 ? 'tag-error' : 'tag-success']">
+              {{ h.missing > 0 ? `漏跑 ${h.missing}` : '正常' }}
+            </span>
+          </div>
+          <div class="task-card-stats">
+            <span class="task-card-stat">应跑 {{ h.expected }}</span>
+            <span class="task-card-stat task-card-stat-success">实跑 {{ h.actual }}</span>
+            <span class="task-card-stat" :class="{ 'task-card-stat-failed': h.missing > 0 }">漏跑 {{ h.missing }}</span>
+          </div>
+          <div class="task-card-foot dim mono">
+            定时 {{ h.bySource?.scheduled ?? 0 }} · 手动 {{ h.bySource?.manual ?? 0 }} · 未知 {{ h.bySource?.unknown ?? 0 }}
+          </div>
+          <div v-if="h.missedSlots?.length" class="task-card-foot dim">
+            漏: {{ h.missedSlots.join(' / ') }}
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 表格 -->
     <div class="tasks-table-wrap">
       <table class="tasks-table">
@@ -292,15 +381,17 @@ onMounted(load)
             <th style="width: 100px">退出码</th>
             <th style="width: 90px">耗时</th>
             <th style="width: 240px">产出</th>
+            <th style="width: 70px">来源</th>
+            <th style="width: 120px">档位</th>
             <th style="width: 100px">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="loading && !runs.length">
-            <td colspan="7" class="tasks-empty">加载中…</td>
+            <td colspan="9" class="tasks-empty">加载中…</td>
           </tr>
           <tr v-else-if="!runs.length">
-            <td colspan="7" class="tasks-empty">
+            <td colspan="9" class="tasks-empty">
               <div>{{ date }} 没有记录</div>
               <div class="dim" style="font-size:11px; margin-top:4px">
                 数据从代码改动那一刻开始记录 — 之前的日志捞不回来
@@ -322,11 +413,46 @@ onMounted(load)
               </span>
             </td>
             <td>
+              <span :class="['tag', r.source === 'scheduled' ? 'tag-success' : (r.source === 'manual' ? 'tag-info' : '')]">
+                {{ r.source === 'scheduled' ? '定时' : (r.source === 'manual' ? '手动' : '未知') }}
+              </span>
+            </td>
+            <td class="mono dim">{{ r.slot || '—' }}</td>
+            <td>
               <button class="btn btn-sm" @click.stop="openDetail(r)">查看</button>
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- ★ Sprint 57 T2-A: 清理脏记录弹窗 (样式自带在本页 <style scoped>, 不抽组件) -->
+    <div v-if="cleanupOpen" class="tasks-cleanup-mask" @click.self="cleanupOpen = false">
+      <div class="tasks-cleanup-box" @click.stop>
+        <div class="tasks-cleanup-title">清理运行记录</div>
+        <div class="dim" style="font-size:11px; margin-bottom:10px">
+          按任务名 + 日期范围批量删除。★ 正式任务名 (dailylearn / minimaxlearn / videounderstand / face-archive 等) 会被后端拒绝。
+        </div>
+        <label class="tasks-cleanup-field">
+          <span>任务名</span>
+          <input class="input" v-model="cleanupName" placeholder="如 array-retest" />
+        </label>
+        <label class="tasks-cleanup-field">
+          <span>起始日期</span>
+          <input class="input" v-model="cleanupFrom" placeholder="YYYY-MM-DD" />
+        </label>
+        <label class="tasks-cleanup-field">
+          <span>结束日期</span>
+          <input class="input" v-model="cleanupTo" placeholder="YYYY-MM-DD" />
+        </label>
+        <div v-if="cleanupError" style="color:var(--error); font-size:12px; margin-top:6px">{{ cleanupError }}</div>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px">
+          <button class="btn btn-ghost" :disabled="cleanupBusy" @click="cleanupOpen = false">取消</button>
+          <button class="btn btn-primary" :disabled="cleanupBusy" @click="doCleanup">
+            {{ cleanupBusy ? '删除中…' : '确认删除' }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- 详情抽屉 -->
@@ -467,6 +593,28 @@ onMounted(load)
 .tasks-row { cursor: pointer; transition: background 0.1s; }
 .tasks-row:hover { background: var(--bg-hover); }
 .tasks-empty { padding: 40px 12px; text-align: center; color: var(--text-3); }
+/* ★ Sprint 57 T2-A: 调度健康度 + 清理弹窗 (样式自带在本页 → 不会因为 scoped 跨组件而失效) */
+.tasks-error {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: 10px;
+  border: 1px solid var(--error); border-radius: var(--radius);
+  background: var(--error-bg, rgba(220, 53, 69, 0.08));
+  color: var(--error); font-size: 12.5px;
+}
+.tasks-health { margin-bottom: 14px; }
+.tasks-cleanup-mask {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+}
+.tasks-cleanup-box {
+  width: 420px; max-width: 92vw;
+  background: var(--bg-1); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 18px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+.tasks-cleanup-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.tasks-cleanup-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; font-size: 12px; color: var(--text-2); }
 .mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-2); }
 
 /* tag */
