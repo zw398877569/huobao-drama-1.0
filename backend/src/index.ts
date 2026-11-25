@@ -107,6 +107,8 @@ import characters from './routes/characters.js'
 import props from './routes/props.js'
 import images from './routes/images.js'
 import videos from './routes/videos.js'
+// ★ Sprint 58 (PM msg-20261123-227): daily-hot 看板端点 (收 M3 上报的 raw JSON + 取裁剪后的)
+import dailyHot, { cleanupDailyHot } from './routes/dailyHot.js'
 import agnesDebug from './routes/agnesDebug.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders, ensureAgentDefaults, applyHuobaoPreset } from './routes/aiConfigs.js'
@@ -175,6 +177,8 @@ api.route('/ai-providers', aiProviders)
 api.route('/agent-configs', agentConfigs)
 api.route('/agent', agent)
 api.route('/cron', cron)
+// ★ Sprint 58: /daily-hot (文件存储, 不新增数据库表)
+api.route('/daily-hot', dailyHot)
 api.route('/compose', compose)
 api.route('/merge', merge)
 api.route('/grid', grid)
@@ -236,6 +240,14 @@ try {
 initBatchVideoScheduler().catch((err) => {
   logTaskError('Server', 'init-batch-video-scheduler-fail', { error: err?.message || String(err) })
 })
+
+// ★ Sprint 58 (PM msg-20261123-227): 后端启动时清掉超 30 天的 daily-hot 文件 (POST 时也会清一次)
+try {
+  const removed = cleanupDailyHot()
+  if (removed) console.log(`🧹 已清理超 30 天的 daily-hot 数据: ${removed} 个文件`)
+} catch (err: any) {
+  logTaskError('Server', 'daily-hot-cleanup-fail', { error: err?.message || String(err) })
+}
 
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
 serve({ fetch: app.fetch, port })

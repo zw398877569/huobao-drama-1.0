@@ -293,6 +293,11 @@ export const aiConfigAPI = {
     api.put('/ai-configs/default-models', { service_type: serviceType, value }),
 }
 
+// ★ Sprint 58 (PM msg-20261123-227): daily-hot 看板 (M3 上报 → Intel 后端落盘 → 前端查)
+export const dailyHotAPI = {
+  get: (date?: string) => api.get(`/daily-hot${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+}
+
 export const agentConfigAPI = {
   list: () => api.get('/agent-configs'),
   get: (id: number) => api.get(`/agent-configs/${id}`),

@@ -16,6 +16,14 @@
       </div>
 
       <nav class="header-nav">
+        <!-- ★ Sprint 58 (PM msg-20261123-227): 热点看板 (放在【项目】的【左边】, 用户明确要求) -->
+        <NuxtLink to="/hot" class="nav-link" :class="{ active: route.path === '/hot' }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2c1 4 4 5 4 9a4 4 0 0 1-8 0c0-1.5.6-2.7 1.4-3.6C8 9.3 8.6 11 10 12c-.3-3 1-5.2 2-7.3 0 0 1 .3 2.4 1.4 3.6C13.9 7 13.6 5.4 12 2z"/>
+            <path d="M12 22a6 6 0 0 0 6-6c0-2.2-1-3.6-2-5-1 1.4-1.6 2.6-2 4-1-2-1-4 3-4 5a6 6 0 0 0 6 6z"/>
+          </svg>
+          <span>热点</span>
+        </NuxtLink>
         <NuxtLink to="/" class="nav-link" :class="{ active: route.path === '/' }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
