@@ -22,10 +22,21 @@
 import { Hono } from 'hono'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import { success, badRequest, notFound } from '../utils/response.js'
 import { trimDailyHot, MAX_DAILY_BYTES, MAX_ITEMS_PER_BOARD } from '../services/daily-hot-trim.js'
 
 const app = new Hono()
+
+/**
+ * ★ 2026-11-23 P0 热修 (单 228): ES module 里【没有 __dirname 这个全局】!
+ *   本项目 backend/package.json 是 "type": "module" → 直接写 __dirname 会在【模块求值期】抛
+ *   ReferenceError: __dirname is not defined in ES module scope → 整个后端容器反复重启。
+ *   ★ 而且 tsc 抓不到: backend/tsconfig.json 的 "types": ["node"] 让 @types/node 提供了
+ *     __dirname 的【CommonJS 类型声明】→ 类型层面合法, 运行时才炸 → 必须照项目既有写法:
+ *     path.dirname(fileURLToPath(import.meta.url))  (见 utils/storage.ts / utils/file-log.ts / db/index.ts)
+ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 /** 存储目录: 容器内 /app/data/daily-hot (compose 把 /app/data 挂到 host) */
 export const DAILY_HOT_DIR =
