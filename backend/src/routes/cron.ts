@@ -18,6 +18,10 @@ import { desc, eq, gte, lte, and, notInArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { now } from '../utils/response.js'
+// ★ Sprint 57 T2-A: DELETE /runs 要留操作痕迹 → 用项目里的 logTask (写文件日志, 不碰 DB)
+import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
+// ★ Sprint 57 T2-A (PM msg-20261123-226): 调度健康度 (应跑 N / 实跑 M / 漏跑 K) —— 纯逻辑在 services/cron-health.ts
+import { computeAllTaskHealth, parseSlots, isProtectedTaskName, dayRange, normalizeSource } from '../services/cron-health.js'
 
 const app = new Hono()
 
@@ -93,6 +97,9 @@ app.post('/runs', async (c) => {
   let body: any
   try { body = await c.req.json() } catch { return badRequest(c, 'invalid json body') }
   const { runId, name, startedAt } = body
+  // ★ Sprint 57 T2-A: 区分【定时跑】与【手动跑】—— 没有它就分不清"定时器死了"与"手动调试跑"
+  const source = normalizeSource(body.source)
+  const slot = typeof body.slot === 'string' && body.slot.trim() ? body.slot.trim() : null
   if (!runId || typeof runId !== 'string') return badRequest(c, 'runId required (string)')
   if (!name || typeof name !== 'string') return badRequest(c, 'name required (string)')
   if (typeof startedAt !== 'number') return badRequest(c, 'startedAt required (number, unix ms)')
@@ -102,6 +109,7 @@ app.post('/runs', async (c) => {
     db.insert(schema.cronRuns).values({
       runId, name, status: 'running',
       startedAt, createdAt: ts, updatedAt: ts,
+      source, slot,
     }).run()
     return created(c, { runId })
   } catch (e: any) {
@@ -185,9 +193,14 @@ app.get('/runs', async (c) => {
   const rows = q.orderBy(desc(schema.cronRuns.startedAt)).limit(limit).all()
 
   // 聚合 stats + parse outputs
-  const stats = { total: rows.length, success: 0, failed: 0, running: 0, avgDurationMs: 0 }
+  const stats: { total: number; success: number; failed: number; running: number; avgDurationMs: number; suspectZeroDuration: number } = { total: rows.length, success: 0, failed: 0, running: 0, avgDurationMs: 0, suspectZeroDuration: 0 }
   let totalDur = 0, durCount = 0
-  const runs = rows.map(r => ({ ...r, outputs: parseOutputs(r.outputs) }))
+  // ★ Sprint 57 T2-A: duration_ms=0 且 success 的记录 → 明确标记 (不拒收, 但看板要能看出可疑)
+  const runs = rows.map(r => ({
+    ...r,
+    outputs: parseOutputs(r.outputs),
+    suspectZeroDuration: r.status === 'success' && typeof r.durationMs === 'number' && r.durationMs === 0,
+  }))
   for (const r of runs) {
     if (r.status === 'success') stats.success++
     else if (r.status === 'failed') stats.failed++
@@ -195,8 +208,87 @@ app.get('/runs', async (c) => {
     if (typeof r.durationMs === 'number') { totalDur += r.durationMs; durCount++ }
   }
   stats.avgDurationMs = durCount > 0 ? Math.round(totalDur / durCount) : 0
+  stats.suspectZeroDuration = runs.filter((r: any) => r.suspectZeroDuration).length
 
-  return success(c, { runs, stats })
+  // ★ Sprint 57 T2-A: 调度健康度 (应跑 N / 实跑 M / 漏跑 K) —— 按 cron_schedules 的档位表算
+  let health: any[] = []
+  if (date) {
+    const schedRows = db.select().from(schema.cronSchedules).all()
+    health = computeAllTaskHealth(
+      schedRows.map((s: any) => ({ taskName: s.taskName, slots: s.slots })),
+      runs as any,
+      date,
+    )
+  }
+
+  return success(c, { runs, stats, health })
+})
+
+// ★ Sprint 57 T2-A (PM msg-20261123-226): 调度档位表 (应跑 N 的来源)
+//   ★ 声明在 '/runs/:runId' 【之前】—— 否则 Hono 让 :id 通配段抢先 match
+app.get('/schedules', async (c) => {
+  const rows = db.select().from(schema.cronSchedules).all()
+  return success(c, {
+    schedules: rows.map((r: any) => ({ ...r, slotList: parseSlots(r.slots) })),
+  })
+})
+
+app.post('/schedules', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return badRequest(c, 'invalid json body') }
+  const taskName = String(body?.task_name || '').trim()
+  if (!taskName) return badRequest(c, 'task_name required')
+  const slotsRaw = String(body?.slots || '').trim()
+  const slotList = parseSlots(slotsRaw)
+  if (!slotList.length) return badRequest(c, 'slots required (逗号分隔 HHMM, 例 2200,2300,0000)')
+  for (const s of slotList) {
+    if (!/^\d{4}$/.test(s) || Number(s.slice(0, 2)) > 23 || Number(s.slice(2)) > 59) {
+      return badRequest(c, `slots 里有非法档位: ${s} (应为 HHMM, 例 2200)`)
+    }
+  }
+  const timezone = String(body?.timezone || 'Asia/Shanghai')
+  const enabled = body?.enabled === false || body?.enabled === 0 ? 0 : 1
+  const ts = now()
+  const [existing] = db.select().from(schema.cronSchedules)
+    .where(eq(schema.cronSchedules.taskName, taskName)).all()
+  if (existing) {
+    db.update(schema.cronSchedules).set({ slots: slotsRaw, timezone, enabled, updatedAt: ts } as any)
+      .where(eq(schema.cronSchedules.taskName, taskName)).run()
+  } else {
+    db.insert(schema.cronSchedules).values({ taskName, slots: slotsRaw, timezone, enabled } as any).run()
+  }
+  return success(c, { taskName, slots: slotsRaw, timezone, enabled })
+})
+
+// ★ Sprint 57 T2-A: 批量删除运行记录 (清理调试脏数据)
+//   ★ 正式任务名的记录【删不掉】→ 400 拒绝 (防手滑删掉真实调度记录); 只有测试/探针类 name 能删
+//   ★ 删完留一条操作痕迹 (logTaskProgress)
+app.delete('/runs', async (c) => {
+  const name = String(c.req.query('name') || '').trim()
+  const from = String(c.req.query('from') || '').trim()
+  const to = String(c.req.query('to') || '').trim()
+  if (!name) return badRequest(c, 'name required (query)')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return badRequest(c, 'from 与 to 必填 (YYYY-MM-DD, Asia/Shanghai)')
+  }
+  if (isProtectedTaskName(name)) {
+    const msg = `拒绝删除正式任务「${name}」的运行记录 —— 只有测试/探针类 name (如 array-retest / probe-test / log-test) 能删`
+    logTaskWarn('CronAPI', 'delete-runs-rejected', { name, from, to, reason: 'protected-task-name' })
+    return badRequest(c, msg)
+  }
+  const { start } = dayRange(from)
+  const { end } = dayRange(to)
+  if (!start || !end || end <= start) return badRequest(c, `from/to 区间不对: ${from} ~ ${to}`)
+  const before = db.select().from(schema.cronRuns).where(eq(schema.cronRuns.name, name)).all().length
+  db.delete(schema.cronRuns).where(and(
+    eq(schema.cronRuns.name, name),
+    gte(schema.cronRuns.startedAt, start),
+    lte(schema.cronRuns.startedAt, end - 1),
+  )).run()
+  const after = db.select().from(schema.cronRuns).where(eq(schema.cronRuns.name, name)).all().length
+  const deleted = Math.max(0, before - after)
+  logTaskProgress('CronAPI', 'delete-runs', { name, from, to, deleted, before, after })
+  return success(c, { name, from, to, deleted, before, after })
 })
 
 /** 单条详情 */

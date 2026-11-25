@@ -493,6 +493,24 @@ export const cronRuns = sqliteTable('cron_runs', {
   // 2026-10-09 增量: 完整 log 文本 (末尾 ~50KB), 跟 output (截 2000 字) 互补
   // 不影响原 output 字段, 仅在 wrapper 上传 log 后填
   outputFull: text('output_full'),
+  // ★ Sprint 57 T2-A (PM msg-20261123-226): 来源
+  //   'scheduled' = 定时器跑的 / 'manual' = 手动 kickstart / 'unknown' = 老记录(默认)
+  //   ★ 没有它就分不清"定时跑"与"手动跑" → 调试跑会把定时覆盖率刷高 (定时器死了看板还全绿)
+  source: text('source').notNull().default('unknown'),
+  // ★ 命中的档位 key, 形如 '2026-11-25_2315' (老记录为空)
+  slot: text('slot'),
+})
+
+/**
+ * ★ Sprint 57 T2-A (PM msg-20261123-226): cron 调度档位表 (每个任务什么时候该跑)
+ *   slots = 逗号分隔的 HHMM (与 cron-guard.sh 同源格式, 例 '2200,2300,0000,0100')
+ *   ★ 时区一律 Asia/Shanghai (跨天档位 22:45/00:45 按 UTC 会算错一天)
+ */
+export const cronSchedules = sqliteTable('cron_schedules', {
+  taskName: text('task_name').primaryKey(),
+  slots: text('slots').notNull(),
+  timezone: text('timezone').notNull().default('Asia/Shanghai'),
+  enabled: integer('enabled').notNull().default(1),
 })
 
 // face-archive 同步表 — 2026-09-29 Sprint 5 P0 (face-archive 集成)

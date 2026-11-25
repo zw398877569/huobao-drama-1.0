@@ -413,6 +413,22 @@ sqlite.exec(`
     updated_at TEXT NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_global_default_models_service_type ON global_default_models(service_type);
+
+  -- ★ Sprint 57 T2-A (PM msg-20261123-226): cron 调度档位表 (应跑 N 的来源)
+  --   slots = 逗号分隔的 HHMM (与 cron-guard.sh 同源格式, 例 '2200,2300,0000,0100')
+  --   ★ 时区一律 Asia/Shanghai (跨天档位 22:45/00:45 按 UTC 会算错一天)
+  CREATE TABLE IF NOT EXISTS cron_schedules (
+    task_name TEXT PRIMARY KEY,
+    slots TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    enabled INTEGER NOT NULL DEFAULT 1
+  );
+  -- 初始 4 行 (PM 逐项校验过); ★ INSERT OR IGNORE = 幂等, 且【不会覆盖用户改过的 slots】
+  INSERT OR IGNORE INTO cron_schedules (task_name, slots, timezone, enabled) VALUES
+    ('dailylearn', '2200,2300,0000,0100,0200,0300,0400,0500,0600', 'Asia/Shanghai', 1),
+    ('minimaxlearn', '2230,2330,0030,0130,0230,0330,0430,0530,0630', 'Asia/Shanghai', 1),
+    ('videounderstand', '2245,2345,0045,0145,0245,0345,0445,0545', 'Asia/Shanghai', 1),
+    ('face-archive', '2315,2355,0035,0115,0155,0235,0315,0355', 'Asia/Shanghai', 1);
 `)
 
 function ensureColumn(table: string, column: string, definition: string) {
@@ -426,6 +442,10 @@ function ensureColumn(table: string, column: string, definition: string) {
   }
 }
 
+// ★ Sprint 57 T2-A (PM msg-20261123-226): cron_runs 加 source (区分定时跑/手动跑) + slot (命中的档位)
+//   老记录不动 (source 默认 unknown -> 不计入"实跑", 宁可显示漏跑也不虚报全绿)
+ensureColumn('cron_runs', 'source', "TEXT NOT NULL DEFAULT 'unknown'")
+ensureColumn('cron_runs', 'slot', 'TEXT')
 ensureColumn('episodes', 'image_config_id', 'INTEGER')
 ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('episodes', 'audio_config_id', 'INTEGER')
