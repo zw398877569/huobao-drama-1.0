@@ -24,15 +24,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ★ Sprint 39 (PM msg-20261111-168): 多架构构建 —— amd64 (现有 win 主机) + arm64 (为将来
-      #   Apple Silicon 的 Mac 铺路)。同一个 tag 下两个架构都能拉到 (manifest list)。
-      #   ★ binfmt 注册: GitHub 的 amd64 runner 上跑 arm64 的 RUN 步骤 (apt-get / npm) 需要
-      #     注册 QEMU 的 binfmt handler, 否则会报 exec format error。
-      #     注: 产出的仍然是【原生 arm64 镜像】(同样的 Dockerfile/基础镜像/apt 源), 模拟只发生在构建过程。
-      - name: Set up QEMU (register binfmt handlers)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
+      # ★★ 只构建 linux/amd64（2026-11-26 起）
+      #
+      # ① 为什么只 amd64：
+      #    唯一跑这个镜像的地方是【Intel Mac 上的 Docker】（amd64）。
+      #    M3（Apple Silicon）目前只跑前端 dev server，并通过局域网连 Intel 后端，不跑这个镜像。
+      #    以前用 QEMU 在 amd64 runner 上模拟编译 arm64，占了一半以上 CI 时间（~8-9 分钟）；
+      #    只构建 amd64 后约 3-4 分钟。
+      #
+      # ② 以后要在 M3（Apple Silicon）上跑这个镜像时，恢复双架构只需两步：
+      #    1) 把下面 "Build and push" 里的
+      #         platforms: linux/amd64
+      #       改回
+      #         platforms: linux/amd64,linux/arm64
+      #    2) 在 "Set up Docker Buildx" 之前【加回 QEMU 步骤】—— 因为 GitHub 的 runner 是 amd64，
+      #       跑 arm64 镜像里的 RUN 步骤（apt-get / npm）需要 binfmt 注册，否则报 exec format error：
+      #         - name: Set up QEMU (register binfmt handlers)
+      #           uses: docker/setup-qemu-action@v3
+      #           with:
+      #             platforms: arm64
+      #
+      # ③ 恢复后要注意：ghcr 的 :latest 会变成【双架构 manifest list】（amd64 + arm64 同一个 tag），
+      #    Intel 和 M3 都能直接 docker pull 到各自架构的原生镜像。
+      #    不恢复时 :latest 只有 amd64 —— M3 上直接 docker pull 拿不到原生镜像（只能 --platform linux/amd64 走模拟运行）。
+      #
+      # ★ 只改这两处即可，其它步骤（Buildx / GHCR 登录 / tag 策略 / build-args / bump commit）都不用动。
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -59,10 +75,9 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          # ★ Sprint 39 (PM msg-20261111-168): 同时产出 linux/amd64 + linux/arm64。
-          #   amd64 的镜像内容与改动前【完全一致】(同样的 Dockerfile / build-args / 源) → win 主机零影响。
-          #   构建日志里每个步骤都带 [linux/amd64] / [linux/arm64] 前缀 → 某个架构失败时能直接看出是哪个。
-          platforms: linux/amd64,linux/arm64
+          # ★ 只构建 linux/amd64（2026-11-26 起）。要恢复双架构：改这一行 + 加回 QEMU，
+          #   完整步骤见上面 "只构建 linux/amd64" 那段备注。
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
