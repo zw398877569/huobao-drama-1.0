@@ -74,28 +74,37 @@
           <div v-if="!groupsOf(s).length" class="card hot-empty">该分区暂无数据</div>
 
           <div v-for="g in groupsOf(s)" :key="g.label" class="card hot-group">
-            <div class="hot-group-title">
-              <span>{{ g.label }}</span>
-              <span class="dim mono">{{ g.note || `${g.items.length} 条` }}</span>
-            </div>
-            <ol v-if="g.items.length" class="hot-list">
-              <!-- ★ 单 243 T1: 收起态只渲染前 10 条, 展开态渲染全部 (后端给多少显示多少) -->
-              <li v-for="(it, i) in visibleItems(s, g)" :key="i" class="hot-item">
-                <a v-if="linkOf(it)" class="hot-link" :href="linkOf(it)" target="_blank" rel="noopener">{{ titleOf(it) }}</a>
-                <span v-else class="hot-title-plain">{{ titleOf(it) }}</span>
-                <span v-if="subOf(it)" class="dim hot-sub">{{ subOf(it) }}</span>
-              </li>
-            </ol>
-            <div v-else class="dim hot-group-empty">（无条目）</div>
-            <!-- 每个组一个按钮, 各组状态互相独立 (本单不做全局总开关 / 不做状态持久化) -->
-            <button
-              class="hot-toggle"
-              :class="{ 'hot-toggle-plain': g.items.length <= COLLAPSE_LIMIT }"
-              :disabled="g.items.length <= COLLAPSE_LIMIT"
-              @click="toggleGroup(s, g)"
-            >
-              {{ toggleLabel(s, g) }}
-            </button>
+            <!-- ★ 单 244 T1: 只有计数、没有条目列表的组 (例: 关键词 AI动画 —— 17 条)
+                 → 只渲染【一行摘要】: 不渲染条目区 / 不渲染『（无条目）』文字 / 不渲染『无条目』徽章
+                 (这些组的值在接口里本来就是数字计数 xhs_by_keyword = {"AI动画":17,...}, 不是条目列表) -->
+            <div v-if="!g.items.length && g.note" class="hot-group-summary">{{ g.label }} —— {{ g.note }}</div>
+            <template v-else>
+              <div class="hot-group-title">
+                <span>{{ g.label }}</span>
+                <span class="dim mono">{{ g.note || `${g.items.length} 条` }}</span>
+              </div>
+              <ol v-if="g.items.length" class="hot-list">
+                <!-- ★ 单 243 T1: 收起态只渲染前 10 条, 展开态渲染全部 (后端给多少显示多少) -->
+                <li v-for="(it, i) in visibleItems(s, g)" :key="i" class="hot-item">
+                  <a v-if="linkOf(it)" class="hot-link" :href="linkOf(it)" target="_blank" rel="noopener">{{ titleOf(it) }}</a>
+                  <span v-else class="hot-title-plain">{{ titleOf(it) }}</span>
+                  <span v-if="subOf(it)" class="dim hot-sub">{{ subOf(it) }}</span>
+                </li>
+              </ol>
+              <!-- ★ 单 244 T1: 真的 0 条目 (没有计数) → 仍显示『（无条目）』, 别把正常空状态一起改没了 -->
+              <div v-else class="dim hot-group-empty">（无条目）</div>
+              <!-- 每个组一个按钮, 各组状态互相独立 (本单不做全局总开关 / 不做状态持久化);
+                   ★ 只有计数的组不渲染按钮 (没东西可展开), 真空组保留置灰徽章 -->
+              <button
+                v-if="g.items.length || !g.note"
+                class="hot-toggle"
+                :class="{ 'hot-toggle-plain': g.items.length <= COLLAPSE_LIMIT }"
+                :disabled="g.items.length <= COLLAPSE_LIMIT"
+                @click="toggleGroup(s, g)"
+              >
+                {{ toggleLabel(s, g) }}
+              </button>
+            </template>
           </div>
         </section>
       </div>
@@ -214,7 +223,10 @@ function groupsOf(s: Section): Group[] {
   const d = raw.value || {}
   let gs: Group[] = []
   try { gs = s.groups(d) || [] } catch { gs = [] }
-  return gs.filter((g) => g && (g.items?.length || g.note))
+  // ★ 单 244 T1: 0 条目的组【也要渲染】(显示『（无条目）』) —— 以前这个过滤把它们挡掉了,
+  //   页面上根本看不到真空组 (B站 分区1 / GitHub 英文AIGC+两个总榜 / 跨平台 跨平台内容),
+  //   AC3 的『正常空状态别被改没了』就没法验证了
+  return gs.filter((g) => g && Array.isArray(g.items))
 }
 function countItems(s: Section): number {
   return groupsOf(s).reduce((n, g) => n + (g.items?.length || 0), 0)
@@ -337,6 +349,8 @@ onMounted(load)
 .hot-group { padding: 10px 14px; }
 .hot-group-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
 .hot-group-empty { font-size: 11px; padding: 4px 0; }
+/* ★ 单 244 T1: 只有计数的组 → 一行摘要 (例: 关键词 AI动画 —— 17 条) */
+.hot-group-summary { font-size: 12px; color: var(--text-1, var(--text-0)); }
 .hot-toggle {
   margin-top: 6px;
   align-self: flex-start;
