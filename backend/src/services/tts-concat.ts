@@ -18,6 +18,8 @@ import { db, schema } from '../db/index.js'
 import { generateTTS } from './tts-generation.js'
 // ★ Sprint 47 T6 (PM msg-20261115-188): ffprobe 实测音频时长 → 回写镜长
 import { probeDuration } from '../utils/ffprobe-helpers.js'
+// ★ 单 245 (PM msg-20261126-245): 音频【语音段】检测 + 按语音段切文本 (回写逐句用)
+import { detectSpeechChunks, splitTextBySpeechChunks, chunkDurations } from '../utils/audio-speech-segments.js'
 // ★ Sprint 47 T1 (PM msg-20261115-188): 角色级语音参数 (音量/音高/语速/声音修饰)
 import { parseVoiceParams, toVoiceModify, type CharacterVoiceParams } from './character-voice-params.js'
 // ★ Sprint 47 T6 (PM msg-20261115-188): 实测音频 → 回写镜长 (口径是纯函数, 便于离线断言)
@@ -183,6 +185,10 @@ export interface TTSSegmentMeta {
   // ★ 单 208 A2: 降参【前】的角色配置原值 (用于判断用户有没有手动改过角色配置)
   pitchBase?: number
   intensityBase?: number
+  // ★ 单 245 T1 (PM msg-20261126-245): 这条是【按音频实测语音段拆好的一条】(0 基序号)
+  chunkIndex?: number
+  // ★ 单 245 T1: 本段音频一共拆成了几条 (有它 = 已是逐句条目, 字幕层不要再拆)
+  chunkCount?: number
 }
 
 export interface TTSComposeResult {
@@ -728,9 +734,8 @@ export async function generateTTSForDialogue(
       })
     }
     segPaths.push(segPath)
-    meta.push({
+    const baseMeta = {
       speaker: m.speaker,
-      text: m.text,
       voice,
       isNarrator: m.isNarrator,
       segmentPath: segPath,
@@ -743,7 +748,57 @@ export async function generateTTSForDialogue(
       //   "用户有没有手动改过角色的音高/音量" (改了就用用户的新值, 没改才沿用降参结果)
       pitchBase: basePitch,
       intensityBase: baseIntensity,
-    })
+    }
+    // ★★ 单 245 T1 (A 治本): 回写【逐句】写 —— 之前整段文本写成 1 条, 拆出来的句子信息丢了,
+    //   合成阶段一条 segment 生成一条字幕 → 字幕节奏跟语音节奏错位 (PM msg-20261126-245)
+    //   ★ 语音段数 + 各段真实时长 = 音频【实测】(silencedetect), 不是估算
+    //   ★ 合成参数一个字没改 (音色/语速/停顿) → 音频与改动前完全一致 (AC7)
+    //   ★ 只有一个语音段时保持原样 (1 条), 不给单句镜头添乱 (AC5)
+    let speechChunks: { start: number; end: number }[] = []
+    let speechTotal = 0
+    try {
+      const segAbs = resolveAudioAbsPath(segPath)
+      const segSec = await probeDuration(segAbs)
+      const analysis = detectSpeechChunks(segAbs, segSec)
+      if (analysis && analysis.chunks.length > 1) {
+        speechChunks = analysis.chunks
+        speechTotal = analysis.durationSec
+      }
+    } catch {
+      speechChunks = []
+    }
+    if (speechChunks.length > 1) {
+      const pieces = splitTextBySpeechChunks(m.text, speechChunks)
+      const durations = chunkDurations(speechChunks, speechTotal)
+      for (let i = 0; i < pieces.length; i++) {
+        // 段数与语音段数一致时用实测时长; 否则按字数比例分摊同一个总时长 (和 == 真实总时长)
+        let durMs = Math.round(
+          (pieces.length === durations.length
+            ? durations[i]
+            : (speechTotal * (pieces[i].replace(/\s/g, '').length || 1)) /
+              Math.max(1, pieces.reduce((s, p) => s + (p.replace(/\s/g, '').length || 1), 0))) * 1000,
+        )
+        meta.push({
+          ...baseMeta,
+          text: pieces[i],
+          durationMs: durMs,
+          // ★ 标记: 这条已经是【按语音段拆好的一条】→ 字幕层不要再拆 (单 245 T2)
+          chunkIndex: i,
+          chunkCount: pieces.length,
+        })
+      }
+      logTaskProgress('TTSConcat', 'segments-split-by-speech', {
+        storyboardId, episodeId, speaker: m.speaker,
+        speechChunks: speechChunks.length, written: pieces.length,
+        totalSec: Number(speechTotal.toFixed(3)),
+        hint: '回写逐句 (单 245 T1) —— 条数 = 音频实测语音段数, 各条带自己的真实时长',
+      })
+    } else {
+      meta.push({
+        ...baseMeta,
+        text: m.text,
+      })
+    }
   }
 
   if (segPaths.length === 0) {
