@@ -5,6 +5,15 @@
         <div>
           <div class="hot-title">热点看板</div>
           <div class="dim mono hot-meta">
+            <!-- ★ 单 244 T2: 数据源文件 = 当天那份【未裁剪】的原始 JSON (后端 GET /api/v1/daily-hot/raw)
+                 ★ 新标签页打开; 按钮上带当天日期, 切换日期后指向也跟着变 -->
+            <button
+              class="btn btn-sm hot-raw-btn"
+              :title="`新标签页打开 ${currentDate || 'latest'} 的数据源文件 (未裁剪原始 JSON)`"
+              @click="openRaw"
+            >
+              数据源文件<span class="dim mono"> {{ currentDate || '-' }}</span>
+            </button>
             数据日期 {{ currentDate || '-' }} · 生成于 {{ generatedAt || '-' }}
           </div>
         </div>
@@ -176,6 +185,16 @@ async function load(date?: string) {
   }
 }
 
+/**
+ * ★ 单 244 T2: 新标签页打开当天的【数据源文件】(未裁剪原始 JSON)
+ *   ★ 相对路径 /api/v1/daily-hot/raw → 生产 (同源) 与本地 dev (vite 代理) 都能走
+ *   ★ 用 currentDate (切换日期后跟着变); 没有选中日期时用 latest
+ */
+function openRaw() {
+  const d = currentDate.value || 'latest'
+  window.open(`/api/v1/daily-hot/raw?date=${encodeURIComponent(d)}`, '_blank', 'noopener')
+}
+
 function onPickDate(e: any) {
   const d = String(e?.target?.value || '')
   if (!d) return
@@ -338,7 +357,8 @@ onMounted(load)
 .hot-head { padding: 14px 16px; }
 .hot-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .hot-title { font-size: 16px; font-weight: 600; color: var(--text-0); }
-.hot-meta { font-size: 11px; margin-top: 3px; }
+.hot-meta { font-size: 11px; margin-top: 3px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hot-raw-btn { font-size: 11px; height: 22px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; }
 .hot-nav { display: flex; align-items: center; gap: 6px; }
 .hot-select { width: 150px; height: 30px; padding: 4px 8px; font-size: 12px; }
 .hot-state { padding: 26px 16px; text-align: center; color: var(--text-2); display: flex; align-items: center; justify-content: center; gap: 10px; }

@@ -44,6 +44,14 @@ export const DAILY_HOT_DIR =
 /** 保留天数 */
 export const KEEP_DAYS = 30
 
+/**
+ * ★ 单 244 T2 (PM msg-20261126-244): 原始文件目录 (【未裁剪】的 raw JSON)
+ *   容器内 /app/data/daily-hot/raw/YYYY-MM-DD.json (host 侧同样在 data 目录下)
+ *   ★ 数据源文件在 M3 的 Obsidian vault, 后端在 Intel Mac 上读不到 → 走【M3 上报时把原始内容也留一份】
+ *   ★ 裁剪后那份 (给 /hot 页面用) 仍在 DAILY_HOT_DIR, 两份并存, 互不影响
+ */
+export const DAILY_HOT_RAW_DIR = path.join(DAILY_HOT_DIR, 'raw')
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 function ensureDir(): void {
@@ -80,6 +88,39 @@ export function cleanupDailyHot(now: Date = new Date()): number {
   return removed
 }
 
+/** raw 目录里已有的日期 (升序) */
+export function listRawDates(): string[] {
+  try {
+    if (!fs.existsSync(DAILY_HOT_RAW_DIR)) return []
+    return fs.readdirSync(DAILY_HOT_RAW_DIR)
+      .map((f) => (f.endsWith('.json') ? f.slice(0, -5) : ''))
+      .filter((d) => DATE_RE.test(d))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+/**
+ * ★ 单 244 T2: 清掉超期的 raw 文件 —— ★ 与裁剪后那份【完全同一套 30 天口径 / 同一个 cutoff 算法】
+ *   (别让 raw 无限堆积; 每天多一份 ~100KB, 30 天也就 ~3MB)
+ */
+export function cleanupDailyHotRaw(now: Date = new Date()): number {
+  const cutoff = new Date(now.getTime() - KEEP_DAYS * 24 * 3600 * 1000)
+  const cutoffStr = cutoff.toISOString().slice(0, 10)
+  let removed = 0
+  for (const d of listRawDates()) {
+    if (d >= cutoffStr) continue
+    try {
+      fs.unlinkSync(path.join(DAILY_HOT_RAW_DIR, `${d}.json`))
+      removed += 1
+    } catch {
+      // 删不掉就跳过 (不因为清理失败挡住上报)
+    }
+  }
+  return removed
+}
+
 /** POST —— 收当天 raw JSON → 裁剪 → 落盘 */
 app.post('/', async (c) => {
   let body: any
@@ -102,7 +143,12 @@ app.post('/', async (c) => {
     ensureDir()
     const { data, bytes, limit } = trimDailyHot(payload)
     fs.writeFileSync(path.join(DAILY_HOT_DIR, `${date}.json`), JSON.stringify(data), 'utf-8')
+    // ★ 单 244 T2: 额外留一份【未裁剪】的原始 JSON (用户点『数据源文件』要看的就是这份;
+    //   裁剪后那份照旧给 /hot 页面用, 两份并存)
+    if (!fs.existsSync(DAILY_HOT_RAW_DIR)) fs.mkdirSync(DAILY_HOT_RAW_DIR, { recursive: true })
+    fs.writeFileSync(path.join(DAILY_HOT_RAW_DIR, `${date}.json`), JSON.stringify(payload, null, 2), 'utf-8')
     const removed = cleanupDailyHot()
+    cleanupDailyHotRaw() // ★ raw 也走同一套 30 天口径
     return success(c, {
       date,
       size_bytes: bytes,
@@ -113,6 +159,33 @@ app.post('/', async (c) => {
     })
   } catch (err: any) {
     return badRequest(c, `写入失败: ${err?.message || err}`)
+  }
+})
+
+/**
+ * ★ 单 244 T2: GET /raw —— 取回【未裁剪】的原始 JSON (只读)
+ *   ★ 路径相对挂载前缀 (/api/v1/daily-hot → /api/v1/daily-hot/raw)
+ *   ★ 不存在 / 日期非法 → 明确 4xx (不是 500, 也不是空对象)
+ */
+app.get('/raw', async (c) => {
+  const q = (c.req.query('date') || 'latest').trim()
+  const dates = listRawDates()
+  if (!dates.length) {
+    return notFound(c, '还没有留存的 daily-hot 原始文件 (这版之后的上报才会留 raw; 裁剪后那份仍走 GET /daily-hot)')
+  }
+  let date = q
+  if (q === 'latest' || q === '') {
+    date = dates[dates.length - 1]
+  } else if (!DATE_RE.test(q)) {
+    return badRequest(c, `date 参数格式不对: ${q} (应为 latest 或 YYYY-MM-DD)`)
+  } else if (!dates.includes(q)) {
+    return notFound(c, `没有 ${q} 的原始文件 (现有: ${dates[0]} ~ ${dates[dates.length - 1]})`)
+  }
+  try {
+    const raw = fs.readFileSync(path.join(DAILY_HOT_RAW_DIR, `${date}.json`), 'utf-8')
+    return c.text(raw, 200, { 'content-type': 'application/json; charset=utf-8' })
+  } catch (err: any) {
+    return notFound(c, `读取 ${date} 的原始文件失败: ${err?.message || err}`)
   }
 })
 

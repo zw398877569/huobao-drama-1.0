@@ -108,7 +108,7 @@ import props from './routes/props.js'
 import images from './routes/images.js'
 import videos from './routes/videos.js'
 // ★ Sprint 58 (PM msg-20261123-227): daily-hot 看板端点 (收 M3 上报的 raw JSON + 取裁剪后的)
-import dailyHot, { cleanupDailyHot } from './routes/dailyHot.js'
+import dailyHot, { cleanupDailyHot, cleanupDailyHotRaw } from './routes/dailyHot.js'
 import agnesDebug from './routes/agnesDebug.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders, ensureAgentDefaults, applyHuobaoPreset } from './routes/aiConfigs.js'
@@ -245,6 +245,9 @@ initBatchVideoScheduler().catch((err) => {
 try {
   const removed = cleanupDailyHot()
   if (removed) console.log(`🧹 已清理超 30 天的 daily-hot 数据: ${removed} 个文件`)
+  // ★ 单 244 T2: raw 原始文件也走同一套 30 天口径 (别让 raw 无限堆积)
+  const removedRaw = cleanupDailyHotRaw()
+  if (removedRaw) console.log(`🧹 已清理超 30 天的 daily-hot 原始文件: ${removedRaw} 个文件`)
 } catch (err: any) {
   logTaskError('Server', 'daily-hot-cleanup-fail', { error: err?.message || String(err) })
 }
