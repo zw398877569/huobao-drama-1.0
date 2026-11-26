@@ -339,7 +339,7 @@ onMounted(load)
       <div class="tasks-by-task-title">
         <span>调度健康度</span>
         <span class="dim" style="font-size:11px; font-weight:normal">
-          应跑 = 档位表应有条数 · 实跑只算【定时】跑成功的 (手动/未知不计入, 免得调试跑把覆盖率刷高)
+          应跑 = 档位表应有条数 · 实跑 = 该任务当天命中的【去重】档位数 (同档位跑多次只算 1 次; 手动/未知不计入)
         </span>
       </div>
       <div class="tasks-by-task-grid">
@@ -363,8 +363,22 @@ onMounted(load)
           <div class="task-card-foot dim mono">
             定时 {{ h.bySource?.scheduled ?? 0 }} · 手动 {{ h.bySource?.manual ?? 0 }} · 未知 {{ h.bySource?.unknown ?? 0 }}
           </div>
+          <div v-if="h.hitSlots?.length" class="task-card-foot dim mono">
+            命中: {{ h.hitSlots.join(' / ') }}
+          </div>
           <div v-if="h.missedSlots?.length" class="task-card-foot dim">
             漏: {{ h.missedSlots.join(' / ') }}
+          </div>
+          <!-- ★ 异常诊断: 重复跑 / 跑了失败 / 档位日期不符 / 没上报档位 —— 都不混进实跑数 -->
+          <div
+            v-if="(h.duplicateRuns || 0) + (h.failedSlots?.length || 0) + (h.mismatchedSlotRuns || 0) + (h.offGridRuns || 0) + (h.slotlessRuns || 0) > 0"
+            class="task-card-foot dim mono"
+          >
+            <span v-if="h.duplicateRuns">重复 {{ h.duplicateRuns }} · </span>
+            <span v-if="h.failedSlots?.length">失败 {{ h.failedSlots.length }} · </span>
+            <span v-if="h.mismatchedSlotRuns">档位日期不符 {{ h.mismatchedSlotRuns }} · </span>
+            <span v-if="h.offGridRuns">非档位表 {{ h.offGridRuns }} · </span>
+            <span v-if="h.slotlessRuns">无档位 {{ h.slotlessRuns }}</span>
           </div>
         </div>
       </div>
