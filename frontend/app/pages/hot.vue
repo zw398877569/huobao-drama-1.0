@@ -50,13 +50,23 @@
               <span class="dim mono">{{ g.note || `${g.items.length} 条` }}</span>
             </div>
             <ol v-if="g.items.length" class="hot-list">
-              <li v-for="(it, i) in g.items" :key="i" class="hot-item">
+              <!-- ★ 单 243 T1: 收起态只渲染前 10 条, 展开态渲染全部 (后端给多少显示多少) -->
+              <li v-for="(it, i) in visibleItems(s, g)" :key="i" class="hot-item">
                 <a v-if="linkOf(it)" class="hot-link" :href="linkOf(it)" target="_blank" rel="noopener">{{ titleOf(it) }}</a>
                 <span v-else class="hot-title-plain">{{ titleOf(it) }}</span>
                 <span v-if="subOf(it)" class="dim hot-sub">{{ subOf(it) }}</span>
               </li>
             </ol>
             <div v-else class="dim hot-group-empty">（无条目）</div>
+            <!-- 每个组一个按钮, 各组状态互相独立 (本单不做全局总开关 / 不做状态持久化) -->
+            <button
+              class="hot-toggle"
+              :class="{ 'hot-toggle-plain': g.items.length <= COLLAPSE_LIMIT }"
+              :disabled="g.items.length <= COLLAPSE_LIMIT"
+              @click="toggleGroup(s, g)"
+            >
+              {{ toggleLabel(s, g) }}
+            </button>
           </div>
         </section>
       </div>
@@ -135,6 +145,33 @@ function onPickDate(e: any) {
 function goDate(d: string) {
   if (!d) return
   return load(d)
+}
+
+/* ── T1: 每个榜单组默认收缩 10 条, 点开展示全部 (各组独立) ── */
+const COLLAPSE_LIMIT = 10
+/** 已展开的组: key = `${分区key}::${组label}` */
+const expandedGroups = ref<Record<string, boolean>>({})
+
+function groupKey(s: Section, g: Group): string {
+  return `${s.key}::${g.label}`
+}
+function isExpanded(s: Section, g: Group): boolean {
+  return !!expandedGroups.value[groupKey(s, g)]
+}
+function toggleGroup(s: Section, g: Group) {
+  if (g.items.length <= COLLAPSE_LIMIT) return
+  const k = groupKey(s, g)
+  expandedGroups.value = { ...expandedGroups.value, [k]: !expandedGroups.value[k] }
+}
+/** 收起态只给前 10 条; 展开态给全部 (不设固定上限) */
+function visibleItems(s: Section, g: Group): any[] {
+  if (isExpanded(s, g)) return g.items
+  return g.items.slice(0, COLLAPSE_LIMIT)
+}
+function toggleLabel(s: Section, g: Group): string {
+  if (!g.items.length) return '无条目'
+  if (g.items.length <= COLLAPSE_LIMIT) return `已全部显示 ${g.items.length} 条`
+  return isExpanded(s, g) ? '收起' : `展开全部 ${g.items.length} 条`
 }
 
 /* ── 分区工具 ── */
@@ -240,6 +277,19 @@ onMounted(load)
 .hot-group { padding: 10px 14px; }
 .hot-group-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
 .hot-group-empty { font-size: 11px; padding: 4px 0; }
+.hot-toggle {
+  margin-top: 6px;
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent-text);
+  font-size: 11.5px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.hot-toggle:hover:not(:disabled) { border-color: var(--accent); }
+.hot-toggle:disabled, .hot-toggle-plain { color: var(--text-3); cursor: default; opacity: 0.75; }
 .hot-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
 .hot-item { font-size: 12.5px; line-height: 1.6; }
 .hot-link { color: var(--accent-text, var(--text-0)); text-decoration: none; }
