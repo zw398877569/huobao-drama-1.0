@@ -19,6 +19,8 @@ import { getEpisodeSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
+// ★ 单 245 (PM msg-20261126-245): 音频【语音段】检测 + 按语音段拆字幕 (存量数据兜底)
+import { detectSpeechChunks, splitTextBySpeechChunks, chunkDurations } from '../utils/audio-speech-segments.js'
 // ★ Sprint 38 T3-D (PM msg-20261110-165): 音驱动工作流清单 (决定源音轨能不能保留)
 import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
 // ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机开关 (compose = 在这里烧 (默认); merge = 在拼接阶段烧)
@@ -197,7 +199,7 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
     //         最后一段结束时间对齐视频实际时长 (ffprobe), 避免字幕比画面先消失
     if (sb.dialogue && sb.dialogue.trim()) {
       // 优先用 ttsSegments (逐句真实数据); 拿不到时 fallback 到 dialogue 解析 (退化成单条)
-      let segments: Array<{ speaker: string; text: string; segmentPath?: string; isNarrator?: boolean; durationMs?: number }> = []
+      let segments: Array<{ speaker: string; text: string; segmentPath?: string; isNarrator?: boolean; durationMs?: number; chunkCount?: number }> = []
       if (sb.ttsSegments) {
         try {
           const parsed = JSON.parse(sb.ttsSegments)
@@ -226,53 +228,121 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
         const GAP = 0.15      // 段间隔, 避免两句字幕连得太紧
         const LEAD_IN = 0.5   // 首句延后 0.5s 上屏 (跟旧实现 00:00:00,500 一致)
         const srtLines: string[] = []
-        let cursor = LEAD_IN
-        for (let i = 0; i < segments.length; i++) {
-          const seg = segments[i]
-          // 段真实时长: 优先 durationMs (tts-concat 已回填), 否则 ffprobe segmentPath
-          let segDuration = Number(seg.durationMs ?? 0) / 1000
-          if (!(segDuration > 0) && seg.segmentPath) {
-            const absSeg = toAbsPath(seg.segmentPath)
-            if (fs.existsSync(absSeg)) {
-              segDuration = await probeDuration(absSeg)
+
+        // ★★★ 单 245 T2 (B 兜底, 覆盖存量): 一条 segment 含多句 → 按【音频实测语音段】拆成多条字幕
+        //   ★ 存量数据 (tts_segments 只有 1 条) 不用重跑配音也能修好 —— 拆在这里做
+        //   ★ 拆分后的各条: 时长按该 segment 的【实测总时长】分配 (加起来 == 真实时长), 不重新估算速率
+        //   ★ 组内条目首尾相接 (无 gap); 组与组之间才留 GAP
+        //   ★ T1 逐句回写的数据 (同一个 segmentPath 多条 + chunkCount) → 一条一个字幕, 不再拆
+        const groups: { path: string; segs: typeof segments }[] = []
+        for (const seg of segments) {
+          const key = seg.segmentPath || ''
+          const last = groups[groups.length - 1]
+          if (last && key && last.path === key) last.segs.push(seg)
+          else groups.push({ path: key, segs: [seg] })
+        }
+
+        const groupCues: { text: string; duration: number }[][] = []
+        for (const group of groups) {
+          // 这一组音频的真实总时长 (优先用各条 durationMs 之和, 否则 ffprobe)
+          let groupDuration = 0
+          for (const sg of group.segs) {
+            const d = Number(sg.durationMs ?? 0) / 1000
+            if (d > 0) { groupDuration += d; continue }
+            if (sg.segmentPath) {
+              const absSeg = toAbsPath(sg.segmentPath)
+              if (fs.existsSync(absSeg)) groupDuration += await probeDuration(absSeg)
             }
           }
-          // 兜底: 都没测到时按中文 4.5 字/秒估算 (跟 computeDialogueFloor 同量级)
-          if (!(segDuration > 0)) {
-            const chars = (seg.text || '').replace(/\s/g, '').length
-            segDuration = Math.max(0.8, chars / 4.5)
+          const first = group.segs[0]
+          const alreadyChunked = group.segs.length > 1 || first.chunkCount != null
+          const cues: { text: string; duration: number }[] = []
+          if (alreadyChunked) {
+            // 已是逐句条目 (T1 写回的) → 一条一个字幕, 时长用各自 durationMs
+            for (const sg of group.segs) {
+              let d = Number(sg.durationMs ?? 0) / 1000
+              if (!(d > 0) && sg.segmentPath) {
+                const absSeg = toAbsPath(sg.segmentPath)
+                if (fs.existsSync(absSeg)) d = await probeDuration(absSeg)
+              }
+              if (!(d > 0)) d = Math.max(0.8, (sg.text || '').replace(/\s/g, '').length / 4.5)
+              cues.push({ text: sg.text, duration: d })
+            }
+          } else {
+            // 存量单条 segment: 用音频实测语音段拆 (拆不出就退化成一条, 保持老行为)
+            let chunks: { start: number; end: number }[] = []
+            let total = groupDuration
+            if (group.path) {
+              const absSeg = toAbsPath(group.path)
+              if (fs.existsSync(absSeg)) {
+                const dur = total > 0 ? total : await probeDuration(absSeg)
+                const analysis = detectSpeechChunks(absSeg, dur)
+                if (analysis && analysis.chunks.length > 1) {
+                  chunks = analysis.chunks
+                  total = analysis.durationSec
+                }
+              }
+            }
+            if (chunks.length > 1) {
+              const pieces = splitTextBySpeechChunks(first.text || '', chunks)
+              const durs = chunkDurations(chunks, total)
+              const charTotal = pieces.reduce((sum, p) => sum + (p.replace(/\s/g, '').length || 1), 0) || 1
+              for (let i = 0; i < pieces.length; i++) {
+                const d = pieces.length === durs.length
+                  ? durs[i]
+                  : total * ((pieces[i].replace(/\s/g, '').length || 1) / charTotal)
+                cues.push({ text: pieces[i], duration: d })
+              }
+            } else {
+              let d = Number(first.durationMs ?? 0) / 1000
+              if (!(d > 0) && first.segmentPath) {
+                const absSeg = toAbsPath(first.segmentPath)
+                if (fs.existsSync(absSeg)) d = await probeDuration(absSeg)
+              }
+              if (!(d > 0)) d = Math.max(0.8, (first.text || '').replace(/\s/g, '').length / 4.5)
+              cues.push({ text: first.text, duration: d })
+            }
           }
+          groupCues.push(cues)
+        }
 
-          const start = cursor
-          let end = start + segDuration
-          // 累积超出画面时提前截断, 避免字幕溢出
-          if (start >= videoDuration) break
-          // ★ Sprint 47 T6: 字幕结束时间不许超出【最终音轨长度】(工单: 现状里有时间轴超出音轨的字幕)
-          //   超了 → 显式夹住 + 记一条告警 (不静默)
-          if (end > ttsAudioTarget) {
-            logTaskWarn('ComposeTask', 'subtitle-cue-exceeds-audio', {
-              storyboardId, cueIndex: i, end: Number(end.toFixed(3)), audioTarget: Number(ttsAudioTarget.toFixed(3)),
-            })
-            end = ttsAudioTarget
-          }
-          // 最后一段: 结束时间对齐视频实际时长 (不超画面)
-          if (i === segments.length - 1 && end > videoDuration) {
-            end = videoDuration
-          }
+        let cursor = LEAD_IN
+        for (let gi = 0; gi < groupCues.length; gi++) {
+          const cues = groupCues[gi]
+          for (let ci = 0; ci < cues.length; ci++) {
+            const cue = cues[ci]
+            const start = cursor
+            let end = start + cue.duration
+            // 累积超出画面时提前截断, 避免字幕溢出
+            if (start >= videoDuration) break
+            // ★ Sprint 47 T6: 字幕结束时间不许超出【最终音轨长度】
+            //   超了 → 显式夹住 + 记一条告警 (不静默)
+            if (end > ttsAudioTarget) {
+              logTaskWarn('ComposeTask', 'subtitle-cue-exceeds-audio', {
+                storyboardId, cueIndex: srtLines.filter(l => /^\d+$/.test(l)).length, end: Number(end.toFixed(3)), audioTarget: Number(ttsAudioTarget.toFixed(3)),
+              })
+              end = ttsAudioTarget
+            }
+            // 最后一条: 结束时间对齐视频实际时长 (不超画面)
+            if (gi === groupCues.length - 1 && ci === cues.length - 1 && end > videoDuration) {
+              end = videoDuration
+            }
 
-          // ★ Sprint 25 fix_1 (PM msg-20261027-111): 字幕一律【不带角色名前缀】(PM 2026-10-27 拍板, 选项 B)。
-          //   原来这里按 seg.speaker 加 '林达：' 前缀 → 成片字幕形如 '林达：林达，送单的。' 看着重复。
-          //   PM 已知并接受 B 的代价 ('林达，送单的。' 可能被误读成半句话 / 多角色快速对话分不清),
-          //   明确要求【不要】自作主张改成智能去重 (选项 C)。
-          //   ⚠️ 只影响显示层: 台词原文、时间轴、音频对齐、旁白判定全部不动。
-          const prefix = ''
-          srtLines.push(
-            String(srtLines.filter(l => /^\d+$/.test(l)).length + 1),
-            `${formatSrtTimestamp(start)} --> ${formatSrtTimestamp(end)}`,
-            `${prefix}${seg.text}`,
-            '',
-          )
-          cursor = end + GAP
+            // ★ Sprint 25 fix_1 (PM msg-20261027-111): 字幕一律【不带角色名前缀】(PM 2026-10-27 拍板, 选项 B)。
+            //   原来这里按 seg.speaker 加 '林达：' 前缀 → 成片字幕形如 '林达：林达，送单的。' 看着重复。
+            //   PM 已知并接受 B 的代价 ('林达，送单的。' 可能被误读成半句话 / 多角色快速对话分不清),
+            //   明确要求【不要】自作主张改成智能去重 (选项 C)。
+            //   ⚠️ 只影响显示层: 台词原文、时间轴、音频对齐、旁白判定全部不动。
+            const prefix = ''
+            srtLines.push(
+              String(srtLines.filter(l => /^\d+$/.test(l)).length + 1),
+              `${formatSrtTimestamp(start)} --> ${formatSrtTimestamp(end)}`,
+              `${prefix}${cue.text}`,
+              '',
+            )
+            cursor = end
+          }
+          cursor += GAP   // ★ 组与组之间留 gap; 组内首尾相接 (单 245)
         }
 
         if (srtLines.length > 0) {
