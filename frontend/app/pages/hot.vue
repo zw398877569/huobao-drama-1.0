@@ -32,31 +32,34 @@
     </div>
 
     <template v-else>
-      <section v-for="s in sections" :key="s.key" class="hot-section">
-        <div class="card hot-sec-head">
-          <span class="hot-sec-title">{{ s.label }}</span>
-          <span class="dim">
-            榜单 {{ countItems(s) }} 条<span v-if="sourceCount(s)"> · 数据源 {{ sourceCount(s) }}</span>
-          </span>
-        </div>
-
-        <div v-if="!groupsOf(s).length" class="card hot-empty">该分区暂无数据</div>
-
-        <div v-for="g in groupsOf(s)" :key="g.label" class="card hot-group">
-          <div class="hot-group-title">
-            <span>{{ g.label }}</span>
-            <span class="dim mono">{{ g.note || `${g.items.length} 条` }}</span>
+      <!-- ★ 单 qa-20261126-003: 8 个分区两两并排 (只并排【分区】, 分区内部的榜单组仍上下堆叠) -->
+      <div class="hot-grid">
+        <section v-for="s in sections" :key="s.key" class="hot-section">
+          <div class="card hot-sec-head">
+            <span class="hot-sec-title">{{ s.label }}</span>
+            <span class="dim">
+              榜单 {{ countItems(s) }} 条<span v-if="sourceCount(s)"> · 数据源 {{ sourceCount(s) }}</span>
+            </span>
           </div>
-          <ol v-if="g.items.length" class="hot-list">
-            <li v-for="(it, i) in g.items" :key="i" class="hot-item">
-              <a v-if="linkOf(it)" class="hot-link" :href="linkOf(it)" target="_blank" rel="noopener">{{ titleOf(it) }}</a>
-              <span v-else class="hot-title-plain">{{ titleOf(it) }}</span>
-              <span v-if="subOf(it)" class="dim hot-sub">{{ subOf(it) }}</span>
-            </li>
-          </ol>
-          <div v-else class="dim hot-group-empty">（无条目）</div>
-        </div>
-      </section>
+
+          <div v-if="!groupsOf(s).length" class="card hot-empty">该分区暂无数据</div>
+
+          <div v-for="g in groupsOf(s)" :key="g.label" class="card hot-group">
+            <div class="hot-group-title">
+              <span>{{ g.label }}</span>
+              <span class="dim mono">{{ g.note || `${g.items.length} 条` }}</span>
+            </div>
+            <ol v-if="g.items.length" class="hot-list">
+              <li v-for="(it, i) in g.items" :key="i" class="hot-item">
+                <a v-if="linkOf(it)" class="hot-link" :href="linkOf(it)" target="_blank" rel="noopener">{{ titleOf(it) }}</a>
+                <span v-else class="hot-title-plain">{{ titleOf(it) }}</span>
+                <span v-if="subOf(it)" class="dim hot-sub">{{ subOf(it) }}</span>
+              </li>
+            </ol>
+            <div v-else class="dim hot-group-empty">（无条目）</div>
+          </div>
+        </section>
+      </div>
     </template>
   </div>
 </template>
@@ -196,7 +199,33 @@ onMounted(load)
 </script>
 
 <style scoped>
-.hot-page { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+/* ★ 单 qa-20261126-003: /hot 自己就是滚动容器
+   —— 共享布局 main.content 是 overflow:hidden (所有页面共用, 不能改) → 本页自己开滚
+   —— 写法照 pages/free.vue 的既有约定: height:100% + min-height:0 + overflow */
+.hot-page {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* ★ 8 个分区两两并排; minmax(0,1fr) + 子项 min-width:0 → 长标题不会把网格撑出横向滚动条 */
+.hot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.hot-grid > .hot-section { min-width: 0; }
+.hot-group, .hot-item, .hot-list { min-width: 0; }
+.hot-link, .hot-title-plain, .hot-sub { overflow-wrap: anywhere; }
+/* ★ 窄窗口回退单列 (不压扁、不出横向滚动条) */
+@media (max-width: 1280px) {
+  .hot-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .hot-head { padding: 14px 16px; }
 .hot-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .hot-title { font-size: 16px; font-weight: 600; color: var(--text-0); }
