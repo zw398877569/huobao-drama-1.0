@@ -98,6 +98,71 @@ export interface TrimResult {
   limit: number
 }
 
+
+/**
+ * ★ 单 243 T2 (PM msg-20261126-243): kept_count —— 每个源【裁剪后实际保留】的条数
+ *
+ * ★ 与 sources_count 的关系:
+ *   - sources_count = M3 采集侧给的【裁剪前】原始条数 (KEEP_FULL_KEYS, 完整保留) → 本单一个字都没改
+ *   - kept_count   = ★【裁剪后】这一轮真正留下来的条数 (同一份数据, 两个口径, 一起给)
+ *   - key 集合以 sources_count 为准 → 两者严格同构
+ *
+ * ★ 取法与 M3 采集脚本 (cronTask/daily-aigc-hot/daily-aigc-hot.sh) 的 sources_count 同构:
+ *   同一份 raw JSON 的同一批源, 只是数的是【裁剪后】的数组长度
+ *   (bili_aigc_content / bili_aigc_tool 是 by_rid 各分区 content/tool 的合计;
+ *    xhs_content_signal 是 xhs_hot 里 cat=='content' 的条数 —— 它是 xhs_hot 的【子集】)
+ */
+export function countKeptBySource(data: any): Record<string, number> {
+  const d = data && typeof data === 'object' && !Array.isArray(data) ? data : {}
+  const len = (v: any): number => (Array.isArray(v) ? v.length : 0)
+  /** dict 下每个 value 都是 list → 求和 (hongguo_hot_search) */
+  const sumLists = (v: any): number => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return 0
+    let n = 0
+    for (const x of Object.values(v)) n += len(x)
+    return n
+  }
+  /** bili_tech_ranking.by_rid 各分区的某个子榜合计 (content / tool) */
+  const sumByRid = (field: string): number => {
+    const byRid = d?.bili_tech_ranking?.by_rid
+    if (!byRid || typeof byRid !== 'object' || Array.isArray(byRid)) return 0
+    let n = 0
+    for (const rid of Object.values(byRid)) n += len((rid as any)?.[field])
+    return n
+  }
+  const counts: Record<string, number> = {
+    aico_douyin: len(d?.aicoder_cli?.douyin),
+    aico_xiaohongshu: len(d?.aicoder_cli?.xiaohongshu),
+    aico_bilibili: len(d?.aicoder_cli?.bilibili),
+    gh_en_aigc: len(d?.github_trending?.en_aigc),
+    gh_zh_aigc: len(d?.github_trending?.zh_aigc),
+    bili_tech_aigc: len(d?.bili_tech_ranking?.aigc),
+    bili_aigc_content: sumByRid('content'),
+    bili_aigc_tool: sumByRid('tool'),
+    hongguo_ai_drama: len(d?.hongguo_duanju?.['ai-drama']),
+    hongguo_comic_drama: len(d?.hongguo_duanju?.['comic-drama']),
+    hongguo_real_drama: len(d?.hongguo_duanju?.['real-drama']),
+    hongguo_hot_search: sumLists(d?.hongguo_hot_search),
+    xhs_hot: len(d?.xhs_hot),
+    xhs_content_signal: Array.isArray(d?.xhs_hot)
+      ? d.xhs_hot.filter((n: any) => n?.cat === 'content').length
+      : 0,
+    hot_douyin: len(d?.hot_search?.douyin),
+    hot_weibo: len(d?.hot_search?.weibo),
+    hot_bilibili: len(d?.hot_search?.bilibili),
+    hot_content_cross: len(d?.hot_content_cross),
+    hot_aigc_words: len(d?.hot_aigc_words),
+  }
+  // ★ key 集合以 sources_count 为准 (保证两者严格同构)
+  const src = d?.sources_count
+  if (src && typeof src === 'object' && !Array.isArray(src)) {
+    const out: Record<string, number> = {}
+    for (const k of Object.keys(src)) out[k] = counts[k] ?? 0
+    return out
+  }
+  return counts
+}
+
 /**
  * 裁剪一整份 daily-hot raw JSON
  * ★ 体积兜底: 每榜 ≤50 之后若仍 >40KB → 按比例缩条数重试 (最多 8 轮)
@@ -112,6 +177,13 @@ export function trimDailyHot(raw: any, maxBytes: number = MAX_DAILY_BYTES): Trim
     data = trimValue(raw, limit)
     bytes = Buffer.byteLength(JSON.stringify(data), 'utf-8')
     rounds += 1
+  }
+  // ★ 单 243 T2: 附上 kept_count (各源裁剪后实际保留条数)
+  //   ★ 裁剪逻辑 / limit / 体积预算【一个字都没动】—— kept_count 是在裁剪【之后】算的,
+  //     不参与上面的体积兜底循环 (否则同一天 limit 会从 20 掉到 15 → PM 给的核数就变了)
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    data.kept_count = countKeptBySource(data)
+    bytes = Buffer.byteLength(JSON.stringify(data), 'utf-8')
   }
   return { data, bytes, limit }
 }

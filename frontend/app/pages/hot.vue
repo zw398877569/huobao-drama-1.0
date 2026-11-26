@@ -32,6 +32,34 @@
     </div>
 
     <template v-else>
+      <!-- ★ 单 243 T2: 统计概览 (页头正下方, 8 个分区列表的上方) —— 两个图并排 -->
+      <section class="hot-overview">
+        <div class="card hot-chart">
+          <div class="hot-chart-head">
+            <span class="hot-chart-title">题材分布 Top 12</span>
+            <span class="dim mono">题材 {{ genreTop.length }} 个</span>
+          </div>
+          <div v-if="!genreTop.length" class="dim hot-chart-empty">暂无题材数据</div>
+          <div v-for="t in genreTop" :key="`genre-${t.name}`" class="hot-bar">
+            <span class="hot-bar-name" :title="t.name">{{ t.name }}</span>
+            <span class="hot-bar-track"><span class="hot-bar-fill" :style="{ width: `${t.pct}%` }"></span></span>
+            <span class="hot-bar-val mono">{{ t.value }}</span>
+          </div>
+        </div>
+        <div class="card hot-chart">
+          <div class="hot-chart-head">
+            <span class="hot-chart-title">各平台数据量对比</span>
+            <span class="dim mono">裁剪后条数</span>
+          </div>
+          <div v-if="!platformRows.length" class="dim hot-chart-empty">暂无平台数据</div>
+          <div v-for="p in platformRows" :key="`platform-${p.name}`" class="hot-bar">
+            <span class="hot-bar-name" :title="p.name">{{ p.name }}</span>
+            <span class="hot-bar-track"><span class="hot-bar-fill" :style="{ width: `${p.pct}%` }"></span></span>
+            <span class="hot-bar-val mono">{{ p.value }}</span>
+          </div>
+        </div>
+      </section>
+
       <!-- ★ 单 qa-20261126-003: 8 个分区两两并排 (只并排【分区】, 分区内部的榜单组仍上下堆叠) -->
       <div class="hot-grid">
         <section v-for="s in sections" :key="s.key" class="hot-section">
@@ -80,6 +108,8 @@ import { dailyHotAPI } from '~/composables/useApi'
 // ★ 单 240: 解包/空数据判定【只有这一处实现】(utils/hot-dashboard.ts) —— 首次加载与切换日期共用
 import { buildHotSections, unpackHot, isNoDataError, hasAnyBoard } from '~/utils/hot-dashboard'
 import type { Group, Section } from '~/utils/hot-dashboard'
+// ★ 单 243 T2: 统计概览 (题材分布 Top 12 + 各平台数据量对比) —— 纯函数在 utils/hot-overview.ts
+import { buildGenreTop, buildPlatformRows } from '~/utils/hot-overview'
 
 /**
  * ★ Sprint 58 (PM msg-20261123-227) + 返工 (PM msg-20261126-240): daily-hot 数据看板 /hot
@@ -174,6 +204,10 @@ function toggleLabel(s: Section, g: Group): string {
   return isExpanded(s, g) ? '收起' : `展开全部 ${g.items.length} 条`
 }
 
+/* ── T2: 统计概览数据 (题材 Top 12 / 各平台数据量) ── */
+const genreTop = computed(() => buildGenreTop(raw.value))
+const platformRows = computed(() => buildPlatformRows(raw.value))
+
 /* ── 分区工具 ── */
 function groupsOf(s: Section): Group[] {
   const d = raw.value || {}
@@ -255,6 +289,25 @@ onMounted(load)
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
+}
+/* ★ 单 243 T2: 统计概览 (两个图并排) —— CSS 横向条形图, 没用图表库 */
+.hot-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.hot-chart { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.hot-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; }
+.hot-chart-title { font-weight: 600; color: var(--text-0); }
+.hot-chart-empty { font-size: 12px; padding: 6px 0; }
+.hot-bar { display: grid; grid-template-columns: 84px minmax(0, 1fr) 40px; align-items: center; gap: 8px; font-size: 12px; }
+.hot-bar-name { color: var(--text-1, var(--text-0)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hot-bar-track { height: 10px; background: var(--bg-3); border-radius: 2px; overflow: hidden; }
+.hot-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+.hot-bar-val { text-align: right; color: var(--text-2); }
+@media (max-width: 1280px) {
+  .hot-overview { grid-template-columns: minmax(0, 1fr); }
 }
 .hot-grid > .hot-section { min-width: 0; }
 .hot-group, .hot-item, .hot-list { min-width: 0; }
