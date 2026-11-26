@@ -20,7 +20,7 @@ import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWar
 // Sprint 11 Task C/D/E (PM msg-20261016-001): ffprobe 实测媒体信息, 不再用估算值
 import { probeMedia, probeDuration, formatSrtTimestamp } from '../utils/ffprobe-helpers.js'
 // ★ 单 245 (PM msg-20261126-245): 音频【语音段】检测 + 按语音段拆字幕 (存量数据兜底)
-import { detectSpeechChunks, splitTextBySpeechChunks, chunkDurations } from '../utils/audio-speech-segments.js'
+import { detectSpeechChunks, splitTextBySpeechChunks, chunkDurations, mapTextPiecesToChunks } from '../utils/audio-speech-segments.js'
 // ★ Sprint 38 T3-D (PM msg-20261110-165): 音驱动工作流清单 (决定源音轨能不能保留)
 import { AutoDLComfyUIWorkflowAdapter } from './adapters/autodl-comfyui-workflow.js'
 // ★ Sprint 39 T4 (PM msg-20261111-169): 字幕烧录时机开关 (compose = 在这里烧 (默认); merge = 在拼接阶段烧)
@@ -190,6 +190,18 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       })
     }
 
+    // ★ 单 qa-20261126-004: 【先判定最终用哪条音轨】—— 音驱动工作流会保留视频模型重排后的源音轨,
+    //   它的停顿比 TTS 长 (实测 9.425s vs TTS 5.256s, 人声说到 7.641s) → 字幕必须按这条音轨排。
+    //   ★ 判定逻辑 (decideSourceVoice) 与下面 ffmpeg 装配用的完全是同一个, 没有第二套口径。
+    const videoGenInfo = getVideoGenerationInfo(sb.id, sb.videoUrl)
+    const sourceVoice = decideSourceVoice({
+      model: videoGenInfo?.model,
+      fallbackReason: videoGenInfo?.fallbackReason,
+      sourceHasAudio: !!videoProbe.hasAudio,
+      hasTts: !!audioPath,
+    })
+    const keepSourceVoice = sourceVoice.keep
+
     // 2. 生成字幕文件（SRT）— Sprint 11 Task E (PM msg-20261016-001)
     //   修前: 单条字幕 + join(' ') 挤成一大坨 + 时间轴用 sb.duration 估算值写死
     //         → 多角色对白全部一起出, 跟配音逐句输出完全对不上; FontSize=20 在竖屏几乎看不清
@@ -306,6 +318,34 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
           groupCues.push(cues)
         }
 
+        // ★★ 单 qa-20261126-004 (本单核心): 保留源音轨 (音驱动工作流) 时,
+        //   字幕时间轴按【最终视频里实际听到的那条音轨】重排 —— 不换音轨 (lipsync 跟着它走),
+        //   只换字幕参考的音频。条数/文字不变 (仍是按句拆的 3 条), 只改时间。
+        if (keepSourceVoice && fs.existsSync(videoPath)) {
+          const pieces = groupCues.flat().map((c) => c.text)
+          const finalSpeech = detectSpeechChunks(videoPath, videoDuration)
+          if (finalSpeech && finalSpeech.chunks.length > 1 && pieces.length > 1) {
+            const bounds = mapTextPiecesToChunks(pieces, finalSpeech.chunks, LEAD_IN)
+            if (bounds.length === pieces.length + 1) {
+              const retimed = pieces.map((text, i) => ({
+                text,
+                duration: Math.max(0, bounds[i + 1] - bounds[i]),
+              }))
+              groupCues.length = 0
+              groupCues.push(retimed) // 整体作为一组 → 组内首尾相接 (无组间 gap)
+              logTaskProgress('ComposeTask', 'subtitle-retimed-to-final-audio', {
+                storyboardId,
+                audioSource: 'video-source-track',
+                finalSpeechChunks: finalSpeech.chunks.length,
+                cues: retimed.length,
+                cueBounds: bounds.map((b) => Number(b.toFixed(3))),
+                lastSpeechEnd: Number(finalSpeech.chunks[finalSpeech.chunks.length - 1].end.toFixed(3)),
+                hint: '字幕时间轴排到【合成后视频的实际音轨】上 (音驱动工作流的停顿比 TTS 长)',
+              })
+            }
+          }
+        }
+
         let cursor = LEAD_IN
         for (let gi = 0; gi < groupCues.length; gi++) {
           const cues = groupCues[gi]
@@ -412,19 +452,8 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       //   以后 provider 换了格式就会悄悄退化成 yuv444p (Chrome 没有硬件解码器 → 网页里播卡)
       const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
 
-      // ★ Sprint 38 T3-D (PM msg-20261110-165): 源音轨里有我们的人声 (音驱动工作流生成) →
-      //   【保留源音轨】, 只烧字幕 —— 嘴型跟着源音轨走 (同步), 环境音也一起回来。
-      //   以前这里一律用 TTS 替换源音轨 → 声音重新对齐到 0 秒 → 和嘴型错开 (实测镜#16 差 0.42s),
-      //   而且源音轨里的雨声等环境音被丢掉了。
-      const videoGenInfo = getVideoGenerationInfo(sb.id, sb.videoUrl)
-      const sourceVoice = decideSourceVoice({
-        model: videoGenInfo?.model,
-        fallbackReason: videoGenInfo?.fallbackReason,
-        sourceHasAudio: !!videoProbe.hasAudio,
-        hasTts: !!audioPath,
-      })
-      const keepSourceVoice = sourceVoice.keep
-
+      // ★ Sprint 38 T3-D: sourceVoice 判定已【上移】到字幕生成之前 (单 qa-20261126-004:
+      //   字幕时间轴要按最终音轨排, 必须先知道会不会保留源音轨)
       if (keepSourceVoice) {
         // 源音轨也显式对齐到【视频真实时长】(音频短 → 补静音, 长 → 裁掉), 音画总时长一致
         const align = `[0:a]apad,atrim=0:${videoDuration.toFixed(3)},asetpts=N/SR/TB[aout]`

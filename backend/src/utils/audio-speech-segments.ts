@@ -83,8 +83,9 @@ export function chunksFromSilences(silences: SpeechChunk[], durationSec: number)
   const mergedChunks: SpeechChunk[] = []
   for (const c of chunks) {
     const last = mergedChunks[mergedChunks.length - 1]
-    if (last && c.end - c.start < MIN_CHUNK_SEC) {
-      last.end = Math.max(last.end, c.end)
+    if (c.end - c.start < MIN_CHUNK_SEC) {
+      // 太短: 有前一段 → 并入前一段; 是开头第一段 → 直接丢掉 (开头点击声/呼吸声, 不是台词)
+      if (last) last.end = Math.max(last.end, c.end)
       continue
     }
     mergedChunks.push({ ...c })
@@ -177,6 +178,59 @@ export function chunkDurations(chunks: SpeechChunk[], durationSec: number): numb
     out.push(Math.max(0, end - start))
   }
   return out
+}
+
+/**
+ * 纯函数: 把 N 段文本映射到【最终音轨】的 M 个语音段上 → N+1 个时间边界
+ *   - 首边界 = leadIn (字幕首句上屏时间); 末边界 = 最后一个语音段的结束
+ *   - 中间边界只从【语音段的起点】里挑 (按各段文本的字数比例, 单调) → 字幕条与条首尾相接,
+ *     且边界都落在真实语音段的分界上
+ *   - ★ 这是单 qa-20261126-004 的核心: 字幕要排在【最终视频里实际听到的那条音轨】上
+ *     (音驱动工作流保留的是视频模型重排后的音轨, 停顿比 TTS 长)
+ */
+export function mapTextPiecesToChunks(pieces: string[], chunks: SpeechChunk[], leadIn: number): number[] {
+  const n = (pieces || []).length
+  if (n === 0 || !chunks || chunks.length === 0) return []
+  const lastEnd = chunks[chunks.length - 1].end
+  const firstStart = Math.max(0, Math.min(leadIn, chunks[0].start))
+  if (n === 1) return [firstStart, lastEnd]
+  const speechTotal = chunks.reduce((acc, c) => acc + Math.max(0, c.end - c.start), 0) || 1
+  const cum: number[] = []
+  let accDur = 0
+  for (const c of chunks) {
+    accDur += Math.max(0, c.end - c.start)
+    cum.push(accDur)
+  }
+  // 候选边界 = 第 2..M 段的【起点】, 对应它前面已累计的语音时长
+  const candidates: { time: number; cum: number }[] = []
+  for (let j = 1; j < chunks.length; j++) {
+    candidates.push({ time: chunks[j].start, cum: cum[j - 1] })
+  }
+  const totalChars = pieces.reduce((acc, p) => acc + (String(p).replace(/\s/g, '').length || 1), 0) || 1
+  const bounds: number[] = [firstStart]
+  let accChars = 0
+  let minIdx = 0
+  for (let i = 0; i < n - 1; i++) {
+    accChars += String(pieces[i]).replace(/\s/g, '').length || 1
+    const target = (accChars / totalChars) * speechTotal
+    let best = -1
+    let bestDiff = Infinity
+    for (let k = minIdx; k < candidates.length; k++) {
+      const diff = Math.abs(candidates[k].cum - target)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        best = k
+      }
+    }
+    if (best < 0) break
+    bounds.push(candidates[best].time)
+    minIdx = best + 1
+  }
+  bounds.push(lastEnd)
+  for (let i = 2; i < bounds.length; i++) {
+    if (bounds[i] < bounds[i - 1]) bounds[i] = bounds[i - 1]
+  }
+  return bounds
 }
 
 /**
