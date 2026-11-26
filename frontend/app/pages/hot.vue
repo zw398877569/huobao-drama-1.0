@@ -60,8 +60,9 @@
         </div>
       </section>
 
-      <!-- ★ 单 qa-20261126-003: 8 个分区两两并排 (只并排【分区】, 分区内部的榜单组仍上下堆叠) -->
-      <div class="hot-grid">
+      <!-- ★ 单 243 T3: masonry (CSS 多列) —— 8 个分区自然流入两列, 右边不留大片空白
+           ★ 用户已知并接受: 多列是先竖后横填充 (不是从左到右再下一行) -->
+      <div class="hot-sections">
         <section v-for="s in sections" :key="s.key" class="hot-section">
           <div class="card hot-sec-head">
             <span class="hot-sec-title">{{ s.label }}</span>
@@ -283,12 +284,12 @@ onMounted(load)
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* ★ 8 个分区两两并排; minmax(0,1fr) + 子项 min-width:0 → 长标题不会把网格撑出横向滚动条 */
-.hot-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  align-items: start;
+/* ★ 单 243 T3: 8 个分区走 CSS 多列 (masonry) —— 两列高度自动均衡, 右边不留大片空白
+   ★ break-inside: avoid → 一个分区不会被切成两半
+   ★ 用户已知并接受: 多列是先竖后横填充 (先灌满左列再灌右列) */
+.hot-sections {
+  columns: 2;
+  column-gap: 14px;
 }
 /* ★ 单 243 T2: 统计概览 (两个图并排) —— CSS 横向条形图, 没用图表库 */
 .hot-overview {
@@ -309,12 +310,18 @@ onMounted(load)
 @media (max-width: 1280px) {
   .hot-overview { grid-template-columns: minmax(0, 1fr); }
 }
-.hot-grid > .hot-section { min-width: 0; }
+.hot-sections > .hot-section {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 14px;
+  min-width: 0;
+}
 .hot-group, .hot-item, .hot-list { min-width: 0; }
 .hot-link, .hot-title-plain, .hot-sub { overflow-wrap: anywhere; }
 /* ★ 窄窗口回退单列 (不压扁、不出横向滚动条) */
 @media (max-width: 1280px) {
-  .hot-grid { grid-template-columns: minmax(0, 1fr); }
+  .hot-sections { columns: 1; }
 }
 .hot-head { padding: 14px 16px; }
 .hot-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
