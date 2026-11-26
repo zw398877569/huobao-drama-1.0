@@ -49,7 +49,7 @@
         <div class="card hot-chart">
           <div class="hot-chart-head">
             <span class="hot-chart-title">各平台数据量对比</span>
-            <span class="dim mono">裁剪后条数</span>
+            <span class="dim mono">裁剪后条数 · 各组全部展开后可见</span>
           </div>
           <div v-if="!platformRows.length" class="dim hot-chart-empty">暂无平台数据</div>
           <div v-for="p in platformRows" :key="`platform-${p.name}`" class="hot-bar">
