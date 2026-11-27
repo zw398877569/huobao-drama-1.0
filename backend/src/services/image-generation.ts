@@ -1,4 +1,6 @@
 import { db, schema } from '../db/index.js'
+// ★ 单 msg-20261127-002 T3: 图片尺寸跟随剧集画幅 (9:16 → 竖屏尺寸)
+import { getDramaAspectRatio, imageSizeForAspect, lookupDramaIdByStoryboardId } from '../utils/drama-aspect.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById, getGlobalDefaultModel, hasNonEnglishChars, translateImagePromptToEnglish } from './ai.js'
 import { now } from '../utils/response.js'
@@ -57,6 +59,11 @@ export async function generateImage(params: GenerateImageParams): Promise<number
   // ★ 落库的 model 必须反映【实际生效】的那一套 (不是清单第一个)
   const effectiveModel = explicitModel || globalDefault?.model || config.model
 
+  // ★ 单 002 T3: 没传 size → 按【剧集画幅】映射尺寸 (9:16 → 1080x1920; 16:9 → 1920x1080 = 改动前默认)
+  //   dramaId 缺失时按 storyboardId 反查 (各入口本来就传了 dramaId, 这里只兜底)
+  const resolvedDramaId = params.dramaId ?? lookupDramaIdByStoryboardId(params.storyboardId) ?? undefined
+  const effectiveSize = params.size || imageSizeForAspect(getDramaAspectRatio(resolvedDramaId))
+
   const res = db.insert(schema.imageGenerations).values({
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
@@ -66,7 +73,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     prompt: params.prompt,
     model: effectiveModel,
     provider: config.provider,
-    size: params.size || '1920x1080',
+    size: effectiveSize,
     frameType: params.frameType,
     referenceImages: params.referenceImages ? JSON.stringify(params.referenceImages) : null,
     status: 'processing',
