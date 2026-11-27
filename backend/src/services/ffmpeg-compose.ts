@@ -460,9 +460,21 @@ export async function composeStoryboard(
       //   以后 provider 换了格式就会悄悄退化成 yuv444p (Chrome 没有硬件解码器 → 网页里播卡)
       // ★ 单 001 T1: 仅音轨准备 → 视频流 copy (不重编码, 零画质损失); 这是本单的核心价值
       //   ★ 不烧字幕时那一步 libx264/crf 纯属白损失画质, 而且拼接阶段还要再编一次
+      // ★ 单 001 T3: 只有【确实要在合成阶段烧字幕】才提到 crf18 (这种用法下单镜就是终稿,
+      //   拼接阶段再编也救不回 crf23 的损失); preset 一律 fast 不动; 仅音轨准备走 copy 不受影响
+      const willBurnSubtitles = !!(subtitlePath && burnSubtitles)
+      const videoCrf = willBurnSubtitles ? '18' : '23'
       const outputOptions = audioOnly
         ? ['-c:v', 'copy', '-movflags', '+faststart']
-        : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
+        : ['-c:v', 'libx264', '-preset', 'fast', '-crf', videoCrf, '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
+      if (willBurnSubtitles) {
+        logTaskProgress('ComposeTask', 'compose-crf18-for-subtitles', {
+          storyboardId,
+          crf: 18,
+          preset: 'fast',
+          hint: '合成阶段烧字幕 → 单镜就是终稿, 用 crf18 保住画质',
+        })
+      }
       if (audioOnly) {
         logTaskProgress('ComposeTask', 'compose-audio-only', {
           storyboardId,
