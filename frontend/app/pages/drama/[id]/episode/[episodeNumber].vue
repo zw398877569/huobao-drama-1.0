@@ -1800,6 +1800,15 @@
                 <!-- ★ Sprint 58 追加 (230): 只改【显示文案】, :value 仍是纯档位 ('768p') → 提交/落库不受影响 -->
                 <option v-for="t in videoResolutionOptions" :key="t" :value="t">{{ resolutionTierLabel(t, currentVideoWorkflowId) }}</option>
               </select>
+              <!-- ★ 单 msg-20261127-002 T2: 横竖屏下拉 (紧跟分辨率右边; 选项来自后端 per-workflow aspects) -->
+              <select
+                v-if="videoAspectOptions.length"
+                v-model="videoAspectRatio"
+                class="res-select"
+                title="横竖屏 (默认跟随剧集画幅; 可单镜覆盖, 只影响这一镜)"
+              >
+                <option v-for="a in videoAspectOptions" :key="a" :value="a">{{ a === '9:16' ? '9:16 竖屏' : a === '16:9' ? '16:9 横屏' : a }}</option>
+              </select>
               <!-- ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (默认开; 只对 minimax_h3_803 生效) -->
               <label
                 class="char-ref-toggle"
@@ -1884,7 +1893,7 @@
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId, videoResolutionTier, videoCharacterRefs)">
+                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb, videoConfigId, videoResolutionTier, videoCharacterRefs, videoAspectRatio)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
@@ -3510,7 +3519,22 @@ const videoModelPopoverOpen = ref(false)
 //     (用户选 960p → 竖屏镜发 '960p竖'、横屏镜发 '960p横')
 //   ★ 档位表的事实来源 = 后端 adapter 的 RESOLUTION_PROFILES (GET /videos/autodl-comfyui/resolutions)
 //     → 前端不会跟后端漂移
-const autodlResolutionTiers = ref<Record<string, { tiers: string[]; defaultTier: string }>>({})
+const autodlResolutionTiers = ref<Record<string, { tiers: string[]; defaultTier: string; aspects?: string[] }>>({})
+// ★ 单 002 T2: 横竖屏下拉 —— 默认跟剧集画幅, 可单镜覆盖; 选项来自后端 per-workflow aspects
+const videoAspectOptions = computed<string[]>(() => {
+  const a = autodlResolutionTiers.value[currentVideoWorkflowId.value]?.aspects
+  return Array.isArray(a) && a.length ? a : ['16:9', '9:16']
+})
+const dramaAspectRatio = computed<string>(() => {
+  try {
+    const m: any = drama.value?.metadata
+    const j: any = typeof m === 'string' ? JSON.parse(m || '{}') : (m || {})
+    const a = j?.aspect_ratio
+    return ['16:9', '9:16', '4:3', '1:1'].includes(a) ? a : '16:9'
+  } catch { return '16:9' }
+})
+const videoAspectRatio = ref<string>('16:9')
+watch(dramaAspectRatio, (v) => { videoAspectRatio.value = v || '16:9' }, { immediate: true })
 const videoResolutionTier = ref<string>('')
 /**
  * ★ Sprint 52 (PM msg-20261117-207): 角色参考图开关 (默认开)

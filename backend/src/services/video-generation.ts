@@ -1,4 +1,6 @@
 import { db, schema } from '../db/index.js'
+// ★ 单 002: 剧集级画幅 (dramas.metadata)
+import { getDramaAspectRatio } from '../utils/drama-aspect.js'
 // ★ Sprint 48 T6 (PM msg-20261116-194): 视频链路接【生图链路同一份】错误分类器
 import { classifyProviderError, markRetryable } from './provider-error-classify.js'
 import { eq, and, asc, inArray } from 'drizzle-orm'
@@ -172,7 +174,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     lastFrameUrl: params.lastFrameUrl,
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
     duration: params.duration || 5,
-    aspectRatio: params.aspectRatio || '16:9',
+    // ★ 单 msg-20261127-002 T2: 没传 aspect_ratio → 自动用【该镜头所属剧集】的 metadata.aspect_ratio
+    //   (剧集没设置 → getDramaAspectRatio 返回默认 16:9, 与改动前逐字一致)
+    aspectRatio: params.aspectRatio || getDramaAspectRatio(params.dramaId),
     // ★ Sprint 43: 分辨率档位 (前端下拉选的; 空 = 用该工作流的默认档)
     resolution: params.resolution || undefined,
     // ★ Sprint 52 (PM msg-20261117-207): 角色形象图开关【落库】——

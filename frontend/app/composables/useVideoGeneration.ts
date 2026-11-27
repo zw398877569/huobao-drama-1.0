@@ -248,6 +248,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
     configId?: number | string | null,
     resolution?: string | null,
     includeCharacterRefs?: boolean,
+    // ★ 单 msg-20261127-002 T2: 横竖屏 (来自剧集画幅, 可单镜覆盖; 不传 → 后端按剧集 metadata 兜底)
+    aspectRatio?: string | null,
   ) {
     // ★ Sprint 36: 先置 pending —— 等后一镜首帧可能要几分钟, 期间按钮必须置灰,
     //   否则能重复点 → 重复提交 → 重复扣费。
@@ -255,7 +257,7 @@ const failedVideoMessages = ref<Record<number, string>>({})
     try {
       delete failedVideoMessages.value[sb.id]
       applyFallbackReason(sb.id, null)  // Sprint 14: 重新生成前先清掉上一轮的降级 tag
-      await genVidInner(sb, configId, resolution, includeCharacterRefs)
+      await genVidInner(sb, configId, resolution, includeCharacterRefs, aspectRatio)
     } catch (e: any) {
       pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
       toast.error(e.message)
@@ -267,6 +269,7 @@ const failedVideoMessages = ref<Record<number, string>>({})
     configId?: number | string | null,
     resolution?: string | null,
     includeCharacterRefs?: boolean,
+    aspectRatio?: string | null,
   ) {
     // ★ Sprint 29 follow-up Task C (PM msg-20261102-133): 【只取英文版】—— 不再重复翻译。
     //   数据方向 (PM 决策 D1): 中文版 = 源, 英文版 = 翻译产物; 翻译【只在保存时发生一次】。
@@ -319,6 +322,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
     if (configId != null) params.config_id = configId
     // ★ Sprint 43: 分辨率档位 (空 = 用该工作流的默认档)
     if (resolution) params.resolution = resolution
+    // ★ 单 002 T2: 横竖屏 (没传时后端按剧集 metadata 兜底)
+    if (aspectRatio) params.aspect_ratio = aspectRatio
     // ★ Sprint 52: 角色参考图开关 (只在关时传 → 开着时请求体与改动前逐字一致)
     if (includeCharacterRefs === false) params.include_character_refs = false
     if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }

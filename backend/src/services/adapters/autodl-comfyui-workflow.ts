@@ -284,15 +284,20 @@ Ref2V 超清画质版（zm_u30）—— ★ Sprint 42 (PM msg-20261114-181)
    *   竖/横由每个分镜的 aspectRatio 决定 → 用户选 960p, 竖屏镜发 '960p竖'、横屏镜发 '960p横'。
    *   ★ 事实来源就是 RESOLUTION_PROFILES → 前端不会跟后端漂移。
    */
-  static listResolutionTiers(): Record<string, { tiers: string[]; defaultTier: string }> {
-    const out: Record<string, { tiers: string[]; defaultTier: string }> = {}
+  static listResolutionTiers(): Record<string, { tiers: string[]; defaultTier: string; aspects: string[] }> {
+    const out: Record<string, { tiers: string[]; defaultTier: string; aspects: string[] }> = {}
     for (const [wf, p] of Object.entries(AutoDLComfyUIWorkflowAdapter.RESOLUTION_PROFILES)) {
       const tiers: string[] = []
       for (const literal of [...p.levelsVert, ...p.levelsHor]) {
         const t = AutoDLComfyUIWorkflowAdapter.tierOfLiteral(literal)
         if (!tiers.includes(t)) tiers.push(t)
       }
-      out[wf] = { tiers, defaultTier: AutoDLComfyUIWorkflowAdapter.tierOfLiteral(p.defaultVert) }
+      // ★ 单 msg-20261127-002 T2: 该工作流【实际支持】的画幅 —— 只读 levelsHor / levelsVert 判断
+      //   (有横屏档位 → 16:9; 有竖屏档位 → 9:16; 以后出现只支持单边的 workflow 时下拉会自动跟上)
+      const aspects: string[] = []
+      if (p.levelsHor.length) aspects.push('16:9')
+      if (p.levelsVert.length) aspects.push('9:16')
+      out[wf] = { tiers, defaultTier: AutoDLComfyUIWorkflowAdapter.tierOfLiteral(p.defaultVert), aspects }
     }
     return out
   }
