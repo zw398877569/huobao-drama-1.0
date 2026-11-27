@@ -225,7 +225,8 @@ export interface MergeGradeConfig {
   saturation: number
 }
 export const DEFAULT_MERGE_GRADE: MergeGradeConfig = { enabled: false, brightness: 0, contrast: 1, saturation: 1 }
-export type MergeSubtitleStage = 'compose' | 'merge'
+// ★ 单 001 T2: compose = 合成阶段烧 (默认) / merge = 拼接阶段烧 / none = 不要字幕
+export type MergeSubtitleStage = 'compose' | 'merge' | 'none'
 
 export interface MergeSettings {
   grade: MergeGradeConfig
@@ -288,7 +289,9 @@ export function readMergeSettings(episodeId: number): MergeSettings {
     const titleCard: MergeTitleCardConfig = tc.ok ? { ...tc.config } : { ...DEFAULT_MERGE_TITLE_CARD }
     return {
       grade: v.ok ? v.config : { ...DEFAULT_MERGE_GRADE },
-      subtitleStage: parsed?.subtitleStage === 'merge' ? 'merge' : 'compose',
+      subtitleStage: parsed?.subtitleStage === 'merge'
+        ? 'merge'
+        : parsed?.subtitleStage === 'none' ? 'none' : 'compose',
       bgm,
       sfx,
       titleCard,
@@ -964,7 +967,10 @@ async function doMerge(
   // ── ★ Sprint 39 T4: 字幕烧录时机 ──
   //   'compose' (默认) = 合成阶段已经烧进画面了 → 拼接阶段【不】再烧 (否则叠两层字幕)
   //   'merge' = 合成阶段没烧 → 拼接阶段把各镜 SRT 平移后拼成整片 SRT, 一次性烧上去 (只过一次有损编码)
-  const stage: MergeSubtitleStage = subtitleStage === 'merge' ? 'merge' : 'compose'
+  // ★ 单 001 T2: none = 不要字幕 (不构建全片 SRT / 不烧); merge = 拼接阶段烧; compose = 合成阶段已烧
+  const stage: MergeSubtitleStage = subtitleStage === 'merge'
+    ? 'merge'
+    : subtitleStage === 'none' ? 'none' : 'compose'
   let mergedSrtPath: string | null = null
   if (stage === 'merge' && storyboards && storyboards.length) {
     // ★ 片头开启 → 所有镜头字幕整体后移一个卡片时长; 镜缝转场用【镜头之间】的那部分

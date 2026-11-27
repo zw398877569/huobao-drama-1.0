@@ -70,14 +70,14 @@ app.post('/episodes/:id/merge', async (c) => {
   let subtitleStage = currentSettings.subtitleStage
   if (body?.subtitleStage != null) {
     const st = String(body.subtitleStage)
-    if (st !== 'compose' && st !== 'merge') {
+    if (st !== 'compose' && st !== 'merge' && st !== 'none') {
       logTaskWarn('MergeAPI', 'episode-merge-invalid-subtitle-stage', {
         episodeId, dramaId: ep.dramaId, subtitleStage: st,
         hint: '字幕烧录时机不合法 → 已拒绝, 没有新建 merge 记录',
       })
-      return badRequest(c, `字幕烧录时机不合法: ${st} (可选: compose / merge)`)
+      return badRequest(c, `字幕烧录时机不合法: ${st} (可选: compose / merge / none)`)
     }
-    subtitleStage = st as 'compose' | 'merge'
+    subtitleStage = st as 'compose' | 'merge' | 'none'
     writeMergeSettings(episodeId, { subtitleStage })
   }
   // ★ Sprint 40 T2 (PM msg-20261112-171): BGM 铺底 + 对白 ducking —— 校验 + 持久化

@@ -424,7 +424,8 @@ export async function composeStoryboard(
 
       // ★ Sprint 39 T4: 开关 = 'merge' 时【不烧】字幕 (由拼接阶段统一烧 → 字幕只过一次有损编码);
       //   SRT 仍然照常写出来 (拼接阶段要用它) → 单镜文件仍然是独立可播放的 mp4 ✔
-      const burnSubtitles = readMergeSettings(sb.episodeId).subtitleStage !== 'merge'
+      // ★ 单 001 T2: 只有字幕烧录时机 = compose 才在合成阶段烧 (merge / none 都不烧)
+      const burnSubtitles = readMergeSettings(sb.episodeId).subtitleStage === 'compose'
       if (subtitlePath && burnSubtitles && supportsSubtitleFilter()) {
         const escapedPath = subtitlePath
           .replace(/\\/g, '/')

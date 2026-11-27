@@ -2120,6 +2120,7 @@
                     <select v-model="mergeSubtitleStage" class="merge-transition-select">
                       <option value="compose">合成阶段烧 (默认, 单镜视频带字幕)</option>
                       <option value="merge">拼接阶段烧 (字幕只过一次有损编码)</option>
+                      <option value="none">不要字幕</option>
                     </select>
                   </div>
 
@@ -3967,12 +3968,12 @@ const mergeGradeOpen = ref(false)
 const composeAudioOnly = ref(false)
 const mergeGrade = ref({ enabled: false, brightness: 0, contrast: 1, saturation: 1 })
 // ★ Sprint 39 T4: 字幕烧录时机 —— compose = 合成阶段烧 (默认, 改动前的行为); merge = 拼接阶段烧 (只过一次有损编码)
-const mergeSubtitleStage = ref<'compose' | 'merge'>('compose')
+const mergeSubtitleStage = ref<'compose' | 'merge' | 'none'>('compose')
 async function loadMergeSettings() {
   try {
     const st: any = await mergeAPI.settings(epId.value)
     if (st?.grade) mergeGrade.value = { ...mergeGrade.value, ...st.grade }
-    if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose') mergeSubtitleStage.value = st.subtitleStage
+    if (st?.subtitleStage === 'merge' || st?.subtitleStage === 'compose' || st?.subtitleStage === 'none') mergeSubtitleStage.value = st.subtitleStage
     // ★ Sprint 40 T2: BGM 选择 + 音量 + duck 参数 (后端持久化 → 刷新页面仍在)
     if (st?.bgm) mergeBgm.value = { ...mergeBgm.value, ...st.bgm }
     // ★ Sprint 40 T4: 片头 (先恢复 → 音效的镜缝序号要按它做偏移)
