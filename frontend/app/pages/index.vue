@@ -49,6 +49,16 @@
           </div>
 
           <h3 class="project-title">{{ d.title }}</h3>
+          <!-- ★ 单 002: 存量剧集也能改画幅 (点击不触发卡片跳转) -->
+          <select
+            class="input"
+            style="height:24px; padding:0 6px; font-size:11px; width:110px; margin-top:6px"
+            :value="dramaAspect(d)"
+            @click.stop
+            @change.stop="setDramaAspect(d, $event)"
+          >
+            <option v-for="a in DRAMA_ASPECT_CHOICES" :key="a" :value="a">{{ aspectLabel(a) }}</option>
+          </select>
 
           <div class="project-meta">
             <span v-if="d.style" class="style-tag">{{ d.style }}</span>
@@ -119,6 +129,11 @@
             <span class="field-label">角色美学 <span class="dim" style="font-weight:normal;margin-left:6px;font-size:11px">(国内短剧默认选「东亚脸」)</span></span>
             <BaseSelect v-model="form.character_aesthetic" :options="aestheticOptions" placeholder="选择角色美学" />
           </label>
+          <!-- ★ 单 msg-20261127-002: 剧集级画幅 (整部剧统一; 红果等竖屏平台选 9:16) -->
+          <label class="field">
+            <span class="field-label">画幅 <span class="dim" style="font-weight:normal;margin-left:6px;font-size:11px">(整部剧统一; 竖屏投放选 9:16)</span></span>
+            <BaseSelect v-model="form.aspect_ratio" :options="aspectSelectOptions" placeholder="选择画幅" />
+          </label>
           <div class="modal-actions">
             <button type="button" class="btn" @click="showCreate = false">取消</button>
             <button type="submit" class="btn btn-primary">
@@ -144,7 +159,31 @@ import BaseSelect from '~/components/BaseSelect.vue'
 const dramas = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
-const form = ref({ title: '', total_episodes: 1, style: '', character_aesthetic: 'neutral' })
+const form = ref({ title: '', total_episodes: 1, style: '', character_aesthetic: 'neutral', aspect_ratio: '16:9' })
+// ★ 单 002: 剧集级画幅 (存 dramas.metadata; 16:9 = 默认, 与改动前一致)
+const DRAMA_ASPECT_CHOICES = ['16:9', '9:16', '4:3', '1:1']
+const aspectLabel = (a) => a === '16:9' ? '16:9 横屏(默认)' : a === '9:16' ? '9:16 竖屏' : a
+const aspectSelectOptions = DRAMA_ASPECT_CHOICES.map(a => ({ label: aspectLabel(a), value: a }))
+function parseDramaMetadata(raw) {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw
+  try { return JSON.parse(String(raw)) || {} } catch { return {} }
+}
+function dramaAspect(d) {
+  const a = parseDramaMetadata(d?.metadata).aspect_ratio
+  return DRAMA_ASPECT_CHOICES.includes(a) ? a : '16:9'
+}
+async function setDramaAspect(d, eOrAspect) {
+  const aspect = typeof eOrAspect === 'string' ? eOrAspect : (eOrAspect?.target?.value || '16:9')
+  try {
+    const metadata = JSON.stringify({ ...parseDramaMetadata(d?.metadata), aspect_ratio: aspect })
+    await dramaAPI.update(d.id, { metadata })
+    d.metadata = metadata
+    toast.success(`画幅已改为 ${aspectLabel(aspect)}`)
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
 // 视觉风格 — 来自后端 /api/v1/style-presets, 不在前端硬编码
 const { stylePresets, load: loadStylePresets } = useStylePresets()
 onMounted(() => { loadStylePresets() })
@@ -169,7 +208,12 @@ async function load() {
 async function create() {
   if (!form.value.title?.trim()) return
   try {
-    const d = await dramaAPI.create({ ...form.value, character_aesthetic: form.value.character_aesthetic || null })
+    const d = await dramaAPI.create({
+      ...form.value,
+      character_aesthetic: form.value.character_aesthetic || null,
+      // ★ 单 002: 画幅存 dramas.metadata (16:9 默认)
+      metadata: JSON.stringify({ aspect_ratio: form.value.aspect_ratio || '16:9' }),
+    })
     showCreate.value = false
     navigateTo(`/drama/${d.id}`)
   } catch (e) {

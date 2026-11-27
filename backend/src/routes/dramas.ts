@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { eq, and, isNull, like, desc } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+// ★ 单 msg-20261127-002: 剧集画幅存 dramas.metadata (不改 schema)
+import { stringifyDramaMetadata } from '../utils/drama-aspect.js'
 import { DEFAULT_TEMPLATE_ID } from '../prompt-templates/index.js'
 import { success, badRequest, notFound, created, now } from '../utils/response.js'
 import { toSnakeCase, toSnakeCaseArray } from '../utils/transform.js'
@@ -73,7 +75,7 @@ app.post('/', async (c) => {
     // 2026-09-23: 角色美学独立维度, nullable, 默认 null → 代码 fallback 'neutral'
     characterAesthetic: body.character_aesthetic ?? null,
     tags: body.tags ? JSON.stringify(body.tags) : null,
-    metadata: body.metadata,
+    metadata: stringifyDramaMetadata(body.metadata),
     status: 'draft',
     createdAt: ts,
     updatedAt: ts,
@@ -155,7 +157,10 @@ app.put('/:id', async (c) => {
   if (body.character_aesthetic !== undefined) updates.characterAesthetic = body.character_aesthetic
   if (body.status !== undefined) updates.status = body.status
   if (body.tags !== undefined) updates.tags = JSON.stringify(body.tags)
-  if (body.metadata !== undefined) updates.metadata = body.metadata
+  if (body.metadata !== undefined) {
+    // ★ 单 002: 支持传对象或 JSON 字符串, 统一按字符串落库 (dramas.metadata 是 TEXT)
+    updates.metadata = stringifyDramaMetadata(body.metadata)
+  }
   db.update(schema.dramas).set(updates).where(eq(schema.dramas.id, id)).run()
   return success(c)
 })
