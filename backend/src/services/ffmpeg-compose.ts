@@ -124,6 +124,54 @@ function getVideoGenerationInfo(
 /**
  * 合成单个镜头：视频 + TTS对白音频 + 烧录字幕
  */
+/**
+ * ★ 单 msg-20261127-001 T4: 单镜合成失败自动重试
+ *   - 最多 2 次重试 (总共 3 次尝试), 每次重试前短暂等待 (2s / 4s)
+ *   - 每次尝试失败 / 重试都记 flow-log (第几次、上次失败原因)
+ *   - 3 次都失败才抛错, 错误信息带上【最后一次的原始错误】
+ *   - ★ 有上限、不静默: 不会无限重试, 也不会把失败当成功
+ */
+export async function composeStoryboardWithRetry(
+  storyboardId: number,
+  options?: { audioOnly?: boolean },
+): Promise<string> {
+  const MAX_ATTEMPTS = 3
+  let lastErr: any = null
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      const lastMessage = String(lastErr?.message || lastErr || 'unknown')
+      logTaskWarn('ComposeTask', 'compose-retry', {
+        storyboardId,
+        attempt,
+        maxAttempts: MAX_ATTEMPTS,
+        lastError: lastMessage,
+        waitBeforeRetrySec: 2 * (attempt - 1),
+        hint: `第 ${attempt} 次尝试 (最多 ${MAX_ATTEMPTS} 次); 上次失败: ${lastMessage}`,
+      })
+      await new Promise((r) => setTimeout(r, 2000 * (attempt - 1)))
+    }
+    try {
+      return await composeStoryboard(storyboardId, options)
+    } catch (err: any) {
+      lastErr = err
+      logTaskWarn('ComposeTask', 'compose-attempt-failed', {
+        storyboardId,
+        attempt,
+        maxAttempts: MAX_ATTEMPTS,
+        error: String(err?.message || err),
+        willRetry: attempt < MAX_ATTEMPTS,
+      })
+    }
+  }
+  const original = String(lastErr?.message || lastErr || 'unknown error')
+  logTaskError('ComposeTask', 'compose-retries-exhausted', {
+    storyboardId,
+    attempts: MAX_ATTEMPTS,
+    originalError: original,
+  })
+  throw new Error(`合成失败 (已尝试 ${MAX_ATTEMPTS} 次): ${original}`)
+}
+
 export async function composeStoryboard(
   storyboardId: number,
   options?: { audioOnly?: boolean },

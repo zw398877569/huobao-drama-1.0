@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest } from '../utils/response.js'
-import { composeStoryboard } from '../services/ffmpeg-compose.js'
+import { composeStoryboardWithRetry } from '../services/ffmpeg-compose.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { toSnakeCase } from '../utils/transform.js'
 
@@ -16,7 +16,7 @@ app.post('/storyboards/:id/compose', async (c) => {
   const audioOnly = !!body?.audioOnly
   try {
     logTaskStart('ComposeAPI', 'single-compose', { storyboardId: id, audioOnly })
-    const composedUrl = await composeStoryboard(id, { audioOnly })
+    const composedUrl = await composeStoryboardWithRetry(id, { audioOnly })
     logTaskSuccess('ComposeAPI', 'single-compose', { storyboardId: id, output: composedUrl })
     return success(c, { id, composed_video_url: composedUrl })
   } catch (err: any) {
@@ -50,7 +50,7 @@ app.post('/episodes/:id/compose-all', async (c) => {
   ;(async () => {
     for (const sb of withVideo) {
       try {
-        await composeStoryboard(sb.id, { audioOnly })
+        await composeStoryboardWithRetry(sb.id, { audioOnly })
       } catch (err: any) {
         logTaskError('ComposeAPI', 'batch-item', { storyboardId: sb.id, episodeId, error: err.message })
       }
