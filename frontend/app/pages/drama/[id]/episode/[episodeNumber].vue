@@ -5630,6 +5630,8 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
   border: 1px solid var(--border); border-radius: 6px; padding: 8px;
   display: flex; flex-direction: column; gap: 4px;
 }
+/* ★ qa-20261127-002: 面板内部的行也不许被压扁 —— 超出 max-height 时由面板自身滚动 (行保持原高) */
+.merge-transition-panel > * { flex-shrink: 0; }
 .merge-transition-toolbar {
   display: flex; align-items: center; gap: 6px;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
@@ -6285,6 +6287,10 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 .export-toolbar { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg-0); flex-shrink: 0; }
 .export-host { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 .export-split { flex: 1; display: flex; min-height: 0; }
+/* ★ qa-20261127-002: 导出主区的四个分组 / 转场面板 / 视频预览都是 flex 列的子项,
+   默认 flex-shrink:1 会在内容超高时把它们【压扁】(实测转场面板被压到 18px, 内容裁在 16px 滚动区里)。
+   → 子项一律不收缩: 保持各自完整高度, 由外层 .export-host 统一纵向滚动。 */
+.export-main > * { flex-shrink: 0; }
 /* ★ qa-20261127-001: 不能无条件 justify-content: center —— 内容比可视区高时,
    居中会把溢出上下各分一半 → 顶部被推到滚动容器之外 (scrollTop=0 也够不到, 矮窗口看不到『画面与字幕』)。
    safe center: 空间够时保持居中 (高窗口布局不变), 内容溢出时回退到顶部对齐 (顶部永远可见可滚)。 */
