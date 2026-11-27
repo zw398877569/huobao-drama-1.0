@@ -98,6 +98,31 @@ export const H3ShotDetailsItemSchema = z.object({
   non_diegetic_music_zh: textOrLines.optional(),
 })
 
+/**
+ * ★ 单 qa-20261127-004: H3 step2 的 non_diegetic_music 按镜头兜底为 "N/A"
+ *   · 缺失 / null / 空字符串 / 空数组 → 该镜头补 "N/A"，并记下 shot_number
+ *   · 已有有效内容 → 原样保留
+ *   ★ 只兜底这一个字段：subject_definitions / detailed_description / overall_soundscape 不动
+ */
+export function defaultMissingNonDiegeticMusic(parsed: unknown): { parsed: unknown; defaultedShots: number[] } {
+  if (!parsed || typeof parsed !== 'object') return { parsed, defaultedShots: [] }
+  const obj = parsed as Record<string, unknown>
+  if (!Array.isArray(obj.shot_details)) return { parsed, defaultedShots: [] }
+  const defaultedShots: number[] = []
+  const details = obj.shot_details.map((det: any, i: number) => {
+    if (!det || typeof det !== 'object') return det
+    const music = det.non_diegetic_music
+    const isEmpty = music == null
+      || (typeof music === 'string' && !music.trim())
+      || (Array.isArray(music) && music.filter((x) => String(x ?? '').trim()).length === 0)
+    if (!isEmpty) return det
+    defaultedShots.push(Number(det.shot_number ?? i + 1))
+    return { ...det, non_diegetic_music: 'N/A' }
+  })
+  if (!defaultedShots.length) return { parsed, defaultedShots }
+  return { parsed: { ...obj, shot_details: details }, defaultedShots }
+}
+
 export const H3Step2Schema = z.object({
   shot_details: z.array(H3ShotDetailsItemSchema),
 })

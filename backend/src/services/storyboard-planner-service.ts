@@ -49,6 +49,8 @@ import { resolveSpeakerWhitelist } from '../utils/speaker-whitelist.js'
 import { findLeakedProps, resolveEffectiveCharacterIds } from '../utils/storyboard-rules.js'
 import { applyDurationPolicy } from './shot-duration.js'
 import { salvageImagePromptPermanent, salvageShotPlanArray } from './llm-schema-validator.js'
+// ★ 单 qa-20261127-004: H3 non_diegetic_music 按镜头兜底
+import { defaultMissingNonDiegeticMusic } from '../prompt-templates/minimax-h3.js'
 // ★ Sprint 33 T2 (PM msg-20261103-140): 过渡镜的校验层后处理 (纯函数)
 import { normalizeTransitionPlan, buildTransitionMap, findMissingTransitions, applyTransitionDurationOverride } from '../utils/transition-shot.js'
 import { stripReasoningBlocks } from './ai.js'
@@ -236,6 +238,12 @@ async function callLLMJson<T>(
     ctx?: Record<string, unknown>
     /** Sprint 44 FIX-061: zod fail 后尝试 salvage 修复字段 (省 retry). 例: shot_plan action>500 → truncate */
     salvage?: (parsed: unknown) => unknown
+    /**
+     * ★ 单 qa-20261127-004: 【zod 校验前】的确定性归一化 (只做已知的、语义安全的兜底)。
+     *   用它在 H3 step2 里给缺失的 non_diegetic_music 补 "N/A" → 连 zod-validation-failed 都不会出现,
+     *   更不会整包 retry。其它字段一律不动 (缺了照旧失败)。
+     */
+    preprocess?: (parsed: unknown) => unknown
   } = {},
 ): Promise<T> {
   // QA msg-20261010-006 ISSUE-020: 兼容 MiniMax-M3 (新 OpenAI 兼容 API 经常把内容放在 reasoning_content 而非 content)
@@ -359,9 +367,20 @@ async function callLLMJson<T>(
       }
     }
 
+    // ★ 单 004: 校验前归一化 (只跑调用方显式声明的确定性兜底; 失败不影响原流程)
+    let parsedForValidation: unknown = parsed
+    if (opts.preprocess) {
+      try {
+        parsedForValidation = opts.preprocess(parsed)
+      } catch (preErr: any) {
+        logTaskWarn('LLMCall', 'preprocess-failed', { ...opts.ctx, attempt, error: preErr?.message || String(preErr) })
+        parsedForValidation = parsed
+      }
+    }
+
     let parseResult: T
     try {
-      parseResult = validator.parse(parsed)
+      parseResult = validator.parse(parsedForValidation)
     } catch (err: any) {
       lastError = err
       const issueCount = err?.issues?.length ?? 0
@@ -551,6 +570,21 @@ export async function runStep2(opts: {
 
     result = await callLLMJson(finalConfig, systemPrompt, attemptPrompt, tpl.step2.schema as z.ZodType<z.infer<typeof Step2Schema>>, {
       ctx: { dramaId, episodeId, step: 'step2', attempt: attempt + 1 },
+      // ★★ 单 qa-20261127-004: H3 step2 的 non_diegetic_music 缺失/null/空 → 按【该镜头】补 "N/A"
+      //   ★ 只兜底这一个字段 —— subject_definitions / detailed_description / overall_soundscape 仍严格必填
+      //   ★ 在校验【之前】补 → 不再出现 zod-validation-failed, 也不会因为一个字段重跑整包 49 镜
+      preprocess: (parsed) => {
+        if (tpl.id !== 'minimax-h3') return parsed
+        const r = defaultMissingNonDiegeticMusic(parsed)
+        if (r.defaultedShots.length) {
+          logTaskWarn('StoryboardPlanner', 'non_diegetic_music-defaulted', {
+            dramaId, episodeId, attempt: attempt + 1,
+            count: r.defaultedShots.length, shotNumbers: r.defaultedShots,
+            hint: 'H3 step2 个别镜头漏写 non_diegetic_music → 按镜头补 N/A (其它必填段仍严格校验)',
+          })
+        }
+        return r.parsed
+      },
       // Sprint 44 FIX-061 follow-up: step 2 同样接 salvage hook, 跟 step 1 套路复用
       //   zod fail 多是 character_traits 空数组 → 复用 salvageImagePromptPermanent 补 placeholder
       //   character_ids 过滤非 int 元素 (salvageImagePromptPermanent 不处理 character_ids, 单独 inline)
