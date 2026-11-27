@@ -6285,7 +6285,18 @@ onMounted(() => { refresh(); loadAutodlResolutionTiers() })
 .export-toolbar { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg-0); flex-shrink: 0; }
 .export-host { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 .export-split { flex: 1; display: flex; min-height: 0; }
-.export-main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; }
+/* ★ qa-20261127-001: 不能无条件 justify-content: center —— 内容比可视区高时,
+   居中会把溢出上下各分一半 → 顶部被推到滚动容器之外 (scrollTop=0 也够不到, 矮窗口看不到『画面与字幕』)。
+   safe center: 空间够时保持居中 (高窗口布局不变), 内容溢出时回退到顶部对齐 (顶部永远可见可滚)。 */
+.export-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;   /* 不支持 safe 的浏览器兜底: 顶部对齐 */
+  justify-content: safe center;  /* 支持 safe 的浏览器: 居中但溢出时顶部对齐 */
+  padding: 32px;
+}
 .export-video { max-width: 720px; width: 100%; border-radius: var(--radius-lg); background: #000; }
 .export-bar { display: flex; align-items: center; gap: 12px; margin-top: 16px; width: 100%; max-width: 720px; }
 .export-list { width: 240px; flex-shrink: 0; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
