@@ -18,7 +18,11 @@ import {
   analyzeAudioFeatures, formatAudioFeatures, cacheAudioFeatures, getCachedAudioFeatures,
 } from '../../services/audio-features.js'
 
-export function createVoiceTools(episodeId: number, dramaId: number) {
+export function createVoiceTools(episodeId: number, dramaId: number, characterIds?: number[]) {
+  // ★ 单 qa-20261127-003 B: 按批次限定角色 —— 每批只读/只写本批角色, 批次之间不重复不覆盖
+  const batchIds = Array.isArray(characterIds) && characterIds.length ? new Set(characterIds.map(Number)) : null
+  // ★ 单 qa-20261127-003: 每个角色最多试听 3 个候选 (内存计数, 单次任务内有效)
+  const previewCountByCharacter = new Map<number, number>()
   function getEpisodeAudioProvider() {
     const [episode] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
     if (!episode?.audioConfigId) return null
@@ -31,8 +35,9 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
     description: 'Get all characters for the current drama with their current voice assignments.',
     inputSchema: z.object({}),
     execute: async () => {
-      const chars = db.select().from(schema.characters)
+      const allChars = db.select().from(schema.characters)
         .where(eq(schema.characters.dramaId, dramaId)).all()
+      const chars = batchIds ? allChars.filter(c => batchIds.has(Number(c.id))) : allChars
       const payload = {
         characters: chars.map(c => ({
           id: c.id,
@@ -115,6 +120,11 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
         })
       }
       assertVoiceInLibrary(voice_id, library)
+      // ★ 单 003 B: 批次限定 —— 只能给本批角色分配 (防跨批覆盖)
+      if (batchIds && !batchIds.has(Number(character_id))) {
+        logTaskWarn('VoiceTool', 'assign-outside-batch', { episodeId, characterId: character_id })
+        return { ok: false, error: `角色 ${character_id} 不在本批范围, 不能分配 (其它批次会处理)` }
+      }
       const [charRow] = db.select().from(schema.characters)
         .where(eq(schema.characters.id, character_id)).all()
       const charName = charRow?.name || `角色${character_id}`
@@ -162,21 +172,41 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
   // 每次 preview 自动 lazy cleanup 24h+ 旧样本
   const previewVoiceTts = createTool({
     id: 'preview_voice_tts',
-    description: 'Generate a short TTS preview (3-5s) for a candidate voice. Returns base64 audio so you can HEAR the voice, PLUS measured features (语速/音高/停顿) — 你自己感知不到音高语速, 只能靠这些实测数值判断. Always preview >=2 candidates before assign_voice, and use the SAME text for every candidate so the numbers are comparable.',
+    // ★ 单 qa-20261127-003 A: 不再返回 audio_base64 (文本模型听不到, 只会把上下文撑爆)
+    //   → 只返回音频路径/时长/实测 features; 音频文件照常生成, 用户可在音色页试听
+    description: 'Generate a short TTS preview (3-5s) for a candidate voice. Returns the audio PATH + duration + measured features (语速/音高/停顿) — ★ 你无法播放音频, 只能靠这些实测数值判断音色. Always preview 2-3 candidates (★ 每个角色最多 3 个) before assign_voice, and use the SAME text for every candidate so the numbers are comparable.',
     inputSchema: z.object({
+      character_id: z.number().optional().describe('该角色 id (用于每角色最多试听 3 个候选的计数)'),
       text: z.string().describe('台词片段, 建议 5-15 字, 反映角色说话风格'),
       voice_id: z.string().describe('候选 voice id (from list_voices)'),
       speed: z.number().optional().describe('语速 (默认 1.0)'),
       emotion: z.string().optional().describe('情绪 (默认 neutral)'),
     }),
-    execute: async ({ text, voice_id, speed, emotion }) => {
-      logTaskStart('VoiceTool', 'preview-tts', { voiceId: voice_id, textLen: text.length, emotion, speed })
-      const result = await generateTTSPreview(
-        text,
-        voice_id,
-        speed ?? 1.0,
-        emotion ?? 'neutral',
-      )
+    execute: async ({ character_id, text, voice_id, speed, emotion }) => {
+      // ★ B: 每个角色最多 3 次候选试听 (超过直接拒绝, 提示 agent 去决策)
+      if (character_id != null) {
+        const cid = Number(character_id)
+        const used = previewCountByCharacter.get(cid) || 0
+        if (used >= 3) {
+          logTaskWarn('VoiceTool', 'preview-cap-reached', { episodeId, characterId: cid, voiceId: voice_id, used })
+          return { ok: false, error: `角色 ${cid} 已试听 ${used} 个候选 (每角色最多 3 个) → 请直接 assign_voice 或换角色`, voice_id }
+        }
+        previewCountByCharacter.set(cid, used + 1)
+      }
+      logTaskStart('VoiceTool', 'preview-tts', { voiceId: voice_id, characterId: character_id, textLen: text.length, emotion, speed })
+      let result: any
+      try {
+        result = await generateTTSPreview(
+          text,
+          voice_id,
+          speed ?? 1.0,
+          emotion ?? 'neutral',
+        )
+      } catch (err: any) {
+        // ★ 单 003: 单个候选试听失败 → 记录原因并返回 ok:false (不抛, 不整批回滚)
+        logTaskWarn('VoiceTool', 'preview-tts-failed', { episodeId, characterId: character_id, voiceId: voice_id, error: err?.message || String(err) })
+        return { ok: false, voice_id, error: `试听失败: ${err?.message || String(err)}`, instruction: '换下一个候选继续; 不要因为这一条失败放弃整批角色.' }
+      }
       // ★ Sprint 47 T10 (PM msg-20261115-188): 实测特征 (语速 / 音高 / 停顿)
       //   ★ 从生成的样本音频里【实测】(不是估算): ffmpeg 解码 → RMS 分帧 → 自相关算基频
       //   ★ 数值随音频一起返回 → agent 能"看数值 + 听音色"双重判断 (它自己听不出音高语速)
@@ -188,9 +218,11 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
         logTaskWarn('VoiceTool', 'preview-features-failed', { voiceId: voice_id, error: err?.message })
       }
       return {
+        ok: true,
         voice_id,
+        // ★ A: 只给路径 (不给 base64/data URI)
         audio_path: result.relativePath,
-        audio_base64: result.base64,
+        audio_url: '/' + String(result.relativePath || '').replace(/^\/+/, ''),
         file_size: result.fileSize,
         duration_ms: result.durationMs,
         features,

@@ -790,7 +790,8 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     4. 对每个候选调 preview_voice_tts 生成 3-5 秒样本:
        - text 用该角色前 1-2 句台词 (从 episodes.content / 已分配对话推算, 或用通用台词 '你好,我是<角色名>')
        - 默认 emotion=neutral, speed=1.0 (剧情高潮可调 emotion)
-    5. 听 audio_base64 评估音色匹配度: 性别/年龄/情绪/整体气质
+    5. 看 preview 返回的【实测 features】(语速/音高/停顿) + 音频路径评估音色匹配度: 性别/年龄/情绪/整体气质
+       ★ 你无法播放音频, preview 也不会返回 base64 —— 只靠 features 数值判断 (不要臆造没测到的特征)
     6. 决策最佳 voice (评分: 5=完美匹配, 1=完全不合适)
     7. 调 assign_voice(character_id, voice_id, reason, sample_text) 写库
        - sample_text 传该角色第 1-2 句真实台词 (跟 preview 阶段用的同一段, 这样试听样本就是真实音色)
@@ -801,7 +802,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     ✗ 禁止: 在不调 preview_voice_tts 的情况下直接 assign_voice (凭直觉决策)
     ✗ 禁止: 跳过 preview, 仅基于 voice 描述字符串决策
     ✗ 禁止: < 2 个 voice 候选就决策 (至少 preview 2 个对比)
-    ✓ 鼓励: 同一角色 preview 3 个候选, 评分 5/3/2, 选最高分
+    ✓ 鼓励: 同一角色 preview 2-3 个候选, 评分 5/3/2, 选最高分 (★ 每个角色【最多 3 个】候选, 超过会被工具拒绝)
     ✓ 鼓励: reason 写明 'preview N 个候选, voice X 音色 <具体描述> 最匹配'
     ✓ 必须: assign_voice 传 sample_text (用 preview 阶段同一段台词), 否则用户试听到的是默认问候语不是角色真实声音
        (Sprint 11 QA msg-20261016-067 Bug-A: 之前 voice_sample_url 全 null, 用户在音色页无法试听)
@@ -1252,7 +1253,7 @@ function getModel(dbConfig: any, overrideConfig?: { provider: string; baseUrl: s
   return provider.chat(modelName)
 }
 
-export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental'; textConfigId?: number; modelOverride?: string }): Agent | null {
+export function createAgent(type: string, episodeId: number, dramaId: number, options?: { toolsMode?: 'full' | 'incremental'; textConfigId?: number; modelOverride?: string; voiceCharacterIds?: number[] }): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
 
@@ -1308,7 +1309,8 @@ export function createAgent(type: string, episodeId: number, dramaId: number, op
       }
       break
     }
-    case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId); break
+    // ★ 单 qa-20261127-003 B: 按批次注入本批角色 (每批 3-4 个), 批次之间不重复不覆盖
+    case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId, options?.voiceCharacterIds); break
     case 'grid_prompt_generator': tools = createGridPromptTools(episodeId, dramaId); break
     default: return null
   }

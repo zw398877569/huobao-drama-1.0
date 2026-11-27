@@ -205,10 +205,66 @@ app.post('/:type/chat', async (c) => {
   const startTime = performance.now()
 
   try {
-    const result = await agent.generate(
-      [{ role: 'user', content: message }],
-      { maxSteps: 20 },
-    )
+    // ★★ 单 qa-20261127-003 B: 音色分配按【角色批次】执行 —— 每批 ≤4 个角色, 每批一个独立 agent 运行
+    //   (A 已把 preview 的 base64 去掉; B 再保证单次 LLM 上下文有界, 7 角色不会挤爆窗口)
+    //   ★ 某批失败不阻塞后续批次; 最终汇总未分配音色的角色 (绝不静默少人)
+    let result: any
+    if (agentType === 'voice_assigner') {
+      const all = db.select({ id: schema.characters.id, name: schema.characters.name, voiceStyle: schema.characters.voiceStyle })
+        .from(schema.characters).where(eq(schema.characters.dramaId, drama_id)).all()
+      const batches: typeof all[] = []
+      for (let i = 0; i < all.length; i += 4) batches.push(all.slice(i, i + 4))
+      logTaskProgress('Agent', 'voice-assign-batches', {
+        episodeId: episode_id, dramaId: drama_id, totalCharacters: all.length,
+        batches: batches.map((b, i) => ({ batch: i + 1, characters: b.map(c => `${c.name}(id=${c.id})`) })),
+      })
+      const texts: string[] = []
+      const calls: any[] = []
+      const toolResultList: any[] = []
+      for (let bi = 0; bi < batches.length; bi++) {
+        const b = batches[bi]
+        const list = b.map(c => `${c.name}(id=${c.id})`).join('、')
+        logTaskStart('Agent', 'voice-batch', { episodeId: episode_id, batch: bi + 1, totalBatches: batches.length, characterIds: b.map(c => c.id), names: b.map(c => c.name) })
+        const batchAgent = createAgent(agentType, episode_id, drama_id, { voiceCharacterIds: b.map(c => c.id) })
+        const batchMsg = [
+          `请为以下 ${b.length} 个角色分配音色 (★ 只处理这些角色, 其它角色由别的批次处理, 绝对不要动它们): ${list}。`,
+          '要求: 每个角色必须先调 preview_voice_tts 试听 2-3 个候选 (每个角色最多 3 个; 记得传 character_id);',
+          '某个候选试听失败就换下一个继续, 不要因此放弃整批;',
+          '最终为这一批的【每个】角色都调 assign_voice (sample_text 用该角色真实台词)。',
+        ].join('\n')
+        try {
+          if (!batchAgent) throw new Error('agent not found')
+          const r: any = await batchAgent.generate([{ role: 'user', content: batchMsg }], { maxSteps: 20 })
+          texts.push(`【批次 ${bi + 1}/${batches.length}: ${b.map(c => c.name).join('、')}】\n${r.text || ''}`)
+          calls.push(...(r.toolCalls || []))
+          toolResultList.push(...(r.toolResults || []))
+          logTaskSuccess('Agent', 'voice-batch', { episodeId: episode_id, batch: bi + 1, characters: b.length })
+        } catch (err: any) {
+          logTaskWarn('Agent', 'voice-batch-failed', {
+            episodeId: episode_id, batch: bi + 1, characterIds: b.map(c => c.id),
+            error: err?.message || String(err),
+            hint: '该批失败不阻塞后续批次; 未分配的角色会在最终汇总里列出',
+          })
+          texts.push(`【批次 ${bi + 1}/${batches.length}: ${b.map(c => c.name).join('、')}】失败: ${err?.message || String(err)}`)
+        }
+      }
+      const after = db.select({ name: schema.characters.name, voiceStyle: schema.characters.voiceStyle })
+        .from(schema.characters).where(eq(schema.characters.dramaId, drama_id)).all()
+      const missing = after.filter(c => !c.voiceStyle)
+      texts.push(missing.length
+        ? `\n★ 最终未分配音色的角色: ${missing.map(c => c.name).join('、')} (原因见对应批次的失败信息)`
+        : `\n★ 全部 ${after.length} 个角色均已分配音色`)
+      logTaskProgress('Agent', 'voice-assign-summary', {
+        episodeId: episode_id, total: after.length, assigned: after.length - missing.length,
+        missing: missing.map(c => c.name), batches: batches.length,
+      })
+      result = { text: texts.join('\n\n'), toolCalls: calls, toolResults: toolResultList }
+    } else {
+      result = await agent.generate(
+        [{ role: 'user', content: message }],
+        { maxSteps: 20 },
+      )
+    }
 
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
     // ★ Sprint 48 T7: token 用量可观测 + 空结果守卫 (触顶 vs 正常空 要能区分)
