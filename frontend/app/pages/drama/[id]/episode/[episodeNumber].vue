@@ -1904,7 +1904,12 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                   批量下载
                 </button>
-                <button class="btn btn-sm" @click="batchCompose">
+                <!-- ★ 单 001 T1: 仅音轨准备 —— 只处理声音、不出字幕 (视频流 copy 不重编码) -->
+                <label class="dim" style="font-size:11.5px; display:flex; align-items:center; gap:4px; white-space:nowrap">
+                  <input type="checkbox" v-model="composeAudioOnly">
+                  仅音轨准备（只处理声音、不出字幕）
+                </label>
+                <button class="btn btn-sm" @click="batchCompose(composeAudioOnly)">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   批量合成
                 </button>
@@ -1971,7 +1976,7 @@
                   <div v-if="composeFailMessage(sb.id)" class="prod-error">{{ composeFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="!hasVid(sb) || isPendingCompose(sb.id)" @click="doCompose(sb)">
+                  <button class="btn btn-sm" :disabled="!hasVid(sb) || isPendingCompose(sb.id)" @click="doCompose(sb, composeAudioOnly)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                     {{ isPendingCompose(sb.id) ? '合成中' : (hasComposed(sb) ? '重新合成' : '开始合成') }}
                   </button>
@@ -3958,6 +3963,8 @@ function applyMergeTransitionToAll() {
 
 // ★ Sprint 39 T3 (PM msg-20261111-169): 全片统一调色 (可选, 默认关闭 = 与改动前逐帧一致)
 const mergeGradeOpen = ref(false)
+// ★ 单 001 T1: 合成页「仅音轨准备」开关 (只处理声音、不出字幕; 视频流 copy)
+const composeAudioOnly = ref(false)
 const mergeGrade = ref({ enabled: false, brightness: 0, contrast: 1, saturation: 1 })
 // ★ Sprint 39 T4: 字幕烧录时机 —— compose = 合成阶段烧 (默认, 改动前的行为); merge = 拼接阶段烧 (只过一次有损编码)
 const mergeSubtitleStage = ref<'compose' | 'merge'>('compose')

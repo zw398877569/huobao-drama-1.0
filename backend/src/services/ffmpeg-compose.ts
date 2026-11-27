@@ -124,7 +124,12 @@ function getVideoGenerationInfo(
 /**
  * 合成单个镜头：视频 + TTS对白音频 + 烧录字幕
  */
-export async function composeStoryboard(storyboardId: number): Promise<string> {
+export async function composeStoryboard(
+  storyboardId: number,
+  options?: { audioOnly?: boolean },
+): Promise<string> {
+  // ★ 单 msg-20261127-001 T1: 仅音轨准备模式 —— 只处理音轨, 完全不碰画面 (不生成 SRT / 不烧字幕 / 视频流 copy)
+  const audioOnly = !!options?.audioOnly
   const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, storyboardId)).all()
   if (!sb) throw new Error(`Storyboard ${storyboardId} not found`)
   if (!sb.videoUrl) throw new Error(`Storyboard ${storyboardId} has no video`)
@@ -137,6 +142,8 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
     storyboardId,
     storyboardNumber: sb.storyboardNumber,
     episodeId: sb.episodeId,
+    // ★ 单 001 T1: 仅音轨准备模式 (视频流 copy, 不生成/不烧字幕)
+    mode: audioOnly ? 'audio-only' : 'compose',
   })
 
   const videoPath = toAbsPath(sb.videoUrl)
@@ -209,7 +216,7 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
     //         时间轴基准 = ffprobe 实测每段 segmentPath 真实时长累积 (不用估算值)
     //         speaker 字段已有, 用于字幕前缀 (如 '男人：')
     //         最后一段结束时间对齐视频实际时长 (ffprobe), 避免字幕比画面先消失
-    if (sb.dialogue && sb.dialogue.trim()) {
+    if (!audioOnly && sb.dialogue && sb.dialogue.trim()) {
       // 优先用 ttsSegments (逐句真实数据); 拿不到时 fallback 到 dialogue 解析 (退化成单条)
       let segments: Array<{ speaker: string; text: string; segmentPath?: string; isNarrator?: boolean; durationMs?: number; chunkCount?: number }> = []
       if (sb.ttsSegments) {
@@ -450,7 +457,18 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       //   (拼接成片本来就有 faststart, 单镜原始视频 provider 给的也有 → 只有 compose 产出的漏了)
       // ★ Sprint 41 单 179: 显式写死 yuv420p —— 现在实测就是 420p (输入是 420p), 但代码没写 →
       //   以后 provider 换了格式就会悄悄退化成 yuv444p (Chrome 没有硬件解码器 → 网页里播卡)
-      const outputOptions = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
+      // ★ 单 001 T1: 仅音轨准备 → 视频流 copy (不重编码, 零画质损失); 这是本单的核心价值
+      //   ★ 不烧字幕时那一步 libx264/crf 纯属白损失画质, 而且拼接阶段还要再编一次
+      const outputOptions = audioOnly
+        ? ['-c:v', 'copy', '-movflags', '+faststart']
+        : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart']
+      if (audioOnly) {
+        logTaskProgress('ComposeTask', 'compose-audio-only', {
+          storyboardId,
+          videoStream: 'copy',
+          hint: '仅音轨准备: 视频流 copy 不重编码; 不生成 SRT / 不烧字幕',
+        })
+      }
 
       // ★ Sprint 38 T3-D: sourceVoice 判定已【上移】到字幕生成之前 (单 qa-20261126-004:
       //   字幕时间轴要按最终音轨排, 必须先知道会不会保留源音轨)

@@ -450,11 +450,12 @@ const failedVideoMessages = ref<Record<number, string>>({})
     return submitted
   }
 
-  async function doCompose(sb: any) {
+  /** ★ 单 001 T1: audioOnly = true → 仅音轨准备 (不生成/不烧字幕, 视频流 copy 不重编码) */
+  async function doCompose(sb: any, audioOnly = false) {
     try {
       delete failedComposeMessages.value[sb.id]
       if (!isPendingCompose(sb.id)) pendingComposeIds.value.push(sb.id)
-      await composeAPI.shot(sb.id)
+      await composeAPI.shot(sb.id, { audioOnly })
       toast.success('合成完成')
       pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
       refresh()
@@ -468,8 +469,8 @@ const failedVideoMessages = ref<Record<number, string>>({})
     }
   }
 
-  async function batchCompose() {
-    await composeAPI.all(ctx.epId.value)
+  async function batchCompose(audioOnly = false) {
+    await composeAPI.all(ctx.epId.value, { audioOnly })
     pendingComposeIds.value = [...new Set(ctx.sbs.value.filter(sb => !!sb.video_url || !!sb.videoUrl).map(sb => sb.id))]
     toast.success('批量合成已开始')
     pollComposeStatus()

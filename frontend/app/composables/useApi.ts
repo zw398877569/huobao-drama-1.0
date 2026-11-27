@@ -179,8 +179,9 @@ export const autodlResolutionAPI = {
   list: () => api.get('/videos/autodl-comfyui/resolutions'),
 }
 export const composeAPI = {
-  shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),
-  all: (epId: number) => api.post(`/compose/episodes/${epId}/compose-all`),
+  // ★ 单 001 T1: body 可选 { audioOnly: true } = 仅音轨准备 (不传 = 与改动前一致)
+  shot: (id: number, body?: any) => api.post(`/compose/storyboards/${id}/compose`, body || {}),
+  all: (epId: number, body?: any) => api.post(`/compose/episodes/${epId}/compose-all`, body || {}),
   status: (epId: number) => api.get(`/compose/episodes/${epId}/compose-status`),
 }
 export const mergeAPI = {
