@@ -23,7 +23,7 @@ import { db, schema } from '../db/index.js'
 import { eq, gt } from 'drizzle-orm'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskWarn, logTaskSuccess, logTaskError } from '../utils/task-logger.js'
-import { getTextConfig } from './ai.js'
+import { getTextChatCompletionsUrl, getTextConfig } from './ai.js'
 import { countDialogueChars } from '../constants/shot-type-baseline.js'
 // ★ Sprint 48 T5 (PM msg-20261116-194): 拆镜后异步触发配音 + 状态登记
 import { generateTTSForDialogue } from './tts-concat.js'
@@ -85,7 +85,10 @@ async function callSplitLLM(input: {
 }): Promise<SplitPart[] | null> {
   try {
     const config = getTextConfig()
-    const url = config.baseUrl.replace(/\/$/, '') + '/v1/chat/completions'
+    const url = getTextChatCompletionsUrl(config)
+    logTaskProgress('StoryboardSplit', 'llm-request', {
+      provider: config.provider, model: config.model, url,
+    })
     const payload = {
       model: config.model,
       messages: [
@@ -106,6 +109,9 @@ async function callSplitLLM(input: {
       return null
     }
     const j: any = await resp.json().catch(() => null)
+    logTaskProgress('StoryboardSplit', 'llm-response-received', {
+      provider: config.provider, model: config.model, status: resp.status, url,
+    })
     const content = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.message?.reasoning_content
     if (!content) return null
     const parsed = JSON.parse(String(content).replace(/^```(?:json)?|```$/g, '').trim())

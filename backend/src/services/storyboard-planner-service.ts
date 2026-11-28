@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import { logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
-import { getConfigById, getTextConfig, type AIConfig } from './ai.js'
+import { getConfigById, getTextChatCompletionsUrl, getTextConfig, type AIConfig } from './ai.js'
 // Sprint 11 (PM msg-20261016-001 Task A + msg-20261016-002 R1/R2/R3):
 //   V4 三步新链路接入共享模块 — 旧 agent 路径 (storyboard-tools.ts) 已改用同一份实现。
 //   - ensureH3ThreePartPrompt: 补 H3 三段式 header (背景音少的根因)
@@ -250,10 +250,13 @@ async function callLLMJson<T>(
   // retry 1 次 (跟 ai.ts callTextLLMForPrompt fallback 思路一致, LLM 临时不可用时 retry, 不无限循环)
   // QA msg-20261010-014 ISSUE-014 Fix 4: retry 1 → 2, LLM think 耗尽 token 概率较高, 多给一次机会
   const maxRetries = opts.retry ?? 2
-  const url = config.baseUrl.replace(/\/$/, '') + '/v1/chat/completions'
+  const url = getTextChatCompletionsUrl(config)
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    logTaskProgress('LLMCall', 'llm-request', {
+      ...opts.ctx, attempt, provider: config.provider, model: config.model, url,
+    })
     let resp: Response
     try {
       // ─── 先在 fetch 外面构造 payload (statements 不能写在 object literal 里), 再传 JSON 字符串 ───
@@ -296,6 +299,10 @@ async function callLLMJson<T>(
     }
 
     const data = await resp.json() as any
+    logTaskProgress('LLMCall', 'json-response-received', {
+      ...opts.ctx, attempt, provider: config.provider, model: config.model,
+      status: resp.status, url,
+    })
     // QA msg-20261010-014 ISSUE-014 Fix 3: 专门 catch finish_reason=length (max_tokens 截断) / content_filter (敏感词被拒)
             //   之前 status=200 finish_reason=length 视为成功, JSON.parse 失败才 throw, 错误信息只显示 raw content 看不出根因
             //   现在明确报错: truncated (建议减小 max_tokens 或分多步生成) / content filter (输入有敏感词)
