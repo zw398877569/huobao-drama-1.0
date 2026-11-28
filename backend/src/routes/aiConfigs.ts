@@ -264,6 +264,8 @@ app.post('/', async (c) => {
     baseUrl: body.base_url || '',
     apiKey: body.api_key || '',
     model: JSON.stringify(body.model || []),
+    // ★ 单 msg-20261128-001: bailian 的默认音色等存 settings (现成 TEXT 列, 不改 schema)
+    settings: body.settings ? JSON.stringify(body.settings) : null,
     priority: body.priority || 0,
     isActive: true,
     createdAt: ts,
@@ -539,6 +541,7 @@ app.put('/:id', async (c) => {
   if ('base_url' in body) updates.baseUrl = body.base_url
   if ('api_key' in body) updates.apiKey = body.api_key
   if ('model' in body) updates.model = JSON.stringify(body.model)
+  if ('settings' in body) updates.settings = body.settings ? JSON.stringify(body.settings) : null
   if ('priority' in body) updates.priority = body.priority
   if ('is_active' in body) updates.isActive = body.is_active
 

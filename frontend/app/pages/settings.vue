@@ -346,6 +346,11 @@
           <span class="mono">{{ endpointHint }}</span>
         </div>
         <label class="field"><span class="field-label">模型（逗号分隔）</span><input v-model="cfgForm.modelStr" class="input" placeholder="model-name" /></label>
+        <!-- ★ 单 001: bailian 音频默认音色 (存 ai_configs.settings) -->
+        <label v-if="cfgForm.service_type === 'audio'" class="field">
+          <span class="field-label">默认音色 ID <span class="dim" style="font-weight:normal;font-size:11px">(bailian 用, 如 longanhuan_v3.6; 留空 = 角色自身 voice 或默认)</span></span>
+          <input v-model="cfgForm.voice" class="input" placeholder="longanhuan_v3.6" />
+        </label>
         <div v-if="cfgTestResult" class="test-result" :class="{ ok: cfgTestResult.reachable, bad: !cfgTestResult.reachable }">
           <div class="test-result-head">
             <span class="tag" :class="cfgTestResult.reachable ? 'tag-success' : 'tag-error'">{{ cfgTestResult.status || 'ERROR' }}</span>

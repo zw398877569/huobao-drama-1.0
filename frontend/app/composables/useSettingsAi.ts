@@ -85,6 +85,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     modelStr: '',
     service_type: 'text',
     priority: 0,
+    // ★ 单 001: bailian 音频的默认音色 (存 ai_configs.settings, 不改 schema); 其它 provider 不用
+    voice: '',
   })
 
   // Huobao preset form
@@ -136,7 +138,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
 
   const providers = [
     'autodl-comfyui', 'nano-banana', 'agnes', 'ali', 'chatfire',
-    'deepseek', 'gemini', 'grsai', 'minimax', 'minimax-hailuo', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
+    'bailian', 'deepseek', 'gemini', 'grsai', 'minimax', 'minimax-hailuo', 'minimax-official', 'openai', 'openrouter', 'vidu', 'volcengine',
   ]
   const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
 
@@ -191,6 +193,13 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
       },
     },
     audio: {
+      // ★ 单 msg-20261128-001: 百炼 Token Plan TTS (专属域名, 不是 dashscope; 与 minimax 并存)
+      bailian: {
+        label: '百炼 Token Plan',
+        baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com',
+        models: ['qwen-audio-3.0-tts-plus'],
+        voice: 'longanhuan_v3.6',
+      },
       minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
       'autodl-comfyui': { label: 'AutoDL TTS 推荐', baseUrl: 'https://autodl.art/api/v1', models: ['indextts2-v1'] },
     },
@@ -253,6 +262,8 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
     cfgForm.base_url = preset.baseUrl
     cfgForm.modelStr = preset.models.join(', ')
     cfgForm.name = `${preset.label}-${serviceMeta[type].label}`
+    // ★ 单 001: 音频预设带默认音色 (bailian longanhuan_v3.6)
+    if ((preset as any).voice) cfgForm.voice = (preset as any).voice
   }
 
   async function loadCfgs() {
@@ -289,7 +300,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
   function startAddCfg(t: string) {
     cfgEditId.value = null
     cfgTestResult.value = null
-    Object.assign(cfgForm, { name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: t, priority: 0 })
+    Object.assign(cfgForm, { name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: t, priority: 0, voice: '' })
     const firstPreset = presetsByType(t)[0]
     if (firstPreset) applyProviderPreset(t, firstPreset.provider)
     cfgDialog.value = true
@@ -306,6 +317,9 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
       modelStr: fmtModel(c.model),
       service_type: c.service_type,
       priority: c.priority ?? 0,
+      voice: (() => {
+        try { const st = typeof c.settings === 'string' ? JSON.parse(c.settings || '{}') : (c.settings || {}); return st?.voice || '' } catch { return '' }
+      })(),
     })
     cfgDialog.value = true
   }
@@ -356,6 +370,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
           base_url: cfgForm.base_url,
           model: models,
           priority: cfgForm.priority,
+          ...(cfgForm.service_type === 'audio' && cfgForm.voice ? { settings: { voice: cfgForm.voice } } : {}),
         })
       } else {
         await aiConfigAPI.create({
@@ -366,6 +381,7 @@ export function useSettingsAi(loadAgents: () => Promise<void>) {
           base_url: cfgForm.base_url,
           model: models,
           priority: cfgForm.priority,
+          ...(cfgForm.service_type === 'audio' && cfgForm.voice ? { settings: { voice: cfgForm.voice } } : {}),
         })
       }
       cfgDialog.value = false
