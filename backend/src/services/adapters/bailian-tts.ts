@@ -3,7 +3,7 @@
  *
  * 端点: POST https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer
  * ★ 注意是 token-plan 专属域名 (不是 dashscope.aliyuncs.com, 用错会 401 或不计套餐额度)
- * 认证: Authorization: Bearer <sk-sp-...>
+ * 认证: Authorization: Bearer <Token Plan 专用 Key> (普通 sk- 不行; 真实 Key 只从配置/文件读取, 不进代码)
  * 请求: { model, input: { text, voice, format, sample_rate } }
  * 返回: { output: { audio: { url, expires_at } }, usage: { characters } } —— ★ 给的是【音频 URL】不是二进制
  *
