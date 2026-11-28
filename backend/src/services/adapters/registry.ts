@@ -7,6 +7,7 @@ import { MiniMaxVideoAdapter } from './minimax-video'
 import { MiniMaxOfficialVideoAdapter } from './minimax-official-video'
 import { MiniMaxHailuoVideoAdapter } from './minimax-hailuo-video'
 import { MiniMaxTTSAdapter } from './minimax-tts'
+import { BailianTTSAdapter } from './bailian-tts'
 import { MiniMaxTTSAsyncAdapter } from './minimax-tts-async'
 import { OpenAIImageAdapter } from './openai-image'
 import { GeminiImageAdapter } from './gemini-image'
@@ -53,7 +54,9 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
 
 // TTS Adapter 注册表
 export const ttsAdapters: Record<string, TTSProviderAdapter> = {
+  // ★ 单 msg-20261128-001: 百炼 Token Plan 作为第二个音频 provider (与 minimax 并存, 不替换)
   minimax: new MiniMaxTTSAdapter(),
+  bailian: new BailianTTSAdapter(),
 }
 
 // 异步 TTS adapter 注册表

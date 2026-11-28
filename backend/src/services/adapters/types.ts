@@ -81,6 +81,8 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  /** ★ 单 msg-20261128-001: ai_service_configs.settings 的解析结果 (如 bailian 的 { voice }). 老配置为 null */
+  settings?: Record<string, any> | null
 }
 
 export interface ImageGenerationRecord {
@@ -165,6 +167,7 @@ export interface TTSProviderAdapter {
 
   buildGenerateRequest(config: AIConfig, params: any): ProviderRequest
 
+  // ★ 单 001: 允许返回 Promise —— 百炼给的是音频 URL, parseResponse 里要先下载再转 hex
   parseResponse(result: any): {
     audioHex: string
     audioLength: number
@@ -172,5 +175,12 @@ export interface TTSProviderAdapter {
     bitrate: number
     format: string
     channel: number
-  }
+  } | Promise<{
+    audioHex: string
+    audioLength: number
+    sampleRate: number
+    bitrate: number
+    format: string
+    channel: number
+  }>
 }

@@ -15,6 +15,8 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  /** ★ 单 msg-20261128-001: ai_service_configs.settings 的解析结果 (如 bailian 的 { voice }) */
+  settings?: Record<string, any> | null
 }
 
 /**
@@ -200,11 +202,17 @@ export function getConfigById(id: number): AIConfig | null {
     model: models[0] || '',
     serviceType: row.serviceType,
   })
+  let settings: Record<string, any> | null = null
+  if (row.settings) {
+    try { settings = JSON.parse(row.settings) } catch { settings = null }
+  }
   return {
     provider: row.provider || '',
     baseUrl: row.baseUrl,
     apiKey: row.apiKey,
     model: models[0] || '',
+    // ★ 单 001: 带上 settings (bailian 的默认音色等); 其它 provider 不读它 → 零影响
+    settings,
   }
 }
 
